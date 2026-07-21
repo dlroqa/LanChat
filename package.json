@@ -2,7 +2,10 @@
   "name": "lanchat",
   "version": "0.1.0",
   "description": "A Hamachi-style LAN & Tailscale chat, calls, and file-sharing app. Peer-to-peer, no central server.",
-  "author": "dlroqa",
+  "author": {
+    "name": "dlroqa",
+    "email": "erocaide@gmail.com"
+  },
   "license": "MIT",
   "main": "src/main/main.js",
   "type": "commonjs",
