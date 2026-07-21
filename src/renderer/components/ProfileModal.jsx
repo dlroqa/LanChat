@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import ModalShell from './ModalShell.jsx';
 import Avatar from './Avatar.jsx';
 import { colorFor } from '../lib/util.js';
 import { downscaleToAvatar } from '../lib/image.js';
@@ -37,14 +38,15 @@ export default function ProfileModal({ self, firstRun, onSave, onClose }) {
   }
 
   return (
-    <div className="scrim" onClick={firstRun ? undefined : onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h3>{firstRun ? 'Welcome to LanChat' : 'Edit profile'}</h3>
-        <p className="desc">
-          {firstRun
-            ? 'Pick a display name and color. This is how others on your network will see you.'
-            : 'Update how you appear to peers.'}
-        </p>
+    <ModalShell
+      title={firstRun ? 'Welcome to LanChat' : 'Edit profile'}
+      desc={
+        firstRun
+          ? 'Pick a display name and color. This is how others on your network will see you.'
+          : 'Update how you appear to peers.'
+      }
+      onClose={firstRun ? null : onClose}
+    >
 
         <div className="avatar-edit">
           <Avatar name={name || '?'} id={self?.id} avatar={{ color, image }} size="lg" />
@@ -98,7 +100,6 @@ export default function ProfileModal({ self, firstRun, onSave, onClose }) {
             {firstRun ? 'Get started' : 'Save'}
           </button>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }

@@ -13,15 +13,16 @@ function createFileSender({ hub, getIdentity, bus }) {
   function send(peerId, filePath) {
     return new Promise((resolve, reject) => {
       const address = hub.addresses.get(peerId);
-      if (!address) return reject(new Error('peer address unknown'));
+      if (!address)
+        return reject(new Error("no address known for this peer yet — try again once they're connected"));
       let stat;
       try {
         stat = fs.statSync(filePath);
       } catch (err) {
         return reject(err);
       }
-      const [ip, portStr] = address.split(':');
-      const port = Number(portStr) || getIdentity().servicePort;
+      const { host: ip, port: parsedPort } = parseAddress(address);
+      const port = parsedPort || getIdentity().servicePort;
       const name = path.basename(filePath);
       const transferId = crypto.randomUUID();
       const mime = guessMime(name);
@@ -93,6 +94,10 @@ const MIME = {
   '.mp3': 'audio/mpeg',
   '.wav': 'audio/wav',
   '.ogg': 'audio/ogg',
+  // Audio-only WebM/MP4. Distinct extensions matter: a ".webm" voice note would
+  // be typed video/webm and render as a video player with a black rectangle.
+  '.weba': 'audio/webm',
+  '.m4a': 'audio/mp4',
   '.pdf': 'application/pdf',
   '.txt': 'text/plain',
   '.zip': 'application/zip',
@@ -102,4 +107,17 @@ function guessMime(name) {
   return MIME[path.extname(name).toLowerCase()] || 'application/octet-stream';
 }
 
-module.exports = { createFileSender, guessMime };
+// Splits an "ip:port" address. Handles bracketed IPv6 ("[::1]:47100"), where a
+// naive split on ':' would take the first hextet as the host.
+function parseAddress(address) {
+  const str = String(address || '');
+  if (str.startsWith('[')) {
+    const end = str.indexOf(']');
+    return { host: str.slice(1, end), port: Number(str.slice(end + 2)) || null };
+  }
+  const idx = str.lastIndexOf(':');
+  if (idx === -1) return { host: str, port: null };
+  return { host: str.slice(0, idx), port: Number(str.slice(idx + 1)) || null };
+}
+
+module.exports = { createFileSender, guessMime, parseAddress };

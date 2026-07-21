@@ -2,7 +2,7 @@
 
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { app, BrowserWindow, session } = require('electron');
+const { app, BrowserWindow, session, safeStorage } = require('electron');
 
 const { Config } = require('./config');
 const { buildIdentity } = require('./identity');
@@ -15,6 +15,7 @@ const { createIpc } = require('./ipc');
 const { createTray } = require('./tray');
 const { createUpdater } = require('./updater');
 const { createLinkStats } = require('./linkStats');
+const { createAgentHub } = require('./agents');
 
 const isDev = process.env.LANCHAT_DEV === '1';
 
@@ -123,6 +124,13 @@ async function startServices() {
 
   const updater = createUpdater({ bus });
   const linkStats = createLinkStats({ hub, bus });
+  const agentHub = createAgentHub({
+    userDataDir: app.getPath('userData'),
+    hub,
+    bus,
+    store,
+    safeStorage,
+  });
 
   const ipcApi = createIpc({
     config,
@@ -134,6 +142,8 @@ async function startServices() {
     discovery,
     updater,
     linkStats,
+    agentHub,
+    downloadsDir,
     getWindow,
     // `tray` is resolved lazily: the tray is created after services start.
     onUnread: (count) => tray && tray.setUnread(count),
@@ -142,8 +152,11 @@ async function startServices() {
   await server.start();
   discovery.start();
   linkStats.start();
+  // Agents are restored last: enabled ones reconnect, disabled ones appear in
+  // the roster as offline. A failure here must not stop the app from starting.
+  agentHub.startAll().catch((err) => console.error('[agents] startup failed:', err.message));
 
-  services = { config, bus, hub, server, discovery, store, downloadsDir, linkStats };
+  services = { config, bus, hub, server, discovery, store, downloadsDir, linkStats, agentHub };
   return ipcApi;
 }
 
@@ -177,6 +190,8 @@ if (!gotLock && !process.env.LANCHAT_USERDATA) {
       services.discovery.stop();
       services.linkStats.stop();
       services.server.stop();
+      // Tears down in-flight runs and kills any agent child processes.
+      services.agentHub.stopAll();
     }
   });
 }

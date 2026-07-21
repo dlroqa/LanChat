@@ -257,9 +257,56 @@ export function defaultPttKey() {
   return navigator.platform.toLowerCase().includes('mac') ? 'meta' : 'control';
 }
 
+// A key the user recorded themselves. Matching is on `event.code` (physical key)
+// rather than `event.key`, so the binding survives a layout change and matches
+// correctly while a modifier is held.
+export function customKeyDef(code, label) {
+  return {
+    label: label || describeKeyCode(code),
+    code,
+    custom: true,
+    match: (e) => e.code === code,
+  };
+}
+
+// Turns a KeyboardEvent.code into something worth showing in Settings.
+export function describeKeyCode(code) {
+  if (!code) return 'Not set';
+  if (code.startsWith('Key')) return code.slice(3);
+  if (code.startsWith('Digit')) return code.slice(5);
+  if (code.startsWith('Numpad')) return `Numpad ${code.slice(6)}`;
+  if (code.startsWith('Arrow')) return `${code.slice(5)} arrow`;
+  const named = {
+    Space: 'Space',
+    Backquote: '`',
+    Minus: '-',
+    Equal: '=',
+    BracketLeft: '[',
+    BracketRight: ']',
+    Backslash: '\\',
+    Semicolon: ';',
+    Quote: "'",
+    Comma: ',',
+    Period: '.',
+    Slash: '/',
+    CapsLock: 'Caps Lock',
+    Tab: 'Tab',
+    Enter: 'Enter',
+  };
+  return named[code] || code;
+}
+
+// Resolves the configured binding to a key definition. `keyName === 'custom'`
+// uses the recorded code; anything unknown falls back to the platform default
+// so push-to-talk can never end up bound to nothing.
+export function resolvePttKey(keyName, customCode) {
+  if (keyName === 'custom' && customCode) return customKeyDef(customCode);
+  return PTT_KEYS[keyName] || PTT_KEYS[defaultPttKey()];
+}
+
 // Attaches hold-to-talk listeners. Returns an unsubscribe function.
-export function attachPttKey({ keyName, isEnabled, onDown, onUp }) {
-  const def = PTT_KEYS[keyName] || PTT_KEYS[defaultPttKey()];
+export function attachPttKey({ keyName, customCode, isEnabled, onDown, onUp }) {
+  const def = resolvePttKey(keyName, customCode);
   let held = false;
   let poisoned = false; // another key was pressed during the hold
 
@@ -298,7 +345,9 @@ export function attachPttKey({ keyName, isEnabled, onDown, onUp }) {
 
   const up = (e) => {
     if (!held) return;
-    if (def.match(e) || (def.code === 'Space' && e.code === 'Space')) release();
+    // A code-matched binding (Space, or any recorded key) reports the same code
+    // on keyup even when `key` differs, so check both ways of matching.
+    if (def.match(e) || (def.code && e.code === def.code)) release();
   };
 
   // Losing focus mid-hold must stop transmission, or the mic stays live.

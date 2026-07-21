@@ -27,7 +27,7 @@ function loadPtt({ activeTag = 'BODY' } = {}) {
     'RTCPeerConnection',
     'MediaStream',
     `${body}
-     return { PTT_KEYS, defaultPttKey, attachPttKey };`
+     return { PTT_KEYS, defaultPttKey, attachPttKey, resolvePttKey, describeKeyCode };`
   );
   return { api: fn(win, doc, nav, function () {}, function () {}), listeners };
 }
@@ -111,4 +111,52 @@ test('disabled push-to-talk never fires', () => {
   api.attachPttKey({ keyName: 'meta', isEnabled: () => false, onDown: () => (downs += 1), onUp: () => {} });
   fire(listeners, 'keydown', { key: 'Meta', repeat: false });
   assert.equal(downs, 0);
+});
+
+// --- custom recorded key ---
+
+// A user-recorded binding matches on event.code (the physical key) so it keeps
+// working after a keyboard-layout change.
+test('a custom recorded key transmits on hold and stops on release', () => {
+  const { api, listeners } = loadPtt();
+  const calls = [];
+  api.attachPttKey({
+    keyName: 'custom',
+    customCode: 'KeyF',
+    isEnabled: () => true,
+    onDown: () => calls.push('down'),
+    onUp: () => calls.push('up'),
+  });
+  fire(listeners, 'keydown', { key: 'f', code: 'KeyF', repeat: false });
+  fire(listeners, 'keyup', { key: 'f', code: 'KeyF' });
+  assert.deepEqual(calls, ['down', 'up']);
+});
+
+test('a custom binding ignores other keys', () => {
+  const { api, listeners } = loadPtt();
+  let downs = 0;
+  api.attachPttKey({
+    keyName: 'custom',
+    customCode: 'KeyF',
+    isEnabled: () => true,
+    onDown: () => (downs += 1),
+    onUp: () => {},
+  });
+  fire(listeners, 'keydown', { key: 'g', code: 'KeyG', repeat: false });
+  assert.equal(downs, 0);
+});
+
+// Push-to-talk must never end up bound to nothing, or the feature silently dies.
+test('custom mode with no recorded key falls back to the platform default', () => {
+  const { api } = loadPtt();
+  assert.equal(api.resolvePttKey('custom', null).label, api.PTT_KEYS[api.defaultPttKey()].label);
+  assert.equal(api.resolvePttKey('nonsense', null).label, api.PTT_KEYS[api.defaultPttKey()].label);
+});
+
+test('a recorded code is described legibly for the settings label', () => {
+  const { api } = loadPtt();
+  assert.equal(api.describeKeyCode('KeyF'), 'F');
+  assert.equal(api.describeKeyCode('Digit4'), '4');
+  assert.equal(api.describeKeyCode('Backquote'), '`');
+  assert.equal(api.describeKeyCode(null), 'Not set');
 });

@@ -122,8 +122,13 @@ function createServer({ config, getIdentity, hub, bus, downloadsDir }) {
     res.end('not found');
   }
 
-  function onWsConnection(ws) {
+  function onWsConnection(ws, req) {
     let peerId = null;
+    // The address a peer dialed in from. Chat rides the socket, but file
+    // transfer opens a fresh HTTP connection and needs somewhere to send it —
+    // without this, a peer who dialed us first has no recorded address and
+    // sending them a file fails with "peer address unknown".
+    const remoteIp = normalizeIp(req && req.socket && req.socket.remoteAddress);
     // Greet inbound peers so both directions learn each other's identity.
     ws.send(JSON.stringify({ type: 'hello', from: getIdentity().id, identity: getIdentity() }));
 
@@ -138,6 +143,10 @@ function createServer({ config, getIdentity, hub, bus, downloadsDir }) {
         peerId = msg.from;
         hub.register(peerId, ws);
         if (msg.identity) hub.setIdentity(peerId, msg.identity);
+        // Their listening port comes from the identity card — the source port of
+        // this socket is ephemeral and not something we can connect back to.
+        const servicePort = (msg.identity && msg.identity.servicePort) || config.get('servicePort');
+        if (remoteIp && servicePort) hub.setAddress(peerId, `${remoteIp}:${servicePort}`);
         bus.emit('peer-hello', { peerId, identity: msg.identity, direction: 'in' });
         return;
       }
@@ -175,4 +184,14 @@ function createServer({ config, getIdentity, hub, bus, downloadsDir }) {
   return { start, stop };
 }
 
-module.exports = { createServer };
+// Node reports IPv4 connections on a dual-stack socket in IPv4-mapped IPv6 form
+// ("::ffff:192.168.1.5"). Strip that back to a plain address so it can be used
+// as an HTTP host and compared against addresses learned from discovery.
+function normalizeIp(addr) {
+  if (!addr) return null;
+  const plain = addr.startsWith('::ffff:') ? addr.slice(7) : addr;
+  // A bare IPv6 address must be bracketed to be usable in a host:port string.
+  return plain.includes(':') ? `[${plain}]` : plain;
+}
+
+module.exports = { createServer, normalizeIp };

@@ -91,3 +91,44 @@ test('two nodes connect, exchange a chat message, and transfer a file', async (t
     'checksum matches'
   );
 });
+
+// Regression: chat rides the existing socket, but file transfer opens a fresh
+// HTTP connection and so needs a recorded address. A peer who was dialed *by*
+// us never went through hub.connect(), so before the inbound-address fix in
+// server.js it had no address and sending it a file failed outright.
+test('the peer who accepted the connection can send a file back', async (t) => {
+  const A = makeNode('carol', 47413);
+  const B = makeNode('dave', 47414);
+  await A.server.start();
+  await B.server.start();
+
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idA = A.getIdentity().id;
+  const idB = B.getIdentity().id;
+
+  // Only A dials. B learns about A purely from the inbound connection.
+  A.hub.connect(idB, `127.0.0.1:${B.port}`);
+  await waitFor(() => B.hub.isConnected(idA));
+
+  assert.ok(B.hub.addresses.get(idA), 'B should have recorded the address A dialed in from');
+
+  const payload = crypto.randomBytes(50000);
+  const srcFile = path.join(B.dir, 'reply.bin');
+  fs.writeFileSync(srcFile, payload);
+
+  const fileReceived = new Promise((resolve) => A.bus.on('file-received', resolve));
+  await B.fileSender.send(idA, srcFile);
+  const info = await fileReceived;
+
+  assert.equal(
+    crypto.createHash('sha256').update(fs.readFileSync(info.path)).digest('hex'),
+    crypto.createHash('sha256').update(payload).digest('hex'),
+    'the file arrives intact in the reverse direction'
+  );
+});

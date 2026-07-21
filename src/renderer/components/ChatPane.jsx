@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import Avatar from './Avatar.jsx';
 import MessageBubble from './MessageBubble.jsx';
 import Composer from './Composer.jsx';
+import AgentApproval from './AgentApproval.jsx';
 import { Phone, Video } from '../lib/icons.jsx';
 import { formatDay, platformLabel } from '../lib/util.js';
 
@@ -17,10 +18,14 @@ export default function ChatPane({
   onSend,
   onAttach,
   onTyping,
+  onVoice,
   onOpenFile,
   onRevealFile,
   onVoiceCall,
   onVideoCall,
+  approval,
+  agentStream,
+  onApprove,
 }) {
   const scrollRef = useRef(null);
 
@@ -58,18 +63,27 @@ export default function ChatPane({
             )}
           </div>
           <div className="sub">
-            {peer.online ? `Online · ${platformLabel(peer.platform)}` : 'Offline'}
+            {peer.kind === 'agent'
+              ? peer.online
+                ? `Agent · ${peer.agentKind}`
+                : 'Agent · off'
+              : peer.online
+                ? `Online · ${platformLabel(peer.platform)}`
+                : 'Offline'}
             {showAddresses && peer.address ? ` · ${peer.address}` : ''}
           </div>
         </div>
-        <div className="chat-actions">
-          <button className="icon-btn" onClick={onVoiceCall} disabled={!peer.online} title="Voice call">
-            <Phone size={19} />
-          </button>
-          <button className="icon-btn" onClick={onVideoCall} disabled={!peer.online} title="Video call">
-            <Video size={19} />
-          </button>
-        </div>
+        {/* Agents are text-only participants; there is nothing to call. */}
+        {peer.kind !== 'agent' && (
+          <div className="chat-actions">
+            <button className="icon-btn" onClick={onVoiceCall} disabled={!peer.online} title="Voice call">
+              <Phone size={19} />
+            </button>
+            <button className="icon-btn" onClick={onVideoCall} disabled={!peer.online} title="Video call">
+              <Video size={19} />
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="messages" ref={scrollRef}>
@@ -92,11 +106,24 @@ export default function ChatPane({
             </React.Fragment>
           );
         })}
+
+        {/* Live agent output, replaced by the stored message once the run ends. */}
+        {agentStream && <div className="agent-stream">{agentStream}</div>}
+
+        <AgentApproval request={approval} agentName={peer.name || 'The agent'} onAnswer={onApprove} />
       </div>
 
       <div className="typing">{typing ? `${peer.name || 'Peer'} is typing…` : ''}</div>
 
-      <Composer onSend={onSend} onAttach={onAttach} onTyping={onTyping} disabled={!peer.online} />
+      {/* An agent has no file endpoint to upload to, so attaching is not offered. */}
+      <Composer
+        onSend={onSend}
+        onAttach={onAttach}
+        onTyping={onTyping}
+        onVoice={peer.kind === 'agent' ? undefined : onVoice}
+        disabled={!peer.online}
+        canAttach={peer.kind !== 'agent'}
+      />
     </div>
   );
 }

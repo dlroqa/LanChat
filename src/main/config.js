@@ -24,6 +24,7 @@ const DEFAULTS = Object.freeze({
   muteNotifications: false,
   pttEnabled: true,
   pttKey: null, // null = platform default (Command on macOS, Control elsewhere)
+  pttCustomCode: null, // KeyboardEvent.code when pttKey === 'custom'
   pttAllowIncoming: true,
   audioInputId: null, // preferred microphone (null = system default)
   videoInputId: null, // preferred camera (null = system default)

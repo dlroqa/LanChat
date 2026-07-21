@@ -20,6 +20,7 @@ export default function App() {
   const [config, setConfig] = useState({ iceServers: [], enableTailscale: true, enableLan: true });
   const [peers, setPeers] = useState([]);
   const [tailnet, setTailnet] = useState([]);
+  const [tailnetStatus, setTailnetStatus] = useState({ ok: true, reason: null });
   const [selectedId, setSelectedId] = useState(null);
   const [messages, setMessages] = useState({}); // peerId -> [msg]
   const [typing, setTyping] = useState({});
@@ -33,6 +34,8 @@ export default function App() {
   const [linkStats, setLinkStats] = useState({}); // peerId -> stats
   const [callFullscreen, setCallFullscreen] = useState(false);
   const [ptt, setPtt] = useState({ transmitting: false, connecting: false, talkers: [], inboundStreams: [] });
+  const [agentStatus, setAgentStatus] = useState({}); // agentId -> {status, detail, streaming}
+  const [approvals, setApprovals] = useState({}); // agentId -> pending approval request
 
   const configRef = useRef(config);
   const selectedRef = useRef(selectedId);
@@ -101,6 +104,7 @@ export default function App() {
     const keyName = config.pttKey || defaultPttKey();
     return attachPttKey({
       keyName,
+      customCode: config.pttCustomCode,
       isEnabled: () =>
         config.pttEnabled !== false &&
         call.status === 'idle' &&
@@ -108,7 +112,7 @@ export default function App() {
       onDown: () => pttRef.current.setTransmitting(true, selectedPeerRef.current),
       onUp: () => pttRef.current.setTransmitting(false),
     });
-  }, [config.pttKey, config.pttEnabled, call.status]);
+  }, [config.pttKey, config.pttCustomCode, config.pttEnabled, call.status]);
 
   useEffect(() => () => pttRef.current?.closeAll(), []);
 
@@ -156,6 +160,9 @@ export default function App() {
         case 'tailnet-peers':
           setTailnet(payload);
           break;
+        case 'tailnet-status':
+          setTailnetStatus(payload);
+          break;
         case 'link-stats':
           setLinkStats((m) => ({ ...m, [payload.peerId]: payload }));
           break;
@@ -185,6 +192,11 @@ export default function App() {
           break;
         case 'chat':
           appendMessage(payload.peerId, payload);
+          // The finished reply supersedes the streamed preview.
+          if (payload.peerId.startsWith('agent:')) {
+            setAgentStatus((s) => ({ ...s, [payload.peerId]: { ...s[payload.peerId], streaming: '' } }));
+            setApprovals((a) => (a[payload.peerId] ? { ...a, [payload.peerId]: null } : a));
+          }
           if (payload.direction === 'in') {
             const cfg = configRef.current;
             if (!cfg.muteNotifications) {
@@ -236,6 +248,22 @@ export default function App() {
           setProgress((p) => ({ ...p, [key]: frac }));
           break;
         }
+        case 'agent-status':
+          setAgentStatus((s) => ({ ...s, [payload.agentId]: payload }));
+          if (payload.status === 'error') toast(`Agent: ${payload.detail}`, 'error');
+          break;
+        case 'agent-approval':
+          // Never auto-answered — it sits until the local user decides.
+          setApprovals((a) => ({ ...a, [payload.agentId]: payload }));
+          setSelectedId(payload.agentId);
+          break;
+        case 'agent-delta':
+          // Live typing; the authoritative reply arrives as a normal 'chat' event.
+          setAgentStatus((s) => ({
+            ...s,
+            [payload.agentId]: { ...s[payload.agentId], streaming: (s[payload.agentId]?.streaming || '') + payload.delta },
+          }));
+          break;
         case 'toast':
           toast(payload.text, payload.level);
           break;
@@ -301,6 +329,18 @@ export default function App() {
     await api.pickAndSendFile(selectedId);
   }
 
+  // A recorded voice message travels as bytes; main writes it to disk and then
+  // sends it through the ordinary file-transfer path.
+  async function sendVoice(result, err) {
+    if (err) {
+      toast(`Cannot record: ${err.message}`, 'error');
+      return;
+    }
+    if (!result || !selectedId) return;
+    const buf = await result.blob.arrayBuffer();
+    await api.sendVoice(selectedId, new Uint8Array(buf), result.ext);
+  }
+
   function onTyping(active) {
     if (selectedId) api.sendTyping(selectedId, active);
   }
@@ -361,6 +401,7 @@ export default function App() {
         self={self}
         peers={peers}
         tailnet={tailnet}
+        tailnetStatus={tailnetStatus}
         selectedId={selectedId}
         unread={unread}
         showAddresses={config.showAddresses}
@@ -377,10 +418,19 @@ export default function App() {
           messages={messages[selectedId] || []}
           typing={typing[selectedId]}
           progress={progress}
+          approval={approvals[selectedId]}
+          agentStream={agentStatus[selectedId]?.streaming}
+          onApprove={(choice) => {
+            const req = approvals[selectedId];
+            if (!req) return;
+            setApprovals((a) => ({ ...a, [selectedId]: null }));
+            api.answerAgentApproval(selectedId, req.runId, choice);
+          }}
           previewUrl={previewUrl}
           showAddresses={config.showAddresses}
           onSend={sendText}
           onAttach={attach}
+          onVoice={sendVoice}
           onTyping={onTyping}
           onOpenFile={(p) => p && api.openFile(p)}
           onRevealFile={(p) => p && api.revealFile(p)}
@@ -431,13 +481,20 @@ export default function App() {
         <SettingsModal
           config={config}
           self={self}
+          peers={peers}
           soundUrl={soundUrl}
           onSave={saveSettings}
           onClose={() => setModal(null)}
         />
       )}
       {modal === 'addpeer' && (
-        <AddPeerModal defaultPort={self?.servicePort} onAdd={addPeer} onClose={() => setModal(null)} />
+        <AddPeerModal
+          defaultPort={self?.servicePort}
+          tailnet={tailnet}
+          peers={peers}
+          onAdd={addPeer}
+          onClose={() => setModal(null)}
+        />
       )}
 
       {incoming && (

@@ -1,13 +1,15 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import ModalShell from './ModalShell.jsx';
 import DevicePicker from './DevicePicker.jsx';
 import UpdateSection from './UpdateSection.jsx';
 import SoundSettings from './SoundSettings.jsx';
-import { PTT_KEYS, defaultPttKey } from '../lib/ptt.js';
+import AgentSection from './AgentSection.jsx';
+import { PTT_KEYS, defaultPttKey, describeKeyCode } from '../lib/ptt.js';
 
 const DEFAULT_STUN = 'stun:stun.l.google.com:19302';
 
 // Settings: audio/video sources, discovery toggles, optional STUN, network info.
-export default function SettingsModal({ config, self, soundUrl, onSave, onClose }) {
+export default function SettingsModal({ config, self, peers, soundUrl, onSave, onClose }) {
   const [enableTailscale, setTs] = useState(config.enableTailscale);
   const [enableLan, setLan] = useState(config.enableLan);
   const [useStun, setUseStun] = useState((config.iceServers || []).length > 0);
@@ -24,6 +26,7 @@ export default function SettingsModal({ config, self, soundUrl, onSave, onClose 
   const [ptt, setPtt] = useState({
     pttEnabled: config.pttEnabled !== false,
     pttKey: config.pttKey || defaultPttKey(),
+    pttCustomCode: config.pttCustomCode || null,
     pttAllowIncoming: config.pttAllowIncoming !== false,
   });
   const [devices, setDevices] = useState({
@@ -45,11 +48,11 @@ export default function SettingsModal({ config, self, soundUrl, onSave, onClose 
   }
 
   return (
-    <div className="scrim" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h3>Settings</h3>
-        <p className="desc">Audio, video, and discovery preferences. Changes apply immediately.</p>
-
+    <ModalShell
+      title="Settings"
+      desc="Audio, video, and discovery preferences. Changes apply immediately."
+      onClose={onClose}
+    >
         <div className="section-head">Call devices</div>
         <DevicePicker
           audioInputId={devices.audioInputId}
@@ -77,7 +80,15 @@ export default function SettingsModal({ config, self, soundUrl, onSave, onClose 
                 {def.label}
               </option>
             ))}
+            <option value="custom">Custom key…</option>
           </select>
+          {ptt.pttKey === 'custom' && (
+            <KeyRecorder
+              code={ptt.pttCustomCode}
+              disabled={!ptt.pttEnabled}
+              onRecord={(code) => setPtt((p) => ({ ...p, pttCustomCode: code }))}
+            />
+          )}
           <div className="hint">
             Hold to talk while LanChat is focused. It is ignored while you are typing a message, and
             releasing the key stops transmitting.
@@ -96,6 +107,9 @@ export default function SettingsModal({ config, self, soundUrl, onSave, onClose 
           soundUrl={soundUrl}
           onChange={(patch) => setSounds((v) => ({ ...v, ...patch }))}
         />
+
+        <div className="section-head">Agents</div>
+        <AgentSection peers={peers} />
 
         <div className="section-head">Discovery</div>
         <Toggle label="Discover peers over Tailscale" desc="Find people across your tailnet." on={enableTailscale} set={setTs} />
@@ -118,8 +132,8 @@ export default function SettingsModal({ config, self, soundUrl, onSave, onClose 
         <div className="section-head">Updates</div>
         <UpdateSection />
 
-        <div className="field" style={{ marginTop: 18 }}>
-          <label>This device</label>
+        <div className="section-head">This device</div>
+        <div className="field">
           <div className="hint" style={{ fontSize: 12.5, lineHeight: 1.7 }}>
             Service port: <b>{self?.servicePort}</b>
             <br />
@@ -129,6 +143,7 @@ export default function SettingsModal({ config, self, soundUrl, onSave, onClose 
             <b> IP:{self?.servicePort}</b>.
           </div>
         </div>
+        <StorageInfo />
 
         <div className="modal-actions">
           <button className="btn ghost" onClick={onClose}>
@@ -138,6 +153,71 @@ export default function SettingsModal({ config, self, soundUrl, onSave, onClose 
             Save
           </button>
         </div>
+    </ModalShell>
+  );
+}
+
+// Records a single key press and stores its physical `code`, so the binding is
+// layout-independent. Escape aborts rather than binding Escape itself, which
+// would leave no way to cancel out of the recorder.
+function KeyRecorder({ code, disabled, onRecord }) {
+  const [listening, setListening] = useState(false);
+
+  useEffect(() => {
+    if (!listening) return undefined;
+    const onKey = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setListening(false);
+      if (e.code !== 'Escape') onRecord(e.code);
+    };
+    // Capture phase, so the key is claimed before anything else reacts to it.
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [listening, onRecord]);
+
+  return (
+    <div className="row" style={{ gap: 8, alignItems: 'center', marginTop: 8 }}>
+      <button
+        className={`btn ${listening ? 'primary' : ''}`}
+        disabled={disabled}
+        onClick={() => setListening((v) => !v)}
+      >
+        {listening ? 'Press any key…' : 'Record a key'}
+      </button>
+      <span className="hint" style={{ margin: 0 }}>
+        {listening ? 'Escape to cancel' : `Bound to ${describeKeyCode(code)}`}
+      </span>
+    </div>
+  );
+}
+
+// Where conversations actually live on disk. Chat history is plain JSON per
+// peer, so it is worth being able to find (and back up, or delete) directly.
+function StorageInfo() {
+  const [paths, setPaths] = useState(null);
+
+  useEffect(() => {
+    window.lanchat.getPaths().then(setPaths);
+  }, []);
+
+  if (!paths) return null;
+
+  return (
+    <div className="field">
+      <label>Where your messages are stored</label>
+      <div className="hint" style={{ lineHeight: 1.7 }}>
+        Conversations are saved as one JSON file per contact, unencrypted, in:
+        <br />
+        <code className="path">{paths.history}</code>
+      </div>
+      <div className="row" style={{ gap: 8, marginTop: 8 }}>
+        <button className="btn" onClick={() => window.lanchat.revealFile(paths.history)}>
+          Show in file manager
+        </button>
+        <button className="btn" onClick={() => window.lanchat.revealFile(paths.downloads)}>
+          Received files
+        </button>
       </div>
     </div>
   );

@@ -5,13 +5,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { ipcMain, dialog, shell } = require('electron');
 const { guessMime } = require('./fileTransfer');
+const { LOCAL_ORIGIN: AGENT_LOCAL_ORIGIN } = require('./agents');
 
 // Bridges the main-process services to the renderer:
 //   - ipcMain.handle(...)  : renderer -> main commands (request/response)
 //   - bus events -> webContents 'lanchat:event' : main -> renderer notifications
 // The renderer only ever sees the small, explicit surface exposed in preload.js.
 
-function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, updater, linkStats, getWindow, onUnread }) {
+function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, updater, linkStats, agentHub, downloadsDir, getWindow, onUnread }) {
   function emit(type, payload) {
     const win = getWindow();
     if (win && !win.isDestroyed()) win.webContents.send('lanchat:event', { type, payload });
@@ -20,10 +21,15 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   // ---- main -> renderer event forwarding ----
   bus.on('presence', (list) => emit('presence', list));
   bus.on('tailnet-peers', (list) => emit('tailnet-peers', list));
+  bus.on('tailnet-status', (s) => emit('tailnet-status', s));
   bus.on('file-progress', (p) => emit('file-progress', p));
   bus.on('update-progress', (p) => emit('update-progress', p));
   bus.on('link-stats', (s) => emit('link-stats', s));
   bus.on('update-log', (m) => emit('toast', { level: 'info', text: m }));
+  bus.on('agent-status', (s) => emit('agent-status', s));
+  bus.on('agent-delta', (d) => emit('agent-delta', d));
+  bus.on('agent-approval', (a) => emit('agent-approval', a));
+  bus.on('agent-typing', ({ agentId, isTyping }) => emit('typing', { peerId: agentId, isTyping }));
 
   bus.on('file-received', (info) => {
     const message = {
@@ -46,10 +52,22 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   bus.on('peer-message', (msg) => {
     const from = msg.from;
     if (!from) return;
+    // Agent ids are namespaced `agent:` and only ever originate locally. A frame
+    // off the wire claiming one is a peer impersonating an agent — drop it. The
+    // marker is a Symbol, so JSON.parse cannot forge it (see agents/index.js).
+    if (agentHub && agentHub.isAgent(from) && !msg[AGENT_LOCAL_ORIGIN]) {
+      console.warn('[ipc] dropped a wire frame claiming an agent id:', from);
+      return;
+    }
     // Link-quality control frames are consumed here, never shown as chat.
     if (linkStats && linkStats.handleMessage(msg)) return;
     switch (msg.type) {
       case 'chat': {
+        // A message from a real peer may be addressed to a local agent, gated on
+        // that agent's allowlist and enabled state. It is deliberately still
+        // stored and shown afterwards: you should always be able to see what a
+        // peer asked your agent to do.
+        if (agentHub) agentHub.routeFromPeer(from, msg.text);
         const message = {
           id: msg.id || crypto.randomUUID(),
           peerId: from,
@@ -117,6 +135,7 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       'muteNotifications',
       'pttEnabled',
       'pttKey',
+      'pttCustomCode',
       'pttAllowIncoming',
     ];
     for (const k of keys) {
@@ -125,6 +144,51 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     config.set(allowed);
     return publicConfig(config);
   });
+
+  // ---- agents ----
+  // Every response goes through agentHub.list(), which redacts secrets to a
+  // `hasSecret` boolean — a key that has been entered never comes back out.
+  ipcMain.handle('lanchat:listAgents', () => agentHub.list());
+
+  ipcMain.handle('lanchat:addAgent', async (_e, draft) => {
+    try {
+      return { ok: true, agent: await agentHub.add(draft) };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('lanchat:removeAgent', async (_e, { id }) => {
+    const removed = await agentHub.remove(id);
+    return { ok: removed, agents: agentHub.list() };
+  });
+
+  ipcMain.handle('lanchat:setAgentEnabled', async (_e, { id, enabled }) => {
+    try {
+      return { ok: true, agent: await agentHub.setEnabled(id, enabled) };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('lanchat:setAgentPeers', (_e, { id, allowedPeers }) =>
+    agentHub.setAllowedPeers(id, allowedPeers)
+  );
+
+  ipcMain.handle('lanchat:testAgent', (_e, { id }) => agentHub.test(id));
+
+  ipcMain.handle('lanchat:answerAgentApproval', (_e, { agentId, runId, choice }) =>
+    agentHub.answerApproval(agentId, runId, choice)
+  );
+
+  ipcMain.handle('lanchat:stopAgentRun', (_e, { agentId }) => agentHub.stopRun(agentId));
+
+  // Where conversations and received files live, so the UI can point at them.
+  ipcMain.handle('lanchat:getPaths', () => ({
+    history: store.dir,
+    downloads: downloadsDir,
+    config: config.file,
+  }));
 
   ipcMain.handle('lanchat:getHistory', (_e, peerId) => store.read(peerId));
 
@@ -163,6 +227,24 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   });
 
   ipcMain.handle('lanchat:sendFilePaths', (_e, { peerId, paths }) => sendFiles(peerId, paths));
+
+  // A recorded voice message arrives as bytes rather than a path, so it is
+  // written to disk first and then sent down the ordinary file-transfer path.
+  // Kept alongside history so it survives as the local copy of what was sent.
+  ipcMain.handle('lanchat:sendVoice', async (_e, { peerId, data, ext }) => {
+    if (!peerId || !data) return { sent: [] };
+    const dir = path.join(path.dirname(config.file), 'voice');
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const file = path.join(dir, `Voice message ${stamp}${ext || '.weba'}`);
+      fs.writeFileSync(file, Buffer.from(data));
+      return sendFiles(peerId, [file]);
+    } catch (err) {
+      emit('toast', { level: 'error', text: `Could not save the recording: ${err.message}` });
+      return { sent: [] };
+    }
+  });
 
   ipcMain.handle('lanchat:addManualPeer', (_e, { ip, port }) => {
     const entry = `${ip}:${port || config.get('servicePort')}`;
@@ -244,6 +326,11 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
 
   async function sendFiles(peerId, paths) {
     const sent = [];
+    // Agents are text-only participants — there is no endpoint to upload to.
+    if (agentHub && agentHub.isAgent(peerId)) {
+      emit('toast', { level: 'error', text: 'Agents cannot receive files.' });
+      return { sent };
+    }
     for (const p of paths) {
       try {
         const info = await fileSender.send(peerId, p);
@@ -301,6 +388,7 @@ function publicConfig(config) {
     muteNotifications,
     pttEnabled,
     pttKey,
+    pttCustomCode,
     pttAllowIncoming,
   } = config.data;
   return {
@@ -322,6 +410,7 @@ function publicConfig(config) {
     muteNotifications,
     pttEnabled,
     pttKey,
+    pttCustomCode,
     pttAllowIncoming,
   };
 }

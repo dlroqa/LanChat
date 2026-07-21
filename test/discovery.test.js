@@ -77,3 +77,27 @@ test('parseTailnetPeers does not guess "shared" without a MagicDNS suffix', () =
     assert.equal(p.shared, false, 'must not claim shared when it cannot be determined');
   }
 });
+
+// --- Tailscale CLI resolution ---
+//
+// Regression guard for the bug where tailnet discovery silently found nothing in
+// a packaged app: a GUI-launched process does not inherit the shell PATH, so a
+// bare execFile('tailscale') fails with ENOENT on every poll.
+test('known install locations are probed for each platform', () => {
+  const { TAILSCALE_PATHS } = require('../src/main/discovery.js');
+  // The macOS App Store build is the one that is never on a GUI PATH.
+  assert.ok(
+    TAILSCALE_PATHS.darwin.includes('/Applications/Tailscale.app/Contents/MacOS/Tailscale'),
+    'the Mac App Store install path must be probed'
+  );
+  assert.ok(TAILSCALE_PATHS.darwin.some((p) => p.includes('homebrew')), 'Homebrew installs must be probed');
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    assert.ok(TAILSCALE_PATHS[platform].every((p) => p.includes('tailscale') || p.includes('Tailscale')));
+  }
+});
+
+test('an unknown install still falls back to PATH rather than giving up', () => {
+  const { findTailscaleBinary } = require('../src/main/discovery.js');
+  const resolved = findTailscaleBinary();
+  assert.ok(typeof resolved === 'string' && resolved.length > 0);
+});

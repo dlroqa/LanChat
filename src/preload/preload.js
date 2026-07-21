@@ -11,6 +11,19 @@ contextBridge.exposeInMainWorld('lanchat', {
   getConfig: () => invoke('lanchat:getConfig'),
   setConfig: (patch) => invoke('lanchat:setConfig', patch),
 
+  // Agents. Secrets travel one way only: they can be set here, but every
+  // response redacts them to a `hasSecret` boolean.
+  listAgents: () => invoke('lanchat:listAgents'),
+  addAgent: (draft) => invoke('lanchat:addAgent', draft),
+  removeAgent: (id) => invoke('lanchat:removeAgent', { id }),
+  setAgentEnabled: (id, enabled) => invoke('lanchat:setAgentEnabled', { id, enabled }),
+  setAgentPeers: (id, allowedPeers) => invoke('lanchat:setAgentPeers', { id, allowedPeers }),
+  testAgent: (id) => invoke('lanchat:testAgent', { id }),
+  answerAgentApproval: (agentId, runId, choice) =>
+    invoke('lanchat:answerAgentApproval', { agentId, runId, choice }),
+  stopAgentRun: (agentId) => invoke('lanchat:stopAgentRun', { agentId }),
+
+  getPaths: () => invoke('lanchat:getPaths'),
   getHistory: (peerId) => invoke('lanchat:getHistory', peerId),
   sendChat: (peerId, text) => invoke('lanchat:sendChat', { peerId, text }),
   sendTyping: (peerId, isTyping) => invoke('lanchat:sendTyping', { peerId, isTyping }),
@@ -18,6 +31,7 @@ contextBridge.exposeInMainWorld('lanchat', {
 
   pickAndSendFile: (peerId) => invoke('lanchat:pickAndSendFile', { peerId }),
   sendFilePaths: (peerId, paths) => invoke('lanchat:sendFilePaths', { peerId, paths }),
+  sendVoice: (peerId, data, ext) => invoke('lanchat:sendVoice', { peerId, data, ext }),
 
   setUnread: (count) => invoke('lanchat:setUnread', count),
 

@@ -7,6 +7,7 @@ export default function Sidebar({
   self,
   peers,
   tailnet,
+  tailnetStatus,
   selectedId,
   unread,
   showAddresses,
@@ -96,15 +97,41 @@ export default function Sidebar({
                     shared
                   </span>
                 )}
+                {p.kind === 'agent' && (
+                  <span className="tag" title={`Agent connected over ${p.agentKind}`}>
+                    agent
+                  </span>
+                )}
               </div>
               <div className="sub">
-                {p.online ? platformLabel(p.platform) || 'Online' : 'Offline'}
+                {p.kind === 'agent'
+                  ? p.online
+                    ? `Agent · ${p.agentKind}`
+                    : 'Agent · off'
+                  : p.online
+                    ? platformLabel(p.platform) || 'Online'
+                    : 'Offline'}
                 {showAddresses && p.address ? ` · ${p.address.split(':')[0]}` : ''}
               </div>
             </div>
             {unread[p.id] > 0 && <span className="unread-dot">{unread[p.id]}</span>}
           </div>
         ))}
+
+        {/* An empty tailnet list is ambiguous on its own — say which of "no
+            CLI", "signed out" or "nothing there" it actually is. */}
+        {tailnetStatus && tailnetStatus.ok === false && (
+          <>
+            <div className="section-label" style={{ marginTop: 6 }}>
+              On your tailnet
+            </div>
+            <div className="hint" style={{ padding: '0 4px 8px' }}>
+              {tailnetStatus.reason === 'not-installed'
+                ? 'The Tailscale command-line tool was not found, so tailnet peers cannot be listed. Peers on your local network still appear above.'
+                : 'Tailscale is not responding — check that it is running and signed in.'}
+            </div>
+          </>
+        )}
 
         {noApp.length > 0 && (
           <>

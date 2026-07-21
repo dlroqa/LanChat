@@ -52,3 +52,6 @@ export function isImage(mime) {
 export function isVideo(mime) {
   return typeof mime === 'string' && mime.startsWith('video/');
 }
+export function isAudio(mime) {
+  return typeof mime === 'string' && mime.startsWith('audio/');
+}

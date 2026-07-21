@@ -1,5 +1,5 @@
 import React from 'react';
-import { formatTime, formatBytes, isImage, isVideo } from '../lib/util.js';
+import { formatTime, formatBytes, isImage, isVideo, isAudio } from '../lib/util.js';
 import { FileIcon, Download } from '../lib/icons.jsx';
 
 // previewUrl builds a localhost URL the main-process server streams the file from.
@@ -34,6 +34,17 @@ function FileContent({ msg, previewUrl, progress, onOpen, onReveal }) {
         <div className="file-media">
           <img src={url} alt={f.name} onClick={() => onOpen(f.path)} loading="lazy" />
         </div>
+        <FileMeta f={f} onReveal={onReveal} />
+        {pct != null && pct < 100 && <Progress pct={pct} />}
+      </div>
+    );
+  }
+  // Any audio file gets an inline player, which makes a voice message just an
+  // ordinary audio transfer rather than a separate message kind on the wire.
+  if (url && isAudio(f.mime)) {
+    return (
+      <div className="file-bubble">
+        <audio className="audio-player" src={url} controls preload="metadata" />
         <FileMeta f={f} onReveal={onReveal} />
         {pct != null && pct < 100 && <Progress pct={pct} />}
       </div>

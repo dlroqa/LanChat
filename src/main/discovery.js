@@ -2,6 +2,7 @@
 
 const http = require('node:http');
 const dgram = require('node:dgram');
+const fs = require('node:fs');
 const { execFile } = require('node:child_process');
 
 // Discovery feeds the PeerHub with reachable LanChat nodes via two paths:
@@ -71,14 +72,62 @@ function parseTailnetPeers(status) {
   return out;
 }
 
+// Where the Tailscale CLI actually lives, per platform.
+//
+// This matters more than it looks: a GUI-launched app does NOT inherit the
+// shell's PATH. On macOS a bundled LanChat sees roughly
+// /usr/bin:/bin:/usr/sbin:/sbin, which contains none of the paths Tailscale
+// installs to — so a bare execFile('tailscale') fails with ENOENT and tailnet
+// discovery silently never returns a single peer. Probing known locations is
+// what makes discovery work outside a terminal.
+const TAILSCALE_PATHS = {
+  darwin: [
+    '/Applications/Tailscale.app/Contents/MacOS/Tailscale', // Mac App Store build
+    '/usr/local/bin/tailscale', // standalone pkg / Homebrew (Intel)
+    '/opt/homebrew/bin/tailscale', // Homebrew (Apple Silicon)
+  ],
+  linux: ['/usr/bin/tailscale', '/usr/local/bin/tailscale'],
+  win32: ['C:\\Program Files\\Tailscale\\tailscale.exe', 'C:\\Program Files (x86)\\Tailscale\\tailscale.exe'],
+};
+
+let cachedBinary; // undefined = not looked up yet, null = genuinely not found
+
+function findTailscaleBinary() {
+  if (cachedBinary !== undefined) return cachedBinary;
+  for (const candidate of TAILSCALE_PATHS[process.platform] || []) {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      cachedBinary = candidate;
+      return cachedBinary;
+    } catch {
+      // Not installed at this location — try the next.
+    }
+  }
+  // Fall back to PATH: correct when launched from a terminal, and the only
+  // option for installs in a location we do not know about.
+  cachedBinary = 'tailscale';
+  return cachedBinary;
+}
+
+// Exposed so a failed lookup can be re-tried after the user installs Tailscale
+// without restarting the app.
+function resetTailscaleBinary() {
+  cachedBinary = undefined;
+}
+
 function tailscaleStatus() {
   return new Promise((resolve) => {
-    execFile('tailscale', ['status', '--json'], { maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
-      if (err) return resolve(null);
+    execFile(findTailscaleBinary(), ['status', '--json'], { maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+      if (err) {
+        // ENOENT means we never found the CLI at all; anything else (not logged
+        // in, daemon down) is a real Tailscale state worth surfacing separately.
+        resolve({ __error: err.code === 'ENOENT' ? 'not-installed' : 'unavailable' });
+        return;
+      }
       try {
         resolve(JSON.parse(stdout));
       } catch {
-        resolve(null);
+        resolve({ __error: 'unavailable' });
       }
     });
   });
@@ -105,7 +154,15 @@ function createDiscovery({ config, getIdentity, hub, bus }) {
   async function pollTailscale() {
     if (stopped || !config.get('enableTailscale')) return;
     const status = await tailscaleStatus();
-    if (!status) return;
+    if (!status || status.__error) {
+      // Surface *why* the tailnet list is empty instead of showing nothing at
+      // all — "not installed" and "installed but signed out" need different fixes.
+      if (status && status.__error === 'not-installed') resetTailscaleBinary();
+      bus.emit('tailnet-status', { ok: false, reason: (status && status.__error) || 'unavailable' });
+      bus.emit('tailnet-peers', []);
+      return;
+    }
+    bus.emit('tailnet-status', { ok: true, reason: null });
     const tailnet = parseTailnetPeers(status);
     const probes = [];
     for (const entry of tailnet) {
@@ -197,4 +254,4 @@ function createDiscovery({ config, getIdentity, hub, bus }) {
   return { start, stop, refresh, probeWhoami };
 }
 
-module.exports = { createDiscovery, probeWhoami, parseTailnetPeers };
+module.exports = { createDiscovery, probeWhoami, parseTailnetPeers, findTailscaleBinary, TAILSCALE_PATHS };

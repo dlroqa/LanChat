@@ -133,10 +133,10 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
   }
 
   async function send({ text }, handlers = {}) {
-    liveHandlers = handlers;
+    // session/prompt resolves with only a stop reason, so the reply text has to
+    // be accumulated from the session/update chunks as they arrive.
     let collected = '';
-    const wrapped = { ...handlers, onDelta: (d) => { collected += d; handlers.onDelta?.(d); } };
-    liveHandlers = wrapped;
+    liveHandlers = { ...handlers, onDelta: (d) => { collected += d; handlers.onDelta?.(d); } };
     try {
       if (!child) await start();
       await call('session/prompt', { sessionId, prompt: [{ type: 'text', text }] });

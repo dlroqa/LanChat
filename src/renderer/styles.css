@@ -891,19 +891,22 @@ input:focus-visible {
   left: 50%;
   bottom: 104px;
   transform: translateX(-50%);
-  width: 340px;
+  width: 300px;
   max-width: calc(100vw - 32px);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-sm);
   box-shadow: var(--shadow);
-  padding: 16px 16px 8px;
+  padding: 12px 12px 4px;
   z-index: 210;
   animation: pop 0.15s ease;
 }
 .device-panel-title {
-  font-weight: 600;
-  margin-bottom: 12px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  margin-bottom: 10px;
 }
 
 /* grouping header inside modals */
@@ -1166,9 +1169,12 @@ input[type='range']:disabled::-webkit-slider-thumb {
   width: 44px;
   height: 44px;
 }
+/* Docked, the panel sits above a narrower bar. Keep the compact width from
+   .device-panel and only shrink if the dock itself is narrower — stretching it
+   to the full dock width made a small two-field popover look like a banner. */
 .call.docked .device-panel {
   bottom: 88px;
-  width: calc(100% - 24px);
+  width: min(300px, calc(100% - 24px));
 }
 
 /* ---------------- Connection panel ---------------- */
@@ -1428,4 +1434,259 @@ kbd {
 @keyframes ptt-bounce {
   0%, 100% { height: 6px; }
   50% { height: 20px; }
+}
+
+/* ---- agents ---------------------------------------------------------------
+   An agent is a participant like any other, so it reuses .peer, .tag and
+   .presence. These rules cover only what is genuinely new: the settings rows,
+   the streaming preview, and the approval card. */
+
+.agent-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.agent-row:last-of-type {
+  border-bottom: none;
+}
+
+/* A disabled agent is dimmed but still legible — "configured but dormant" must
+   read differently from "unreachable". */
+.agent-row.off .agent-main {
+  opacity: 0.55;
+}
+
+.agent-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-name {
+  font-weight: 500;
+}
+
+.agent-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-actions .btn {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.agent-form {
+  margin: 10px 0 4px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+}
+
+.agent-result {
+  flex-basis: 100%;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.agent-result.good {
+  color: var(--online);
+}
+
+.agent-result.bad {
+  color: var(--danger);
+}
+
+/* Live token stream, superseded by the stored message when the run finishes. */
+.agent-stream {
+  align-self: flex-start;
+  max-width: 72%;
+  margin: 2px 0 6px;
+  padding: 9px 13px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--fg-muted);
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Approval card. Deliberately not bubble-shaped: this is a security decision the
+   user is making, and it must not be mistakable for something the agent said. */
+.agent-approval {
+  align-self: stretch;
+  margin: 10px 0;
+  padding: 14px;
+  border: 1px solid var(--warn);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.agent-approval-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 14px;
+}
+
+.agent-approval-icon {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--warn);
+  color: #1a1205;
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 20px;
+  text-align: center;
+}
+
+.agent-approval-command {
+  margin: 0 0 12px;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+/* ---- modal chrome ---------------------------------------------------------
+   Title row with a persistent close affordance. Modals previously offered no
+   visible escape route beyond a Cancel button or a backdrop click. */
+
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.modal-head h3 {
+  margin: 0;
+}
+
+/* Pulled toward the corner so the glyph optically aligns with the panel edge. */
+.modal-close {
+  flex: none;
+  margin: -4px -6px 0 0;
+}
+
+/* ---- discovered peers (Add peer) ------------------------------------------ */
+
+.discovered {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  max-height: 190px;
+  overflow-y: auto;
+}
+
+.discovered-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  text-align: left;
+  color: var(--fg-muted);
+  border-bottom: 1px solid var(--border-soft);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.discovered-row:last-child {
+  border-bottom: none;
+}
+
+.discovered-row:hover {
+  background: var(--surface-hover);
+  color: var(--fg);
+}
+
+.discovered-row .meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.discovered-row .name {
+  font-weight: 500;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.discovered-row .sub {
+  font-size: 12px;
+  color: var(--fg-faint);
+}
+
+/* Filesystem paths: monospace and selectable, since they exist to be copied. */
+code.path {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 4px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  font-size: 11.5px;
+  word-break: break-all;
+  user-select: text;
+}
+
+/* ---- voice messages ------------------------------------------------------- */
+
+.voice-btn.recording {
+  background: var(--danger);
+  /* Pulse rather than resize: animating the button's box would shove the
+     composer around while recording. */
+  animation: voice-pulse 1.4s ease-in-out infinite;
+}
+
+.voice-btn.recording:hover {
+  background: var(--danger-hover);
+}
+
+.voice-timer {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--on-primary);
+}
+
+@keyframes voice-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(239, 68, 68, 0);
+  }
+}
+
+.audio-player {
+  display: block;
+  width: 260px;
+  max-width: 100%;
+  height: 38px;
+  margin-bottom: 2px;
 }
