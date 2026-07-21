@@ -24,6 +24,12 @@ const EXPECTED = [
   ['src/main/assets/tray.png', 16],
   ['src/main/assets/tray@2x.png', 32],
   ['build/icon.png', 512],
+  // Status-menu assets: presence dots and one-click action glyphs.
+  ['src/main/assets/dotOnline.png', 12],
+  ['src/main/assets/dotOffline.png', 12],
+  ['src/main/assets/menuMessageTemplate.png', 14],
+  ['src/main/assets/menuCallTemplate.png', 14],
+  ['src/main/assets/menuVideoTemplate.png', 14],
 ];
 
 test('tray and app icons exist at the expected sizes', () => {

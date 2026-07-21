@@ -359,8 +359,19 @@ input:focus-visible {
 .chat {
   display: flex;
   flex-direction: column;
+  /* Must flex to fill the grid column: without this the pane sized to its
+     content and left dead space before the side panel. */
+  flex: 1 1 auto;
   min-width: 0;
+  width: 100%;
   background: var(--bg);
+}
+/* The wrapper that hosts the chat pane + drag overlay. */
+.chat-wrap {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
 }
 .chat-header {
   display: flex;

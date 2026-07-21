@@ -34,6 +34,7 @@ export default function App() {
   const configRef = useRef(config);
   const selectedRef = useRef(selectedId);
   const knownPeers = useRef({});
+  const peersRef = useRef([]);
   const typingTimers = useRef({});
   const callRef = useRef(null);
   const ringerRef = useRef(null);
@@ -118,6 +119,7 @@ export default function App() {
       switch (type) {
         case 'presence':
           setPeers(payload);
+          peersRef.current = payload;
           payload.forEach((p) => (knownPeers.current[p.id] = p));
           break;
         case 'tailnet-peers':
@@ -133,6 +135,20 @@ export default function App() {
           // Opened from the status-menu item.
           setSelectedId(payload);
           break;
+        case 'start-call': {
+          // Call shortcut from the status menu.
+          const target =
+            peersRef.current.find((p) => p.id === payload.peerId) || knownPeers.current[payload.peerId];
+          if (!target || !target.online) {
+            toast('That person is offline', 'error');
+            break;
+          }
+          setSelectedId(payload.peerId);
+          callRef.current
+            .start(target, Boolean(payload.withVideo))
+            .catch((err) => toast(`Cannot start call: ${err.message}`, 'error'));
+          break;
+        }
         case 'peer-hello':
           if (payload.identity) knownPeers.current[payload.peerId] = payload.identity;
           break;
@@ -315,7 +331,7 @@ export default function App() {
         onRefresh={() => (api.refresh(), toast('Refreshing…'))}
       />
 
-      <div style={{ position: 'relative', minWidth: 0, display: 'flex' }}>
+      <div className="chat-wrap">
         <ChatPane
           peer={selectedPeer}
           messages={messages[selectedId] || []}

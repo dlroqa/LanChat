@@ -1,6 +1,6 @@
 {
   "name": "lanchat",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "A Hamachi-style LAN & Tailscale chat, calls, and file-sharing app. Peer-to-peer, no central server.",
   "author": {
     "name": "dlroqa",

@@ -93,13 +93,52 @@ function bubble(x, y) {
   return true;
 }
 
+// --- status-menu glyphs -------------------------------------------------
+// Rotate a point around the unit-square centre, so shapes can be drawn axis
+// aligned and then tilted (used for the phone handset).
+function rot(x, y, deg) {
+  const r = (deg * Math.PI) / 180;
+  const dx = x - 0.5;
+  const dy = y - 0.5;
+  return [0.5 + dx * Math.cos(r) - dy * Math.sin(r), 0.5 + dx * Math.sin(r) + dy * Math.cos(r)];
+}
+
+function dotShape(x, y) {
+  return circle(x, y, 0.5, 0.5, 0.3);
+}
+
+// Speech bubble, scaled to sit nicely as a menu glyph.
+function messageShape(x, y) {
+  const body = roundRect(x, y, 0.1, 0.18, 0.9, 0.66, 0.16);
+  const tail = inTriangle(x, y, 0.26, 0.62, 0.28, 0.86, 0.48, 0.64);
+  return body || tail;
+}
+
+// Handset: a solid "bone" (bar with a flared end at each side), tilted 45
+// degrees. An earlier version subtracted a notch, which split the glyph into two
+// disconnected blobs at menu size — kept solid so it reads as a phone.
+function callShape(x, y) {
+  const [rx, ry] = rot(x, y, -45);
+  const bar = roundRect(rx, ry, 0.26, 0.44, 0.74, 0.56, 0.05);
+  const ear = circle(rx, ry, 0.28, 0.5, 0.16);
+  const mouth = circle(rx, ry, 0.72, 0.5, 0.16);
+  return bar || ear || mouth;
+}
+
+// Camera body plus the lens wedge.
+function videoShape(x, y) {
+  const body = roundRect(x, y, 0.08, 0.3, 0.62, 0.7, 0.09);
+  const lens = inTriangle(x, y, 0.68, 0.34, 0.68, 0.66, 0.92, 0.5);
+  return body || lens;
+}
+
 // Unread badge: a filled dot in the top-right corner.
 function badge(x, y) {
   return circle(x, y, 0.79, 0.21, 0.2);
 }
 
 // Renders with 4x supersampling for clean edges at tray sizes.
-function render(size, { rgb, background, dot }) {
+function render(size, { rgb, background, dot, shape }) {
   const SS = 4;
   const out = Buffer.alloc(size * size * 4);
   for (let py = 0; py < size; py += 1) {
@@ -111,8 +150,9 @@ function render(size, { rgb, background, dot }) {
         for (let sx = 0; sx < SS; sx += 1) {
           const x = (px + (sx + 0.5) / SS) / size;
           const y = (py + (sy + 0.5) / SS) / size;
+          const draw = shape || bubble;
           if (dot && badge(x, y)) dotHits += 1;
-          else if (bubble(x, y)) hits += 1;
+          else if (draw(x, y)) hits += 1;
           if (background && roundRect(x, y, 0.02, 0.02, 0.98, 0.98, 0.22)) bgHits += 1;
         }
       }
@@ -178,5 +218,21 @@ write(path.join(ASSETS, 'tray@3x.png'), 48, { rgb: BRAND });
 // Unread variants: coloured (not template) so the green dot is never tinted away.
 write(path.join(ASSETS, 'trayUnread.png'), 16, { rgb: BRAND, dot: true });
 write(path.join(ASSETS, 'trayUnread@2x.png'), 32, { rgb: BRAND, dot: true });
+// Status-menu glyphs. Action icons are template images (black + alpha) so macOS
+// tints them for light/dark menus; the presence dot stays green on purpose.
+const GREEN = [34, 197, 94];
+const GREY = [136, 144, 160];
+write(path.join(ASSETS, 'dotOnline.png'), 12, { rgb: GREEN, shape: dotShape });
+write(path.join(ASSETS, 'dotOnline@2x.png'), 24, { rgb: GREEN, shape: dotShape });
+write(path.join(ASSETS, 'dotOffline.png'), 12, { rgb: GREY, shape: dotShape });
+write(path.join(ASSETS, 'dotOffline@2x.png'), 24, { rgb: GREY, shape: dotShape });
+for (const [name, shape] of [
+  ['menuMessageTemplate', messageShape],
+  ['menuCallTemplate', callShape],
+  ['menuVideoTemplate', videoShape],
+]) {
+  write(path.join(ASSETS, `${name}.png`), 14, { rgb: BLACK, shape });
+  write(path.join(ASSETS, `${name}@2x.png`), 28, { rgb: BLACK, shape });
+}
 write(path.join(BUILD, 'icon.png'), 512, { background: BRAND });
 console.log('Done.');

@@ -92,6 +92,7 @@ function setupTray(ipcApi) {
     showWindow,
     getPresence: () => (services ? services.hub.presenceList() : []),
     onSelectPeer: (peerId) => ipcApi.emit('select-peer', peerId),
+    onStartCall: (peerId, withVideo) => ipcApi.emit('start-call', { peerId, withVideo }),
     onQuit: () => {
       app.isQuitting = true;
       app.quit();
