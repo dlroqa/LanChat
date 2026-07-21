@@ -40,11 +40,19 @@ A simple, peer-to-peer **LAN & Tailscale chat** app — text, voice, video, and 
 
 ### Option A — download a build (easiest)
 
-Grab the installer for your OS from the [Releases page](https://github.com/dlroqa/LanChat/releases):
+Grab the installer for your machine from the [Releases page](https://github.com/dlroqa/LanChat/releases):
 
-- **macOS** — `LanChat-*.dmg`
-- **Windows** — `LanChat-*.exe`
-- **Linux** — `LanChat-*.AppImage` (or `.deb`)
+| Your machine | Download |
+|---|---|
+| **macOS — Apple Silicon** (M1–M4) | `LanChat-<version>-arm64.dmg` |
+| **macOS — Intel** | `LanChat-<version>-x64.dmg` |
+| **Windows** | `LanChat.Setup.<version>.exe` (installer) or `LanChat.<version>.exe` (portable) |
+| **Linux** | `LanChat-<version>.AppImage`, or `lanchat_<version>_amd64.deb` |
+
+> Not sure which Mac you have?  → **Apple menu → About This Mac**. "Apple M1/M2/M3/M4" means
+> Apple Silicon; "Intel Core…" means Intel.
+>
+> The `-mac.zip` files are used by the in-app updater — you don't need to download them.
 
 > **Unsigned builds.** These are ad-hoc signed, not signed with an Apple/Microsoft
 > developer certificate, so your OS will warn you once.

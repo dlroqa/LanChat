@@ -63,6 +63,40 @@ test('pickAsset chooses AppImage vs deb based on how Linux is running', () => {
   assert.equal(pickAsset(ASSETS, { platform: 'linux', arch: 'x64', isAppImage: false }).name, 'lanchat_0.1.4_amd64.deb');
 });
 
+// The macOS updater consumes the ZIP. Artifact names must keep resolving under
+// both the default electron-builder scheme and any explicit-arch scheme, or a
+// rename silently strands users on an old version.
+const ASSETS_EXPLICIT_ARCH = [
+  { name: 'LanChat-0.2.1-arm64.dmg' },
+  { name: 'LanChat-0.2.1-x64.dmg' },
+  { name: 'LanChat-0.2.1-arm64-mac.zip' },
+  { name: 'LanChat-0.2.1-mac.zip' },
+];
+
+test('macOS asset resolves with explicit-arch dmg names alongside default zips', () => {
+  assert.equal(
+    pickAsset(ASSETS_EXPLICIT_ARCH, { platform: 'darwin', arch: 'arm64' }).name,
+    'LanChat-0.2.1-arm64-mac.zip'
+  );
+  assert.equal(
+    pickAsset(ASSETS_EXPLICIT_ARCH, { platform: 'darwin', arch: 'x64' }).name,
+    'LanChat-0.2.1-mac.zip'
+  );
+});
+
+test('macOS asset resolves even if zips are renamed with explicit arch', () => {
+  const renamed = [{ name: 'LanChat-0.3.0-arm64.zip' }, { name: 'LanChat-0.3.0-x64.zip' }];
+  assert.equal(pickAsset(renamed, { platform: 'darwin', arch: 'arm64' }).name, 'LanChat-0.3.0-arm64.zip');
+  assert.equal(pickAsset(renamed, { platform: 'darwin', arch: 'x64' }).name, 'LanChat-0.3.0-x64.zip');
+});
+
+test('an Intel Mac is never handed an arm64 build', () => {
+  for (const assets of [ASSETS, ASSETS_EXPLICIT_ARCH]) {
+    const picked = pickAsset(assets, { platform: 'darwin', arch: 'x64' });
+    assert.ok(picked && !/arm64/i.test(picked.name), `x64 must not receive ${picked && picked.name}`);
+  }
+});
+
 test('pickAsset returns null rather than a wrong-platform download', () => {
   assert.equal(pickAsset([{ name: 'notes.txt' }], { platform: 'darwin', arch: 'arm64' }), null);
   assert.equal(pickAsset([], { platform: 'win32', arch: 'x64' }), null);

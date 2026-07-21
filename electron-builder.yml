@@ -25,8 +25,14 @@ mac:
   category: public.app-category.social-networking
   # Build for both Apple Silicon and Intel Macs.
   target:
+    # electron-builder suffixes arm64 but leaves x64 unlabelled, so the Intel
+    # DMG looked like "the generic one" and was easy to miss. Name both.
     - target: dmg
       arch: [arm64, x64]
+      artifactName: ${productName}-${version}-${arch}.${ext}
+    # The ZIP names are deliberately left at the default: the in-app updater in
+    # already-released builds matches "-arm64-mac.zip" / "-mac.zip", and renaming
+    # them would break updating for every existing user.
     - target: zip
       arch: [arm64, x64]
   # electron-builder skips its own signing; build/afterPack.js ad-hoc signs instead.

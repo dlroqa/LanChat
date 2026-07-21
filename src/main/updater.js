@@ -42,9 +42,14 @@ function pickAsset(assets, { platform, arch, isAppImage }) {
 
   if (platform === 'darwin') {
     // The zip is what we can swap in place; the dmg needs a manual drag.
+    // Accept both the default electron-builder naming ("-arm64-mac.zip" /
+    // "-mac.zip") and an explicit-arch naming, so renaming artifacts later
+    // cannot silently strand users on an old version.
+    const zips = names.filter((a) => /\.zip$/i.test(a.name));
+    const isArm = (n) => /arm64/i.test(n);
     return arch === 'arm64'
-      ? find((a) => /-arm64-mac\.zip$/i.test(a.name))
-      : find((a) => /-mac\.zip$/i.test(a.name) && !/arm64/i.test(a.name));
+      ? zips.find((a) => isArm(a.name)) || null
+      : zips.find((a) => !isArm(a.name)) || null;
   }
   if (platform === 'win32') {
     // "Setup" is the NSIS installer, which upgrades in place.
