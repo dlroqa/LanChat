@@ -16,6 +16,7 @@ const { createTray } = require('./tray');
 const { createUpdater } = require('./updater');
 const { createLinkStats } = require('./linkStats');
 const { createAgentHub } = require('./agents');
+const { Outbox } = require('./outbox');
 
 // Long enough that the update check never competes with first-run setup.
 const STARTUP_UPDATE_CHECK_DELAY = 4000;
@@ -125,6 +126,7 @@ async function startServices() {
   const discovery = createDiscovery({ config, getIdentity, hub, bus });
   const fileSender = createFileSender({ hub, getIdentity, bus });
 
+  const outbox = new Outbox(app.getPath('userData'), { hub, bus, store });
   const updater = createUpdater({ bus });
   const linkStats = createLinkStats({ hub, bus });
   const agentHub = createAgentHub({
@@ -146,6 +148,7 @@ async function startServices() {
     updater,
     linkStats,
     agentHub,
+    outbox,
     downloadsDir,
     getWindow,
     // `tray` is resolved lazily: the tray is created after services start.
@@ -155,6 +158,8 @@ async function startServices() {
   await server.start();
   discovery.start();
   linkStats.start();
+  // Drains queued messages whenever a peer becomes reachable again.
+  outbox.start();
   // Agents are restored last: enabled ones reconnect, disabled ones appear in
   // the roster as offline. A failure here must not stop the app from starting.
   agentHub.startAll().catch((err) => console.error('[agents] startup failed:', err.message));
@@ -172,7 +177,7 @@ async function startServices() {
       .catch((err) => console.warn('[updater] startup check skipped:', err.message));
   }, STARTUP_UPDATE_CHECK_DELAY);
 
-  services = { config, bus, hub, server, discovery, store, downloadsDir, linkStats, agentHub };
+  services = { config, bus, hub, server, discovery, store, downloadsDir, linkStats, agentHub, outbox };
   return ipcApi;
 }
 
@@ -208,6 +213,7 @@ if (!gotLock && !process.env.LANCHAT_USERDATA) {
       services.server.stop();
       // Tears down in-flight runs and kills any agent child processes.
       services.agentHub.stopAll();
+      services.outbox.stop();
     }
   });
 }

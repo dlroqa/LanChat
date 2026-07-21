@@ -113,16 +113,31 @@ export default function ChatPane({
         <AgentApproval request={approval} agentName={peer.name || 'The agent'} onAnswer={onApprove} />
       </div>
 
-      <div className="typing">{typing ? `${peer.name || 'Peer'} is typing…` : ''}</div>
+      <div className="typing">
+        {typing && (
+          <>
+            {peer.name || 'Peer'} is typing
+            {/* Three staggered dots. The container keeps its height whether or
+                not this is showing, so the message list never jumps. */}
+            <span className="typing-dots" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+          </>
+        )}
+      </div>
 
-      {/* An agent has no file endpoint to upload to, so attaching is not offered. */}
+      {/* Text can be composed while a peer is offline and is queued until they
+          return. Files and voice need a live connection, so those stay gated. */}
       <Composer
         onSend={onSend}
         onAttach={onAttach}
         onTyping={onTyping}
-        onVoice={peer.kind === 'agent' ? undefined : onVoice}
-        disabled={!peer.online}
-        canAttach={peer.kind !== 'agent'}
+        onVoice={peer.kind === 'agent' || !peer.online ? undefined : onVoice}
+        disabled={peer.kind === 'agent' && !peer.online}
+        offline={!peer.online}
+        canAttach={peer.kind !== 'agent' && peer.online}
       />
     </div>
   );

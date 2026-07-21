@@ -38,6 +38,7 @@ export default function App() {
   const [agentStatus, setAgentStatus] = useState({}); // agentId -> {status, detail, streaming}
   const [approvals, setApprovals] = useState({}); // agentId -> pending approval request
   const [update, setUpdate] = useState(null); // newer release found at startup
+  const [queued, setQueued] = useState({}); // peerId -> messages waiting to send
 
   const configRef = useRef(config);
   const selectedRef = useRef(selectedId);
@@ -161,6 +162,9 @@ export default function App() {
           break;
         case 'tailnet-peers':
           setTailnet(payload);
+          break;
+        case 'outbox-counts':
+          setQueued(payload);
           break;
         case 'tailnet-status':
           setTailnetStatus(payload);
@@ -328,7 +332,9 @@ export default function App() {
     if (!selectedId) return;
     const msg = await api.sendChat(selectedId, text);
     appendMessage(selectedId, msg);
-    if (!msg.delivered) toast('Message queued — peer appears offline', 'info');
+    // Held locally and retried on reconnect. This machine has to still be
+    // running for that to happen — there is no server to hold it for us.
+    if (!msg.delivered) toast('Saved — it will send when they are back online', 'info');
   }
 
   async function attach() {
@@ -411,6 +417,7 @@ export default function App() {
         tailnetStatus={tailnetStatus}
         selectedId={selectedId}
         unread={unread}
+        queued={queued}
         showAddresses={config.showAddresses}
         onSelect={setSelectedId}
         onOpenProfile={() => setModal('profile')}

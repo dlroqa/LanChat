@@ -37,6 +37,23 @@ class MessageStore {
     }
     return message;
   }
+
+  // Patches a stored message in place. Used when a queued message is finally
+  // delivered: the bubble that was written as pending has to stop being pending,
+  // and it must survive a restart that way.
+  update(peerId, messageId, patch) {
+    const list = this.read(peerId);
+    const idx = list.findIndex((m) => m.id === messageId);
+    if (idx < 0) return null;
+    list[idx] = { ...list[idx], ...patch };
+    try {
+      fs.writeFileSync(this.fileFor(peerId), JSON.stringify(list), 'utf8');
+    } catch (err) {
+      console.error('[store] update failed:', err.message);
+      return null;
+    }
+    return list[idx];
+  }
 }
 
 module.exports = { MessageStore };

@@ -3,7 +3,7 @@ import { Send, Paperclip, Mic } from '../lib/icons.jsx';
 import { startRecording, pickFormat, formatDuration } from '../lib/voice.js';
 
 // Message composer: auto-growing textarea, Enter to send, attach and voice.
-export default function Composer({ onSend, onAttach, onTyping, onVoice, disabled, canAttach = true }) {
+export default function Composer({ onSend, onAttach, onTyping, onVoice, disabled, offline = false, canAttach = true }) {
   // Recording needs MediaRecorder with an Opus-capable container; hide the
   // affordance entirely where that is missing rather than failing on press.
   const canRecord = Boolean(onVoice) && Boolean(pickFormat());
@@ -59,7 +59,13 @@ export default function Composer({ onSend, onAttach, onTyping, onVoice, disabled
         ref={ref}
         rows={1}
         value={text}
-        placeholder={disabled ? 'Peer is offline' : 'Type a message…  (Enter to send, Shift+Enter for newline)'}
+        placeholder={
+          disabled
+            ? 'Unavailable'
+            : offline
+              ? 'They are offline — your message will send when they are back'
+              : 'Type a message…  (Enter to send, Shift+Enter for newline)'
+        }
         onChange={handleChange}
         onKeyDown={onKeyDown}
         disabled={disabled}

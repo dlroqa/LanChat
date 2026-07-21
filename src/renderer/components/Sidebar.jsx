@@ -10,6 +10,7 @@ export default function Sidebar({
   tailnetStatus,
   selectedId,
   unread,
+  queued = {},
   showAddresses,
   onSelect,
   onOpenProfile,
@@ -115,6 +116,11 @@ export default function Sidebar({
               </div>
             </div>
             {unread[p.id] > 0 && <span className="unread-dot">{unread[p.id]}</span>}
+            {!unread[p.id] && queued[p.id] > 0 && (
+              <span className="queued-dot" title={`${queued[p.id]} message(s) waiting to send`}>
+                {queued[p.id]}
+              </span>
+            )}
           </div>
         ))}
 

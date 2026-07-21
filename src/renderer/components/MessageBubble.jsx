@@ -13,11 +13,21 @@ export default function MessageBubble({ msg, grouped, previewUrl, progress, onOp
       <div className="text">{msg.text}</div>
     );
 
+  // A text message still waiting for the peer to come back online.
+  const queued = out && msg.kind !== 'file' && msg.pending;
+
   return (
     <div className={`bubble-row ${out ? 'out' : 'in'} ${grouped ? 'grouped' : ''}`}>
-      <div className="bubble">
+      <div className={`bubble ${queued ? 'queued' : ''}`}>
         {body}
-        <div className="time">{formatTime(msg.ts)}</div>
+        <div className="time">
+          {formatTime(msg.ts)}
+          {queued && (
+            <span className="queued-mark" title="Waiting for them to come online">
+              · queued
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );

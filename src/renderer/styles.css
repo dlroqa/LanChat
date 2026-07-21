@@ -512,10 +512,51 @@ input:focus-visible {
 }
 
 .typing {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   color: var(--fg-faint);
   font-size: 12px;
   padding: 2px 24px 6px;
   height: 20px;
+}
+
+/* Animated ellipsis for the typing indicator. Each dot is offset so the group
+   reads as a wave rather than a blink. The global prefers-reduced-motion rule
+   stops the animation; the dots stay visible, so the meaning survives. */
+.typing-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.typing-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--fg-faint);
+  animation: typing-bounce 1.2s ease-in-out infinite;
+}
+
+.typing-dots i:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.typing-dots i:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes typing-bounce {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
 }
 
 /* ---------------- Composer ---------------- */
@@ -1706,4 +1747,34 @@ code.path {
   line-height: 1.6;
   white-space: pre-wrap;
   user-select: text;
+}
+
+/* ---- queued (offline) messages -------------------------------------------
+   A message typed while the peer was away. It is held on this machine and sent
+   when they return, so it is shown as real but visibly not-yet-delivered. */
+
+.bubble.queued {
+  opacity: 0.72;
+  border: 1px dashed var(--border);
+}
+
+.queued-mark {
+  margin-left: 5px;
+  color: var(--warn);
+}
+
+/* Roster counterpart of .unread-dot, in the "waiting" colour rather than the
+   "needs your attention" one. */
+.queued-dot {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }

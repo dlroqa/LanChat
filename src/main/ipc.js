@@ -12,7 +12,7 @@ const { LOCAL_ORIGIN: AGENT_LOCAL_ORIGIN } = require('./agents');
 //   - bus events -> webContents 'lanchat:event' : main -> renderer notifications
 // The renderer only ever sees the small, explicit surface exposed in preload.js.
 
-function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, updater, linkStats, agentHub, downloadsDir, getWindow, onUnread }) {
+function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, updater, linkStats, agentHub, outbox, downloadsDir, getWindow, onUnread }) {
   function emit(type, payload) {
     const win = getWindow();
     if (win && !win.isDestroyed()) win.webContents.send('lanchat:event', { type, payload });
@@ -27,6 +27,9 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   bus.on('link-stats', (s) => emit('link-stats', s));
   bus.on('update-log', (m) => emit('toast', { level: 'info', text: m }));
   bus.on('update-available', (info) => emit('update-available', info));
+  bus.on('outbox-counts', (counts) => emit('outbox-counts', counts));
+  // A queued message finally went out — update the bubble that was pending.
+  bus.on('outbox-sent', (msg) => msg && emit('chat', msg));
   bus.on('agent-status', (s) => emit('agent-status', s));
   bus.on('agent-delta', (d) => emit('agent-delta', d));
   bus.on('agent-approval', (a) => emit('agent-approval', a));
@@ -203,8 +206,14 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       text,
       ts: Date.now(),
     };
-    store.append(peerId, message);
     const ok = hub.send(peerId, { type: 'chat', id: message.id, text, ts: message.ts });
+    // Undelivered messages are held and retried when the peer reconnects, so
+    // the bubble is stored as pending rather than silently lost.
+    if (!ok) {
+      message.pending = true;
+      outbox.enqueue(peerId, message);
+    }
+    store.append(peerId, message);
     return { ...message, delivered: ok };
   });
 
