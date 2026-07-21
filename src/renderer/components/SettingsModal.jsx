@@ -1,18 +1,24 @@
 import React, { useState } from 'react';
+import DevicePicker from './DevicePicker.jsx';
 
 const DEFAULT_STUN = 'stun:stun.l.google.com:19302';
 
-// Settings: discovery toggles, optional STUN fallback, and network info.
+// Settings: audio/video sources, discovery toggles, optional STUN, network info.
 export default function SettingsModal({ config, self, onSave, onClose }) {
   const [enableTailscale, setTs] = useState(config.enableTailscale);
   const [enableLan, setLan] = useState(config.enableLan);
   const [useStun, setUseStun] = useState((config.iceServers || []).length > 0);
+  const [devices, setDevices] = useState({
+    audioInputId: config.audioInputId || null,
+    videoInputId: config.videoInputId || null,
+  });
 
   function save() {
     onSave({
       enableTailscale,
       enableLan,
       iceServers: useStun ? [{ urls: DEFAULT_STUN }] : [],
+      ...devices,
     });
     onClose();
   }
@@ -21,8 +27,16 @@ export default function SettingsModal({ config, self, onSave, onClose }) {
     <div className="scrim" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>Settings</h3>
-        <p className="desc">Discovery and call preferences. Changes apply immediately.</p>
+        <p className="desc">Audio, video, and discovery preferences. Changes apply immediately.</p>
 
+        <div className="section-head">Call devices</div>
+        <DevicePicker
+          audioInputId={devices.audioInputId}
+          videoInputId={devices.videoInputId}
+          onChange={(key, value) => setDevices((d) => ({ ...d, [key]: value }))}
+        />
+
+        <div className="section-head">Discovery</div>
         <Toggle label="Discover peers over Tailscale" desc="Find people across your tailnet." on={enableTailscale} set={setTs} />
         <Toggle label="Discover peers on local network" desc="UDP broadcast on your subnet." on={enableLan} set={setLan} />
         <Toggle

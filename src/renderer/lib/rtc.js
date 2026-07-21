@@ -3,10 +3,12 @@
 // IP is gathered as a host ICE candidate, so calls connect P2P without STUN/TURN.
 
 export class CallManager {
-  constructor({ sendSignal, onState, getIceServers }) {
+  constructor({ sendSignal, onState, getIceServers, getSelfName, getDevices }) {
     this.sendSignal = sendSignal;
     this.onState = onState;
     this.getIceServers = getIceServers || (() => []);
+    this.getSelfName = getSelfName || (() => null);
+    this.getDevices = getDevices || (() => ({ audioInputId: null, videoInputId: null }));
     this.reset();
   }
 
@@ -42,11 +44,50 @@ export class CallManager {
     return Math.random().toString(36).slice(2) + Date.now().toString(36);
   }
 
+  // Honour the user's chosen mic/camera, falling back to system defaults if that
+  // device has since been unplugged (an `exact` constraint would otherwise throw
+  // and abort the whole call).
   async getMedia(withVideo) {
-    return navigator.mediaDevices.getUserMedia({
-      audio: true,
-      video: withVideo ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
-    });
+    const { audioInputId, videoInputId } = this.getDevices();
+    const videoBase = { width: { ideal: 1280 }, height: { ideal: 720 } };
+    const preferred = {
+      audio: audioInputId ? { deviceId: { exact: audioInputId } } : true,
+      video: withVideo ? (videoInputId ? { ...videoBase, deviceId: { exact: videoInputId } } : videoBase) : false,
+    };
+    try {
+      return await navigator.mediaDevices.getUserMedia(preferred);
+    } catch (err) {
+      if (!audioInputId && !videoInputId) throw err;
+      return navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo ? videoBase : false });
+    }
+  }
+
+  // Swap the mic or camera mid-call without renegotiating.
+  async switchDevice(kind, deviceId) {
+    if (!this.pc || !this.localStream) return;
+    const isVideo = kind === 'video';
+    const constraints = isVideo
+      ? { video: { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } } }
+      : { audio: { deviceId: { exact: deviceId } } };
+
+    const fresh = await navigator.mediaDevices.getUserMedia(constraints);
+    const newTrack = isVideo ? fresh.getVideoTracks()[0] : fresh.getAudioTracks()[0];
+    if (!newTrack) return;
+
+    const sender = this.pc.getSenders().find((s) => s.track && s.track.kind === newTrack.kind);
+    if (sender) await sender.replaceTrack(newTrack);
+
+    const old = isVideo ? this.localStream.getVideoTracks()[0] : this.localStream.getAudioTracks()[0];
+    if (old) {
+      this.localStream.removeTrack(old);
+      old.stop();
+    }
+    this.localStream.addTrack(newTrack);
+    // New reference so the preview element re-binds (same reason as ontrack).
+    this.localStream = new MediaStream(this.localStream.getTracks());
+    if (isVideo) newTrack.enabled = !this.cameraOff;
+    else newTrack.enabled = !this.muted;
+    this.emit();
   }
 
   createPc() {
@@ -57,7 +98,12 @@ export class CallManager {
       }
     };
     pc.ontrack = (e) => {
-      this.remoteStream = e.streams[0];
+      // ontrack fires once per track (audio, then video) carrying the SAME stream
+      // object. Re-publishing that identical reference leaves React's dependency
+      // unchanged, so the <video> never re-binds and a late-arriving video track
+      // stays black. Publish a NEW MediaStream each time to force a re-attach.
+      const tracks = e.streams[0] ? e.streams[0].getTracks() : [e.track];
+      this.remoteStream = new MediaStream(tracks);
       if (this.status !== 'in-call') this.status = 'in-call';
       this.emit();
     };
@@ -88,7 +134,14 @@ export class CallManager {
     for (const track of this.localStream.getTracks()) this.pc.addTrack(track, this.localStream);
     const offer = await this.pc.createOffer();
     await this.pc.setLocalDescription(offer);
-    this.sendSignal(this.peerId, { kind: 'offer', callId: this.callId, withVideo, sdp: offer });
+    // Carry our display name so the callee can label the incoming call.
+    this.sendSignal(this.peerId, {
+      kind: 'offer',
+      callId: this.callId,
+      withVideo,
+      name: this.getSelfName(),
+      sdp: offer,
+    });
     this.emit();
   }
 
@@ -105,6 +158,7 @@ export class CallManager {
         this.peerId = fromId;
         this.callId = signal.callId;
         this.withVideo = Boolean(signal.withVideo);
+        this.peerName = signal.name || null;
         this.pendingOffer = signal.sdp;
         this.status = 'incoming';
         this.emit();

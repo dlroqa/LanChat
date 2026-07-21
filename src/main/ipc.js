@@ -87,7 +87,16 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
 
   ipcMain.handle('lanchat:setConfig', (_e, patch) => {
     const allowed = {};
-    for (const k of ['iceServers', 'enableTailscale', 'enableLan', 'servicePort', 'discoveryPort']) {
+    const keys = [
+      'iceServers',
+      'enableTailscale',
+      'enableLan',
+      'servicePort',
+      'discoveryPort',
+      'audioInputId',
+      'videoInputId',
+    ];
+    for (const k of keys) {
       if (k in patch) allowed[k] = patch[k];
     }
     config.set(allowed);
@@ -185,8 +194,26 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
 }
 
 function publicConfig(config) {
-  const { iceServers, enableTailscale, enableLan, servicePort, discoveryPort, manualPeers } = config.data;
-  return { iceServers, enableTailscale, enableLan, servicePort, discoveryPort, manualPeers };
+  const {
+    iceServers,
+    enableTailscale,
+    enableLan,
+    servicePort,
+    discoveryPort,
+    manualPeers,
+    audioInputId,
+    videoInputId,
+  } = config.data;
+  return {
+    iceServers,
+    enableTailscale,
+    enableLan,
+    servicePort,
+    discoveryPort,
+    manualPeers,
+    audioInputId,
+    videoInputId,
+  };
 }
 
 module.exports = { createIpc };

@@ -795,6 +795,46 @@ input:focus-visible {
   background: var(--online);
 }
 
+.call-btn.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+/* in-call source picker */
+.device-panel {
+  position: absolute;
+  left: 50%;
+  bottom: 104px;
+  transform: translateX(-50%);
+  width: 340px;
+  max-width: calc(100vw - 32px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 16px 16px 8px;
+  z-index: 210;
+  animation: pop 0.15s ease;
+}
+.device-panel-title {
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+/* grouping header inside modals */
+.section-head {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  margin: 18px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.section-head:first-of-type {
+  margin-top: 4px;
+}
+
 /* incoming call toast */
 .incoming {
   position: fixed;

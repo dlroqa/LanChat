@@ -7,6 +7,7 @@ import ProfileModal from './components/ProfileModal.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
 import AddPeerModal from './components/AddPeerModal.jsx';
 import { CallManager } from './lib/rtc.js';
+import { Ringer } from './lib/ringtone.js';
 
 const api = window.lanchat;
 
@@ -32,19 +33,39 @@ export default function App() {
   const knownPeers = useRef({});
   const typingTimers = useRef({});
   const callRef = useRef(null);
+  const ringerRef = useRef(null);
+  const selfRef = useRef(null);
   const loadedPeers = useRef(new Set());
 
   configRef.current = config;
   selectedRef.current = selectedId;
+  selfRef.current = self;
 
-  // --- Call manager (created once) ---
+  // --- Call manager + ringer (created once) ---
   if (!callRef.current) {
     callRef.current = new CallManager({
       sendSignal: (peerId, signal) => api.sendSignal(peerId, signal),
       onState: (s) => setCall(s),
       getIceServers: () => configRef.current.iceServers || [],
+      getSelfName: () => selfRef.current?.name || null,
+      getDevices: () => ({
+        audioInputId: configRef.current.audioInputId || null,
+        videoInputId: configRef.current.videoInputId || null,
+      }),
     });
   }
+  if (!ringerRef.current) ringerRef.current = new Ringer();
+
+  // Ring while a call is pending; stop the moment it connects or ends.
+  useEffect(() => {
+    const ringer = ringerRef.current;
+    if (call.status === 'incoming') ringer.start('incoming');
+    else if (call.status === 'outgoing') ringer.start('outgoing');
+    else ringer.stop();
+  }, [call.status]);
+
+  // Never leave a tone playing if the window closes mid-ring.
+  useEffect(() => () => ringerRef.current?.stop(), []);
 
   function toast(text, level = 'info') {
     const id = Math.random().toString(36).slice(2);
@@ -199,6 +220,18 @@ export default function App() {
     toast('Settings saved');
   }
 
+  // Change mic/camera mid-call and remember it for future calls.
+  async function switchDevice(key, deviceId) {
+    setConfig((c) => ({ ...c, [key]: deviceId }));
+    api.setConfig({ [key]: deviceId });
+    if (!deviceId) return; // "System default" applies to the next call
+    try {
+      await callRef.current.switchDevice(key === 'videoInputId' ? 'video' : 'audio', deviceId);
+    } catch (err) {
+      toast(`Could not switch device: ${err.message}`, 'error');
+    }
+  }
+
   function startCall(withVideo) {
     if (!selectedPeer || !selectedPeer.online) return;
     callRef.current.start(selectedPeer, withVideo).catch((err) => toast(`Cannot start call: ${err.message}`, 'error'));
@@ -279,9 +312,11 @@ export default function App() {
       {inCall && (
         <CallOverlay
           call={call}
+          devices={{ audioInputId: config.audioInputId, videoInputId: config.videoInputId }}
           onHangup={() => callRef.current.hangup()}
           onToggleMute={() => callRef.current.toggleMute()}
           onToggleCamera={() => callRef.current.toggleCamera()}
+          onSwitchDevice={switchDevice}
         />
       )}
 

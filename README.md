@@ -20,8 +20,9 @@ A simple, peer-to-peer **LAN & Tailscale chat** app — text, voice, video, and 
 |---|---|
 | 👥 **Presence** | See who's online across Tailscale + LAN, live. |
 | 💬 **Text chat** | 1:1 messaging with typing indicators and local history. |
-| 📞 **Voice calls** | Crisp P2P audio over LAN/tailnet. |
+| 📞 **Voice calls** | Crisp P2P audio over LAN/tailnet, with ring tone and ringback. |
 | 🎥 **Video calls** | Camera calls with mute / camera toggle and picture-in-picture. |
+| 🎚️ **Source selection** | Choose your microphone and camera — in Settings, or switch live mid-call. |
 | 📎 **File sharing** | Send any file, photo, or video — images & clips preview inline. Drag-and-drop supported. |
 | 🪪 **Simple identity** | Pick a display name + color. No sign-up. |
 
