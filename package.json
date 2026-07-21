@@ -1,0 +1,33 @@
+{
+  "name": "lanchat",
+  "version": "0.1.0",
+  "description": "A Hamachi-style LAN & Tailscale chat, calls, and file-sharing app. Peer-to-peer, no central server.",
+  "author": "dlroqa",
+  "license": "MIT",
+  "main": "src/main/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "concurrently -k -n VITE,ELECTRON -c cyan,magenta \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "vite",
+    "dev:electron": "cross-env LANCHAT_DEV=1 wait-on tcp:5273 && cross-env LANCHAT_DEV=1 electron .",
+    "build:renderer": "vite build",
+    "start": "electron .",
+    "dist": "npm run build:renderer && electron-builder",
+    "dist:linux": "npm run build:renderer && electron-builder --linux",
+    "test": "node --test --test-force-exit test/*.test.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^6.0.7",
+    "wait-on": "^8.0.1"
+  }
+}
