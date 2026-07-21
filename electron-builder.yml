@@ -31,6 +31,14 @@ mac:
       arch: [arm64, x64]
   # electron-builder skips its own signing; build/afterPack.js ad-hoc signs instead.
   identity: null
+  # REQUIRED for calls. macOS refuses microphone/camera access to an app whose
+  # Info.plist has no usage description, which surfaces as a connected call with
+  # silence rather than an obvious permission error. electron-builder does not
+  # add these automatically.
+  extendInfo:
+    NSMicrophoneUsageDescription: LanChat uses your microphone for voice and video calls with people on your network.
+    NSCameraUsageDescription: LanChat uses your camera for video calls with people on your network.
+    NSLocalNetworkUsageDescription: LanChat finds and connects to people on your local network and Tailscale mesh.
 
 win:
   target:

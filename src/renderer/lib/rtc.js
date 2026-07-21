@@ -2,13 +2,16 @@
 // (sendSignal) to the peer and back via handleSignal. On a tailnet/LAN the peer
 // IP is gathered as a host ICE candidate, so calls connect P2P without STUN/TURN.
 
+import { serializeCandidate, serializeDescription } from './signal.js';
+
 export class CallManager {
-  constructor({ sendSignal, onState, getIceServers, getSelfName, getDevices }) {
+  constructor({ sendSignal, onState, getIceServers, getSelfName, getDevices, onError }) {
     this.sendSignal = sendSignal;
     this.onState = onState;
     this.getIceServers = getIceServers || (() => []);
     this.getSelfName = getSelfName || (() => null);
     this.getDevices = getDevices || (() => ({ audioInputId: null, videoInputId: null }));
+    this.onError = onError || ((m) => console.error('[call]', m));
     this.reset();
   }
 
@@ -25,6 +28,24 @@ export class CallManager {
     this.muted = false;
     this.cameraOff = false;
     this.peerName = null;
+  }
+
+  // All signaling goes through here so a transport failure can never be silent
+  // again (this is exactly how the ICE-candidate bug hid).
+  send(signal) {
+    return this.sendTo(this.peerId, signal);
+  }
+
+  sendTo(peerId, signal) {
+    if (!peerId) return;
+    try {
+      const result = this.sendSignal(peerId, signal);
+      if (result && typeof result.catch === 'function') {
+        result.catch((err) => this.onError(`signaling failed (${signal.kind}): ${err.message}`));
+      }
+    } catch (err) {
+      this.onError(`signaling failed (${signal.kind}): ${err.message}`);
+    }
   }
 
   emit() {
@@ -62,6 +83,24 @@ export class CallManager {
     }
   }
 
+  // Audio transport counters, used to tell "not sent" from "not played".
+  async getAudioStats() {
+    if (!this.pc) return null;
+    try {
+      const stats = await this.pc.getStats();
+      let bytesReceived = 0;
+      let bytesSent = 0;
+      stats.forEach((r) => {
+        if (r.kind !== 'audio' && r.mediaType !== 'audio') return;
+        if (r.type === 'inbound-rtp') bytesReceived += r.bytesReceived || 0;
+        if (r.type === 'outbound-rtp') bytesSent += r.bytesSent || 0;
+      });
+      return { bytesReceived, bytesSent, connection: this.pc.connectionState, ice: this.pc.iceConnectionState };
+    } catch {
+      return null;
+    }
+  }
+
   // Swap the mic or camera mid-call without renegotiating.
   async switchDevice(kind, deviceId) {
     if (!this.pc || !this.localStream) return;
@@ -94,7 +133,9 @@ export class CallManager {
     const pc = new RTCPeerConnection({ iceServers: this.getIceServers() });
     pc.onicecandidate = (e) => {
       if (e.candidate) {
-        this.sendSignal(this.peerId, { kind: 'candidate', callId: this.callId, candidate: e.candidate });
+        // Must be a plain object: RTCIceCandidate cannot be structured-cloned
+        // across IPC, and that failure is what silently broke media.
+        this.send({ kind: 'candidate', callId: this.callId, candidate: serializeCandidate(e.candidate) });
       }
     };
     pc.ontrack = (e) => {
@@ -135,12 +176,12 @@ export class CallManager {
     const offer = await this.pc.createOffer();
     await this.pc.setLocalDescription(offer);
     // Carry our display name so the callee can label the incoming call.
-    this.sendSignal(this.peerId, {
+    this.send({
       kind: 'offer',
       callId: this.callId,
       withVideo,
       name: this.getSelfName(),
-      sdp: offer,
+      sdp: serializeDescription(this.pc.localDescription || offer),
     });
     this.emit();
   }
@@ -152,7 +193,7 @@ export class CallManager {
       case 'offer': {
         // Busy if already in a different call.
         if (this.status !== 'idle' && this.peerId !== fromId) {
-          this.sendSignal(fromId, { kind: 'busy', callId: signal.callId });
+          this.sendTo(fromId, { kind: 'busy', callId: signal.callId });
           return;
         }
         this.peerId = fromId;
@@ -219,22 +260,22 @@ export class CallManager {
     await this.flushCandidates();
     const answer = await this.pc.createAnswer();
     await this.pc.setLocalDescription(answer);
-    this.sendSignal(this.peerId, { kind: 'answer', callId: this.callId, sdp: answer });
+    this.send({ kind: 'answer', callId: this.callId, sdp: serializeDescription(this.pc.localDescription || answer) });
     this.emit();
   }
 
   decline() {
-    if (this.peerId) this.sendSignal(this.peerId, { kind: 'decline', callId: this.callId });
+    if (this.peerId) this.send({ kind: 'decline', callId: this.callId });
     this.end(false);
   }
 
   hangup() {
-    if (this.peerId) this.sendSignal(this.peerId, { kind: 'hangup', callId: this.callId });
+    if (this.peerId) this.send({ kind: 'hangup', callId: this.callId });
     this.end(false);
   }
 
   end(notify) {
-    if (notify && this.peerId) this.sendSignal(this.peerId, { kind: 'hangup', callId: this.callId });
+    if (notify && this.peerId) this.send({ kind: 'hangup', callId: this.callId });
     if (this.localStream) this.localStream.getTracks().forEach((t) => t.stop());
     if (this.pc) {
       try {

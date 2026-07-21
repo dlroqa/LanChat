@@ -48,6 +48,7 @@ export default function App() {
       onState: (s) => setCall(s),
       getIceServers: () => configRef.current.iceServers || [],
       getSelfName: () => selfRef.current?.name || null,
+      onError: (msg) => toast(msg, 'error'),
       getDevices: () => ({
         audioInputId: configRef.current.audioInputId || null,
         videoInputId: configRef.current.videoInputId || null,
@@ -329,6 +330,7 @@ export default function App() {
           onToggleMute={() => callRef.current.toggleMute()}
           onToggleCamera={() => callRef.current.toggleCamera()}
           onSwitchDevice={switchDevice}
+          onAudioStats={() => callRef.current.getAudioStats()}
         />
       )}
 
