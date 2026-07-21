@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import DevicePicker from './DevicePicker.jsx';
 import UpdateSection from './UpdateSection.jsx';
 import SoundSettings from './SoundSettings.jsx';
+import { PTT_KEYS, defaultPttKey } from '../lib/ptt.js';
 
 const DEFAULT_STUN = 'stun:stun.l.google.com:19302';
 
@@ -20,6 +21,11 @@ export default function SettingsModal({ config, self, soundUrl, onSave, onClose 
     customNotificationPath: config.customNotificationPath,
     muteNotifications: config.muteNotifications,
   });
+  const [ptt, setPtt] = useState({
+    pttEnabled: config.pttEnabled !== false,
+    pttKey: config.pttKey || defaultPttKey(),
+    pttAllowIncoming: config.pttAllowIncoming !== false,
+  });
   const [devices, setDevices] = useState({
     audioInputId: config.audioInputId || null,
     videoInputId: config.videoInputId || null,
@@ -33,6 +39,7 @@ export default function SettingsModal({ config, self, soundUrl, onSave, onClose 
       showAddresses,
       ...devices,
       ...sounds,
+      ...ptt,
     });
     onClose();
   }
@@ -48,6 +55,39 @@ export default function SettingsModal({ config, self, soundUrl, onSave, onClose 
           audioInputId={devices.audioInputId}
           videoInputId={devices.videoInputId}
           onChange={(key, value) => setDevices((d) => ({ ...d, [key]: value }))}
+        />
+
+        <div className="section-head">Push to talk</div>
+        <Toggle
+          label="Enable push to talk"
+          desc="Hold a key to transmit instantly — no ringing."
+          on={ptt.pttEnabled}
+          set={(v) => setPtt((p) => ({ ...p, pttEnabled: v }))}
+        />
+        <div className="field" style={{ marginTop: 12 }}>
+          <label htmlFor="pttkey">Push-to-talk key</label>
+          <select
+            id="pttkey"
+            value={ptt.pttKey}
+            disabled={!ptt.pttEnabled}
+            onChange={(e) => setPtt((p) => ({ ...p, pttKey: e.target.value }))}
+          >
+            {Object.entries(PTT_KEYS).map(([key, def]) => (
+              <option key={key} value={key}>
+                {def.label}
+              </option>
+            ))}
+          </select>
+          <div className="hint">
+            Hold to talk while LanChat is focused. It is ignored while you are typing a message, and
+            releasing the key stops transmitting.
+          </div>
+        </div>
+        <Toggle
+          label="Allow others to reach you by push to talk"
+          desc="Incoming audio plays without ringing. Your microphone is never opened by an incoming transmission."
+          on={ptt.pttAllowIncoming}
+          set={(v) => setPtt((p) => ({ ...p, pttAllowIncoming: v }))}
         />
 
         <div className="section-head">Sounds</div>

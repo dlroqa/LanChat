@@ -9,6 +9,8 @@ import AddPeerModal from './components/AddPeerModal.jsx';
 import { CallManager } from './lib/rtc.js';
 import { Ringer, playNotification } from './lib/sounds.js';
 import ConnectionPanel from './components/ConnectionPanel.jsx';
+import PttBar from './components/PttBar.jsx';
+import { PttManager, attachPttKey, defaultPttKey } from './lib/ptt.js';
 
 const api = window.lanchat;
 
@@ -30,6 +32,7 @@ export default function App() {
   const [call, setCall] = useState({ status: 'idle' });
   const [linkStats, setLinkStats] = useState({}); // peerId -> stats
   const [callFullscreen, setCallFullscreen] = useState(false);
+  const [ptt, setPtt] = useState({ transmitting: false, connecting: false, talkers: [], inboundStreams: [] });
 
   const configRef = useRef(config);
   const selectedRef = useRef(selectedId);
@@ -38,6 +41,8 @@ export default function App() {
   const typingTimers = useRef({});
   const callRef = useRef(null);
   const ringerRef = useRef(null);
+  const pttRef = useRef(null);
+  const selectedPeerRef = useRef(null);
   const selfRef = useRef(null);
   const loadedPeers = useRef(new Set());
 
@@ -60,6 +65,15 @@ export default function App() {
     });
   }
   if (!ringerRef.current) ringerRef.current = new Ringer();
+  if (!pttRef.current) {
+    pttRef.current = new PttManager({
+      sendSignal: (peerId, signal) => api.sendSignal(peerId, signal),
+      onState: (s) => setPtt(s),
+      getIceServers: () => configRef.current.iceServers || [],
+      getDevices: () => ({ audioInputId: configRef.current.audioInputId || null }),
+      onError: (msg) => toast(msg, 'error'),
+    });
+  }
 
   // Ring while a call is pending; stop the moment it connects or ends.
   useEffect(() => {
@@ -80,6 +94,23 @@ export default function App() {
 
   // Never leave a tone playing if the window closes mid-ring.
   useEffect(() => () => ringerRef.current?.stop(), []);
+
+  // Hold-to-talk. Disabled during a normal call so the two cannot fight over
+  // the microphone.
+  useEffect(() => {
+    const keyName = config.pttKey || defaultPttKey();
+    return attachPttKey({
+      keyName,
+      isEnabled: () =>
+        config.pttEnabled !== false &&
+        call.status === 'idle' &&
+        Boolean(selectedPeerRef.current && selectedPeerRef.current.online),
+      onDown: () => pttRef.current.setTransmitting(true, selectedPeerRef.current),
+      onUp: () => pttRef.current.setTransmitting(false),
+    });
+  }, [config.pttKey, config.pttEnabled, call.status]);
+
+  useEffect(() => () => pttRef.current?.closeAll(), []);
 
   function toast(text, level = 'info') {
     const id = Math.random().toString(36).slice(2);
@@ -178,7 +209,14 @@ export default function App() {
           }
           break;
         case 'signal':
-          callRef.current.handleSignal(payload.peerId, payload.signal);
+          // PTT rides its own channel so it never disturbs a normal call.
+          if (payload.signal && payload.signal.channel === 'ptt') {
+            if (configRef.current.pttAllowIncoming !== false) {
+              pttRef.current.handleSignal(payload.peerId, payload.signal);
+            }
+          } else {
+            callRef.current.handleSignal(payload.peerId, payload.signal);
+          }
           break;
         case 'file-offer':
           // Placeholder bubble so incoming transfers show up with progress.
@@ -236,6 +274,8 @@ export default function App() {
     path && selfRef.current
       ? `http://localhost:${selfRef.current.servicePort}/lanchat/preview?path=${encodeURIComponent(path)}`
       : null;
+
+  selectedPeerRef.current = selectedPeer;
 
   const previewUrl = (path) =>
     path && self ? `http://localhost:${self.servicePort}/lanchat/preview?path=${encodeURIComponent(path)}` : null;
@@ -350,6 +390,11 @@ export default function App() {
         {dragOver && <div className="drop-overlay">Drop to send</div>}
       </div>
 
+      {/* Incoming push-to-talk audio. Hidden: playback only, no controls. */}
+      {ptt.inboundStreams.map(({ peerId, stream }) => (
+        <PttAudio key={peerId} stream={stream} />
+      ))}
+
       <aside className="side-panel">
         {inCall ? (
           <CallOverlay
@@ -364,7 +409,18 @@ export default function App() {
             onAudioStats={() => callRef.current.getAudioStats()}
           />
         ) : (
-          <ConnectionPanel peer={selectedPeer} stats={linkStats[selectedId]} />
+          <>
+            {config.pttEnabled !== false && (
+              <PttBar
+                peer={selectedPeer}
+                state={ptt}
+                keyName={config.pttKey || defaultPttKey()}
+                onHoldStart={() => pttRef.current.setTransmitting(true, selectedPeerRef.current)}
+                onHoldEnd={() => pttRef.current.setTransmitting(false)}
+              />
+            )}
+            <ConnectionPanel peer={selectedPeer} stats={linkStats[selectedId]} />
+          </>
         )}
       </aside>
 
@@ -414,6 +470,19 @@ export default function App() {
       </div>
     </div>
   );
+}
+
+// Plays an incoming push-to-talk stream. Mounted per talking peer.
+function PttAudio({ stream }) {
+  const ref = React.useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !stream) return;
+    if (el.srcObject !== stream) el.srcObject = stream;
+    const p = el.play();
+    if (p && typeof p.catch === 'function') p.catch(() => {});
+  }, [stream]);
+  return <audio ref={ref} autoPlay style={{ display: 'none' }} />;
 }
 
 // Merge persisted history with any live messages already received, dedup by id.

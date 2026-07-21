@@ -115,6 +115,9 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       'notificationVolume',
       'customNotificationPath',
       'muteNotifications',
+      'pttEnabled',
+      'pttKey',
+      'pttAllowIncoming',
     ];
     for (const k of keys) {
       if (k in patch) allowed[k] = patch[k];
@@ -296,6 +299,9 @@ function publicConfig(config) {
     notificationVolume,
     customNotificationPath,
     muteNotifications,
+    pttEnabled,
+    pttKey,
+    pttAllowIncoming,
   } = config.data;
   return {
     iceServers,
@@ -314,6 +320,9 @@ function publicConfig(config) {
     notificationVolume,
     customNotificationPath,
     muteNotifications,
+    pttEnabled,
+    pttKey,
+    pttAllowIncoming,
   };
 }
 

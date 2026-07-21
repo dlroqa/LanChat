@@ -22,6 +22,9 @@ const DEFAULTS = Object.freeze({
   notificationVolume: 0.7,
   customNotificationPath: null,
   muteNotifications: false,
+  pttEnabled: true,
+  pttKey: null, // null = platform default (Command on macOS, Control elsewhere)
+  pttAllowIncoming: true,
   audioInputId: null, // preferred microphone (null = system default)
   videoInputId: null, // preferred camera (null = system default)
   enableTailscale: true,

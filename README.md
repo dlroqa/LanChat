@@ -22,6 +22,7 @@ A simple, peer-to-peer **LAN & Tailscale chat** app — text, voice, video, and 
 | 💬 **Text chat** | 1:1 messaging with typing indicators and local history. |
 | 📞 **Voice calls** | Crisp P2P audio over LAN/tailnet, with ring tone and ringback. |
 | 🎥 **Video calls** | Camera calls with mute / camera toggle and picture-in-picture. |
+| 📻 **Push to talk** | Hold ⌘ (Ctrl on Windows/Linux) to transmit instantly — walkie-talkie style, no ringing. |
 | 🎚️ **Source selection** | Choose your microphone and camera — in Settings, or switch live mid-call. |
 | 📺 **Docked call panel** | Video plays portrait in the right panel; one button expands it full screen. |
 | 📶 **Live connection graphs** | When not in a call, the panel charts real round-trip latency and link quality. |
@@ -158,6 +159,35 @@ Homebrew will require a signed and notarized app.
 1. **Install Tailscale** on each device and sign in to the same tailnet — <https://tailscale.com/download>. (Skip this if you only use LanChat on one local network.)
 2. **Open LanChat** and pick a display name + color.
 3. Other people on your tailnet/LAN who are running LanChat **appear automatically** in the left sidebar. Click one and start chatting, calling, or sending files.
+
+### Push to talk (walkie-talkie)
+
+Select someone and **hold the push-to-talk key** — ⌘ Command on macOS, Ctrl on Windows and
+Linux — to transmit instantly. There is no ringing on either side; audio starts as soon as the
+channel is up, and stops the moment you release. You can also press and hold the 📻 button in
+the right-hand panel.
+
+Configure it under **Settings → Push to talk** (enable/disable, choose the key, or refuse
+incoming transmissions).
+
+**How it works.** Audio is **Opus over UDP**, carried by WebRTC (SRTP) directly peer-to-peer
+across your tailnet or LAN — the same direct connection ordinary calls use, with no STUN/TURN
+and no relay. WebRTC additionally provides jitter buffering, packet-loss concealment and echo
+cancellation, which a hand-rolled UDP sender would not.
+
+> **Your microphone is only ever opened by *you*.** Each direction is a separate connection:
+> transmitting attaches your mic, while receiving auto-answers **receive-only** and adds no
+> tracks at all. An incoming transmission therefore cannot open your microphone. The mic is also
+> released automatically after 60 seconds without use, so the OS mic indicator does not stay lit.
+
+**Two limits worth knowing:**
+
+1. **Hold-to-talk works while LanChat is focused.** Electron's global shortcut API has no
+   key-*up* event, so a true system-wide "hold to talk" is not possible — only a toggle would be,
+   which is not the same thing. Rather than ship something that behaves differently from what the
+   key implies, hold-to-talk is in-window.
+2. **Modifier keys stay usable.** Pressing another key during the hold (⌘C, ⌘V) ends
+   transmission, and the key is ignored entirely while you are typing a message.
 
 ### Talking to people on another tailnet (Tailscale device sharing)
 

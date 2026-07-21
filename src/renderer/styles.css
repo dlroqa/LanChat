@@ -1335,3 +1335,97 @@ input[type='range']:disabled::-webkit-slider-thumb {
   flex-wrap: wrap;
   justify-content: center;
 }
+
+/* ---------------- Push to talk ---------------- */
+.ptt-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  margin: 14px 14px 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.ptt-bar.live {
+  border-color: var(--danger);
+  background: rgba(239, 68, 68, 0.08);
+}
+.ptt-bar.incoming {
+  border-color: var(--online);
+  background: rgba(34, 197, 94, 0.08);
+}
+.ptt-btn {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--fg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.12s ease, transform 0.08s ease;
+  user-select: none;
+}
+.ptt-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+.ptt-btn.live {
+  background: var(--danger);
+  color: #fff;
+  transform: scale(0.95);
+  box-shadow: 0 0 0 6px rgba(239, 68, 68, 0.18);
+}
+.ptt-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.ptt-meta {
+  min-width: 0;
+  flex: 1;
+}
+.ptt-status {
+  font-weight: 500;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ptt-hint {
+  font-size: 11.5px;
+  color: var(--fg-faint);
+  margin-top: 2px;
+}
+kbd {
+  font-family: var(--font);
+  font-size: 11px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+/* live audio bars */
+.ptt-wave {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 22px;
+}
+.ptt-wave > span {
+  width: 3px;
+  border-radius: 2px;
+  background: var(--danger);
+  animation: ptt-bounce 0.9s ease-in-out infinite;
+}
+.ptt-wave.in > span {
+  background: var(--online);
+}
+.ptt-wave > span:nth-child(2) { animation-delay: 0.15s; }
+.ptt-wave > span:nth-child(3) { animation-delay: 0.3s; }
+.ptt-wave > span:nth-child(4) { animation-delay: 0.45s; }
+@keyframes ptt-bounce {
+  0%, 100% { height: 6px; }
+  50% { height: 20px; }
+}

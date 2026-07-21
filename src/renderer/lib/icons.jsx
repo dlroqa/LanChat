@@ -135,6 +135,17 @@ export const Play = (p) => (
     <polygon points="6 3 20 12 6 21 6 3" />
   </S>
 );
+// Walkie-talkie: body, speaker grille, and antenna.
+export const Radio = (p) => (
+  <S {...p}>
+    <rect x="6" y="8" width="12" height="14" rx="2" />
+    <path d="M16 8V5.5a1.5 1.5 0 0 1 1.5-1.5H19" />
+    <line x1="19" y1="2" x2="19" y2="5" />
+    <line x1="9" y1="11.5" x2="15" y2="11.5" />
+    <line x1="9" y1="14" x2="15" y2="14" />
+    <rect x="10" y="17" width="4" height="2.5" rx="0.6" />
+  </S>
+);
 export const Users = (p) => (
   <S {...p}>
     <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
