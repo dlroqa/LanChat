@@ -27,7 +27,7 @@ A simple, peer-to-peer **LAN & Tailscale chat** app — text, voice, video, and 
 | 📶 **Live connection graphs** | When not in a call, the panel charts real round-trip latency and link quality. |
 | 🔊 **Sound choices** | 6 ringtones + 8 message sounds, each with volume control and a custom-file option. |
 | 📎 **File sharing** | Send any file, photo, or video — images & clips preview inline. Drag-and-drop supported. |
-| 🪪 **Simple identity** | Pick a display name + color. No sign-up. |
+| 🪪 **Simple identity** | Pick a display name, and either a colour or your own profile picture. No sign-up. |
 | 🔔 **Status menu** | Lives in the macOS menu bar, Windows tray, and Ubuntu status area — who's online, unread badge, quick jump into a chat. |
 | 🔒 **Addresses hidden** | IP addresses are hidden by default; peers are identified by name. |
 | 🤝 **Shared tailnets** | Devices shared in from another tailnet are discovered and marked. |
@@ -170,23 +170,57 @@ automatically, marked **shared**.
 2. Once they accept, the machine shows up in their tailnet with a `100.x` address, and LanChat
    discovers it like any other peer.
 
-> **What works, and what doesn't.** Tailscale **quarantines shared devices by default**: a shared
+> ### ⚠️ Not yet verified
+>
+> **Everything in this section is a prediction, not a test result.** LanChat's shared-tailnet
+> behaviour has *not* been exercised end-to-end yet — all testing so far has been between devices
+> on a single tailnet. The expectations below are derived from how LanChat opens connections
+> (which is verifiable in the source) combined with Tailscale's documented behaviour that it
+> [**quarantines shared devices by default**](https://tailscale.com/kb/1084/sharing): a shared
 > machine can *answer* connections from the tailnet it was shared into, but cannot *start* them.
-> In practice:
 >
-> | | Shared device → you | You → shared device |
-> |---|---|---|
-> | Discovery & presence | — | ✅ works |
-> | Text chat | ✅ works (replies ride the connection you opened) | ✅ works |
-> | Sending files | ⚠️ blocked by quarantine | ✅ works |
-> | Voice / video calls | ⚠️ unreliable — ICE needs both sides to connect | ⚠️ same |
->
-> So **start the conversation from the non-shared side**. For full two-way use — file sending in
-> both directions and dependable calls — the device owner should disable quarantine for that share
-> in the admin console, or simply add both people to the same tailnet as users.
->
-> Also note MagicDNS short names don't resolve for shared machines; LanChat sidesteps this by
-> connecting over the `100.x` address directly.
+> If you test this, please [open an issue](https://github.com/dlroqa/LanChat/issues) with what
+> actually happened so this section can be replaced with facts.
+
+**Why direction matters.** Every LanChat feature is either *carried on a connection already open*
+or *needs a brand-new connection*. Only the second kind is affected by quarantine:
+
+| Feature | How it connects | Expected with a quarantined shared device |
+|---|---|---|
+| Finding them | You probe their `100.x` address ([`discovery.js`](src/main/discovery.js)) | ✅ You find them |
+| Them finding you | Their probe must originate from the shared side | ❌ Blocked — but see below |
+| Presence, both ways | Both sides swap `hello` on the socket **you** opened ([`server.js`](src/main/server.js)) | ✅ Once connected, you appear in their sidebar too |
+| Text chat, both ways | Reuses that same open socket | ✅ Both directions |
+| Typing, connection graph | Same socket | ✅ Both directions |
+| You send a file | You open an HTTP request to them | ✅ Works |
+| They send a file | They must open a **new** HTTP request to you ([`fileTransfer.js`](src/main/fileTransfer.js)) | ❌ Expected to fail |
+| Voice / video calls | Signalling rides the open socket, but ICE needs connectivity checks in **both** directions | ⚠️ Signalling should work; media may not connect |
+
+**So: start the conversation from the non-shared side.** After that, presence and chat should work
+normally in both directions, because they ride the one connection you opened.
+
+For unrestricted two-way use — file sending both ways and dependable calls — either disable
+quarantine for that share in the admin console, or add both people to the same tailnet as users.
+
+Note that MagicDNS short names don't resolve for shared machines; LanChat sidesteps this by
+connecting over the `100.x` address directly.
+
+<details>
+<summary><b>Checklist for testing this</b></summary>
+
+From the **non-shared** side, in order:
+
+1. Does the shared device appear in your sidebar, tagged `shared`?
+2. Send a text message — does it arrive, and does their reply come back?
+3. Do you appear in *their* sidebar once you've connected?
+4. Send them a file. Then have them try to send you one — does that direction fail?
+5. Start a voice call, then a video call. Does the call connect, and does media actually flow?
+   (The in-call meters show whether audio is being sent and received.)
+
+Steps 4 and 5 are where quarantine is predicted to bite. If they work anyway, quarantine is likely
+off for that share — and this table needs correcting.
+
+</details>
 
 ### Connecting manually
 

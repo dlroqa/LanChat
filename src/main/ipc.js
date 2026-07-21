@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { ipcMain, dialog, shell } = require('electron');
+const { guessMime } = require('./fileTransfer');
 
 // Bridges the main-process services to the renderer:
 //   - ipcMain.handle(...)  : renderer -> main commands (request/response)
@@ -84,7 +85,11 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   }));
 
   ipcMain.handle('lanchat:setProfile', (_e, { displayName, avatar }) => {
-    config.set({ displayName: (displayName || '').trim() || getIdentity().hostname, avatar: avatar || null });
+    // The avatar ships inside every identity card, so cap it. The renderer
+    // downscales to ~5 KB; this is a backstop against anything larger reaching
+    // the wire (e.g. a future caller that forgets to downscale).
+    const safeAvatar = sanitizeAvatar(avatar);
+    config.set({ displayName: (displayName || '').trim() || getIdentity().hostname, avatar: safeAvatar });
     hub.emitPresence();
     emit('identity', getIdentity());
     return getIdentity();
@@ -165,6 +170,24 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     return [...list];
   });
 
+  // Returns the chosen image as a data URL. The renderer downscales it before it
+  // is stored, because the avatar travels inside the identity card on every
+  // discovery probe — a full-size photo there would be wasteful on the wire.
+  ipcMain.handle('lanchat:pickAvatar', async () => {
+    const win = getWindow();
+    const result = await dialog.showOpenDialog(win, {
+      title: 'Choose a profile picture',
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'] }],
+      properties: ['openFile'],
+    });
+    if (result.canceled || !result.filePaths[0]) return null;
+    const src = result.filePaths[0];
+    const stat = fs.statSync(src);
+    if (stat.size > 25 * 1024 * 1024) throw new Error('image is too large (max 25 MB)');
+    const buf = fs.readFileSync(src);
+    return { dataUrl: `data:${guessMime(src)};base64,${buf.toString('base64')}`, name: path.basename(src) };
+  });
+
   // Copies a chosen audio file into userData so it survives the original moving,
   // and whitelists it for the local preview endpoint the renderer plays it from.
   ipcMain.handle('lanchat:pickSound', async (_e, { kind }) => {
@@ -243,6 +266,18 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   return { emit };
 }
 
+const MAX_AVATAR_BYTES = 96 * 1024;
+
+function sanitizeAvatar(avatar) {
+  if (!avatar) return null;
+  const out = { color: avatar.color || null, image: null };
+  if (typeof avatar.image === 'string' && avatar.image.startsWith('data:image/')) {
+    if (avatar.image.length <= MAX_AVATAR_BYTES) out.image = avatar.image;
+    else console.warn('[ipc] avatar rejected: too large for the identity card');
+  }
+  return out;
+}
+
 function publicConfig(config) {
   const {
     iceServers,
@@ -282,4 +317,4 @@ function publicConfig(config) {
   };
 }
 
-module.exports = { createIpc };
+module.exports = { createIpc, sanitizeAvatar, MAX_AVATAR_BYTES };

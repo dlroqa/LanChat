@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import Avatar from './Avatar.jsx';
 import { colorFor } from '../lib/util.js';
+import { downscaleToAvatar } from '../lib/image.js';
+import { Plus, X } from '../lib/icons.jsx';
+
+const api = window.lanchat;
 
 const SWATCHES = ['#2563eb', '#7c3aed', '#db2777', '#059669', '#d97706', '#0891b2', '#dc2626', '#4f46e5'];
 
@@ -8,11 +12,28 @@ const SWATCHES = ['#2563eb', '#7c3aed', '#db2777', '#059669', '#d97706', '#0891b
 export default function ProfileModal({ self, firstRun, onSave, onClose }) {
   const [name, setName] = useState(self?.name || '');
   const [color, setColor] = useState(self?.avatar?.color || colorFor(self?.id || self?.name));
+  const [image, setImage] = useState(self?.avatar?.image || null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
 
   function save() {
     const trimmed = name.trim();
     if (!trimmed) return;
-    onSave({ displayName: trimmed, avatar: { color } });
+    // Colour is kept alongside the photo so removing the picture restores it.
+    onSave({ displayName: trimmed, avatar: { color, image } });
+  }
+
+  async function choosePhoto() {
+    setError(null);
+    setBusy(true);
+    try {
+      const picked = await api.pickAvatar();
+      if (picked) setImage(await downscaleToAvatar(picked.dataUrl));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -25,8 +46,19 @@ export default function ProfileModal({ self, firstRun, onSave, onClose }) {
             : 'Update how you appear to peers.'}
         </p>
 
-        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 18 }}>
-          <Avatar name={name || '?'} id={self?.id} avatar={{ color }} size="lg" />
+        <div className="avatar-edit">
+          <Avatar name={name || '?'} id={self?.id} avatar={{ color, image }} size="lg" />
+          <div className="avatar-edit-actions">
+            <button className="btn" onClick={choosePhoto} disabled={busy}>
+              <Plus size={15} /> {busy ? 'Loading…' : image ? 'Change photo' : 'Upload photo'}
+            </button>
+            {image && (
+              <button className="btn ghost" onClick={() => setImage(null)} title="Remove photo">
+                <X size={15} /> Remove
+              </button>
+            )}
+          </div>
+          {error && <div className="hint" style={{ color: 'var(--danger)' }}>{error}</div>}
         </div>
 
         <div className="field">
@@ -43,7 +75,7 @@ export default function ProfileModal({ self, firstRun, onSave, onClose }) {
         </div>
 
         <div className="field">
-          <label>Color</label>
+          <label>{image ? 'Color (used if you remove the photo)' : 'Color'}</label>
           <div className="avatar-picker">
             {SWATCHES.map((c) => (
               <span

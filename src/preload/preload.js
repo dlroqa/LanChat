@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('lanchat', {
 
   setUnread: (count) => invoke('lanchat:setUnread', count),
 
+  pickAvatar: () => invoke('lanchat:pickAvatar'),
   pickSound: (kind) => invoke('lanchat:pickSound', { kind }),
   linkStats: () => invoke('lanchat:linkStats'),
 
