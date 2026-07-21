@@ -1,0 +1,40 @@
+appId: com.dlroqa.lanchat
+productName: LanChat
+copyright: Copyright © 2026 dlroqa
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - src/main/**
+  - src/preload/**
+  - dist/renderer/**
+  - package.json
+
+# WebRTC needs the built renderer; ensure it exists before packaging (npm run dist does this).
+asar: true
+
+mac:
+  category: public.app-category.social-networking
+  target:
+    - dmg
+    - zip
+  # Unsigned builds — see README for the Gatekeeper bypass.
+  identity: null
+
+win:
+  target:
+    - nsis
+    - portable
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+
+linux:
+  category: Network
+  target:
+    - AppImage
+    - deb
