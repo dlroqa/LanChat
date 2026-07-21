@@ -25,6 +25,9 @@ A simple, peer-to-peer **LAN & Tailscale chat** app — text, voice, video, and 
 | 🎚️ **Source selection** | Choose your microphone and camera — in Settings, or switch live mid-call. |
 | 📎 **File sharing** | Send any file, photo, or video — images & clips preview inline. Drag-and-drop supported. |
 | 🪪 **Simple identity** | Pick a display name + color. No sign-up. |
+| 🔔 **Status menu** | Lives in the macOS menu bar, Windows tray, and Ubuntu status area — who's online, unread badge, quick jump into a chat. |
+| 🔒 **Addresses hidden** | IP addresses are hidden by default; peers are identified by name. |
+| 🤝 **Shared tailnets** | Devices shared in from another tailnet are discovered and marked. |
 
 ---
 
@@ -132,6 +135,35 @@ Homebrew will require a signed and notarized app.
 1. **Install Tailscale** on each device and sign in to the same tailnet — <https://tailscale.com/download>. (Skip this if you only use LanChat on one local network.)
 2. **Open LanChat** and pick a display name + color.
 3. Other people on your tailnet/LAN who are running LanChat **appear automatically** in the left sidebar. Click one and start chatting, calling, or sending files.
+
+### Talking to people on another tailnet (Tailscale device sharing)
+
+You don't need to be on the same tailnet. Use [Tailscale device sharing](https://tailscale.com/kb/1084/sharing)
+to share a machine with someone else's account — it then appears in their LanChat sidebar
+automatically, marked **shared**.
+
+1. In the [Tailscale admin console](https://login.tailscale.com/admin/machines), open the
+   machine's **⋯** menu → **Share…**, and send the invite link.
+2. Once they accept, the machine shows up in their tailnet with a `100.x` address, and LanChat
+   discovers it like any other peer.
+
+> **What works, and what doesn't.** Tailscale **quarantines shared devices by default**: a shared
+> machine can *answer* connections from the tailnet it was shared into, but cannot *start* them.
+> In practice:
+>
+> | | Shared device → you | You → shared device |
+> |---|---|---|
+> | Discovery & presence | — | ✅ works |
+> | Text chat | ✅ works (replies ride the connection you opened) | ✅ works |
+> | Sending files | ⚠️ blocked by quarantine | ✅ works |
+> | Voice / video calls | ⚠️ unreliable — ICE needs both sides to connect | ⚠️ same |
+>
+> So **start the conversation from the non-shared side**. For full two-way use — file sending in
+> both directions and dependable calls — the device owner should disable quarantine for that share
+> in the admin console, or simply add both people to the same tailnet as users.
+>
+> Also note MagicDNS short names don't resolve for shared machines; LanChat sidesteps this by
+> connecting over the `100.x` address directly.
 
 ### Connecting manually
 

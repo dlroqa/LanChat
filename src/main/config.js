@@ -14,6 +14,7 @@ const DEFAULTS = Object.freeze({
   servicePort: 47100, // HTTP + WebSocket service port
   discoveryPort: 47101, // UDP LAN broadcast port
   iceServers: [], // e.g. [{ urls: 'stun:stun.l.google.com:19302' }]
+  showAddresses: false, // hide peers' IP addresses in the UI by default
   audioInputId: null, // preferred microphone (null = system default)
   videoInputId: null, // preferred camera (null = system default)
   enableTailscale: true,

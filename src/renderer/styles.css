@@ -223,6 +223,21 @@ input:focus-visible {
 .peer.offline .name {
   opacity: 0.55;
 }
+/* small inline label, e.g. a peer shared in from another tailnet */
+.tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--fg-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
 .unread-dot {
   min-width: 18px;
   height: 18px;

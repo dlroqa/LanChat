@@ -9,6 +9,7 @@ export default function Sidebar({
   tailnet,
   selectedId,
   unread,
+  showAddresses,
   onSelect,
   onOpenProfile,
   onOpenSettings,
@@ -88,10 +89,17 @@ export default function Sidebar({
           >
             <Avatar name={p.name} id={p.id} avatar={p.avatar} online={p.online} />
             <div className="meta">
-              <div className="name">{p.name || p.hostname || 'Unknown'}</div>
+              <div className="name">
+                {p.name || p.hostname || 'Unknown'}
+                {p.shared && (
+                  <span className="tag" title="Shared with you from another tailnet">
+                    shared
+                  </span>
+                )}
+              </div>
               <div className="sub">
                 {p.online ? platformLabel(p.platform) || 'Online' : 'Offline'}
-                {p.address ? ` · ${p.address.split(':')[0]}` : ''}
+                {showAddresses && p.address ? ` · ${p.address.split(':')[0]}` : ''}
               </div>
             </div>
             {unread[p.id] > 0 && <span className="unread-dot">{unread[p.id]}</span>}

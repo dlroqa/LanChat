@@ -2,7 +2,7 @@
 
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { app, BrowserWindow, session, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, session } = require('electron');
 
 const { Config } = require('./config');
 const { buildIdentity } = require('./identity');
@@ -12,6 +12,7 @@ const { createDiscovery } = require('./discovery');
 const { createFileSender } = require('./fileTransfer');
 const { MessageStore } = require('./store');
 const { createIpc } = require('./ipc');
+const { createTray } = require('./tray');
 
 const isDev = process.env.LANCHAT_DEV === '1';
 
@@ -51,6 +52,15 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '..', '..', 'dist', 'renderer', 'index.html'));
   }
 
+  // Closing the window keeps LanChat running in the status menu, so you stay
+  // reachable for messages and calls. Quit explicitly from the tray menu.
+  mainWindow.on('close', (e) => {
+    if (!app.isQuitting && tray && tray.isActive) {
+      e.preventDefault();
+      mainWindow.hide();
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -64,21 +74,30 @@ function setupMediaPermissions() {
   });
 }
 
-function setupTray() {
-  try {
-    const img = nativeImage.createEmpty();
-    tray = new Tray(img);
-    tray.setToolTip('LanChat');
-    tray.setContextMenu(
-      Menu.buildFromTemplate([
-        { label: 'Open LanChat', click: () => (mainWindow ? mainWindow.show() : createWindow()) },
-        { type: 'separator' },
-        { label: 'Quit', click: () => app.quit() },
-      ])
-    );
-  } catch {
-    // Tray is best-effort (e.g. headless Linux has no tray).
+function showWindow() {
+  if (!mainWindow) {
+    createWindow();
+    return;
   }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function setupTray(ipcApi) {
+  tray = createTray({
+    getWindow,
+    showWindow,
+    getPresence: () => (services ? services.hub.presenceList() : []),
+    onSelectPeer: (peerId) => ipcApi.emit('select-peer', peerId),
+    onQuit: () => {
+      app.isQuitting = true;
+      app.quit();
+    },
+  });
+
+  // Keep the status menu in step with who is online.
+  if (services) services.bus.on('presence', () => tray.update());
 }
 
 async function startServices() {
@@ -99,13 +118,24 @@ async function startServices() {
   const discovery = createDiscovery({ config, getIdentity, hub, bus });
   const fileSender = createFileSender({ hub, getIdentity, bus });
 
-  createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, getWindow });
+  const ipcApi = createIpc({
+    config,
+    getIdentity,
+    hub,
+    bus,
+    store,
+    fileSender,
+    discovery,
+    getWindow,
+    // `tray` is resolved lazily: the tray is created after services start.
+    onUnread: (count) => tray && tray.setUnread(count),
+  });
 
   await server.start();
   discovery.start();
 
   services = { config, bus, hub, server, discovery, store, downloadsDir };
-  return services;
+  return ipcApi;
 }
 
 const gotLock = app.requestSingleInstanceLock();
@@ -113,29 +143,27 @@ if (!gotLock && !process.env.LANCHAT_USERDATA) {
   // A second launch focuses the existing window (unless it's an explicit test instance).
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
-  });
+  app.on('second-instance', showWindow);
 
   app.whenReady().then(async () => {
     setupMediaPermissions();
-    await startServices();
+    const ipcApi = await startServices();
     createWindow();
-    setupTray();
+    setupTray(ipcApi);
 
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow();
-    });
+    app.on('activate', showWindow);
   });
 
   app.on('window-all-closed', () => {
+    // With a status-menu item present, LanChat keeps running in the background
+    // so messages and calls still reach you. Quit from the tray menu.
+    if (tray && tray.isActive) return;
     if (process.platform !== 'darwin') app.quit();
   });
 
   app.on('before-quit', () => {
+    app.isQuitting = true;
+    if (tray) tray.destroy();
     if (services) {
       services.discovery.stop();
       services.server.stop();

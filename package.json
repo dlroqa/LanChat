@@ -1,6 +1,6 @@
 {
   "name": "lanchat",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "A Hamachi-style LAN & Tailscale chat, calls, and file-sharing app. Peer-to-peer, no central server.",
   "author": {
     "name": "dlroqa",
@@ -14,6 +14,7 @@
     "dev:renderer": "vite",
     "dev:electron": "cross-env LANCHAT_DEV=1 wait-on tcp:5273 && cross-env LANCHAT_DEV=1 electron .",
     "build:renderer": "vite build",
+    "icons": "node scripts/make-icons.js",
     "start": "electron .",
     "dist": "npm run build:renderer && electron-builder",
     "dist:linux": "npm run build:renderer && electron-builder --linux",

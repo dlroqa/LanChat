@@ -8,6 +8,7 @@ export default function SettingsModal({ config, self, onSave, onClose }) {
   const [enableTailscale, setTs] = useState(config.enableTailscale);
   const [enableLan, setLan] = useState(config.enableLan);
   const [useStun, setUseStun] = useState((config.iceServers || []).length > 0);
+  const [showAddresses, setShowAddresses] = useState(Boolean(config.showAddresses));
   const [devices, setDevices] = useState({
     audioInputId: config.audioInputId || null,
     videoInputId: config.videoInputId || null,
@@ -18,6 +19,7 @@ export default function SettingsModal({ config, self, onSave, onClose }) {
       enableTailscale,
       enableLan,
       iceServers: useStun ? [{ urls: DEFAULT_STUN }] : [],
+      showAddresses,
       ...devices,
     });
     onClose();
@@ -44,6 +46,14 @@ export default function SettingsModal({ config, self, onSave, onClose }) {
           desc="Only needed on awkward networks; calls are direct on a tailnet."
           on={useStun}
           set={setUseStun}
+        />
+
+        <div className="section-head">Privacy</div>
+        <Toggle
+          label="Show IP addresses"
+          desc="Off by default. Peers are identified by name; addresses stay hidden."
+          on={showAddresses}
+          set={setShowAddresses}
         />
 
         <div className="field" style={{ marginTop: 18 }}>

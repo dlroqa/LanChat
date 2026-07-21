@@ -40,21 +40,31 @@ function probeWhoami(ip, port) {
 }
 
 // Pure parse of `tailscale status --json` into a peer list. Exported for tests.
+//
+// Devices shared in from another tailnet (Tailscale device sharing) show up as
+// ordinary peers with a 100.x address, but keep their OWNER's MagicDNS suffix —
+// that is the documented way to tell them apart. We flag them so the UI can say
+// so, because shared devices are quarantined by default: they can answer
+// connections we open, but cannot open connections back to us.
 function parseTailnetPeers(status) {
   if (!status) return [];
   const selfIps = new Set(status.Self?.TailscaleIPs || []);
+  const suffix = status.CurrentTailnet?.MagicDNSSuffix || '';
   const peers = status.Peer || {};
   const out = [];
   for (const key of Object.keys(peers)) {
     const p = peers[key];
     const ipv4 = (p.TailscaleIPs || []).find((a) => a.includes('.'));
     if (!ipv4 || selfIps.has(ipv4)) continue;
+    const dnsName = p.DNSName || '';
     out.push({
       hostname: p.HostName,
-      dnsName: p.DNSName,
+      dnsName,
       ip: ipv4,
       os: p.OS,
       online: Boolean(p.Online),
+      // Only claim "shared" when we have a suffix to compare against.
+      shared: Boolean(suffix && dnsName && !dnsName.includes(suffix)),
       hasApp: false,
     });
   }
@@ -80,12 +90,14 @@ function createDiscovery({ config, getIdentity, hub, bus }) {
   let lanSock = null;
   let stopped = false;
 
-  async function adoptPeer(ip, defaultPort) {
+  // `extra` carries facts we know locally (e.g. the peer is shared in from
+  // another tailnet) which the peer itself cannot tell us about.
+  async function adoptPeer(ip, defaultPort, extra = {}) {
     const port = defaultPort || config.get('servicePort');
     const who = await probeWhoami(ip, port);
     if (!who || !who.id || who.id === getIdentity().id) return who;
     const svcPort = who.servicePort || port;
-    hub.setIdentity(who.id, who);
+    hub.setIdentity(who.id, { ...who, ...extra });
     hub.connect(who.id, `${ip}:${svcPort}`);
     return who;
   }
@@ -99,7 +111,7 @@ function createDiscovery({ config, getIdentity, hub, bus }) {
     for (const entry of tailnet) {
       if (entry.online) {
         probes.push(
-          adoptPeer(entry.ip).then((who) => {
+          adoptPeer(entry.ip, undefined, { shared: entry.shared, tailnetName: entry.dnsName }).then((who) => {
             if (who && who.id) entry.hasApp = true;
           })
         );

@@ -13,6 +13,7 @@ export default function ChatPane({
   typing,
   progress,
   previewUrl,
+  showAddresses,
   onSend,
   onAttach,
   onTyping,
@@ -48,10 +49,17 @@ export default function ChatPane({
       <div className="chat-header">
         <Avatar name={peer.name} id={peer.id} avatar={peer.avatar} online={peer.online} />
         <div className="meta">
-          <div className="name">{peer.name || peer.hostname}</div>
+          <div className="name">
+            {peer.name || peer.hostname}
+            {peer.shared && (
+              <span className="tag" title="Shared with you from another tailnet">
+                shared
+              </span>
+            )}
+          </div>
           <div className="sub">
             {peer.online ? `Online · ${platformLabel(peer.platform)}` : 'Offline'}
-            {peer.address ? ` · ${peer.address}` : ''}
+            {showAddresses && peer.address ? ` · ${peer.address}` : ''}
           </div>
         </div>
         <div className="chat-actions">

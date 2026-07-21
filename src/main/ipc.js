@@ -8,7 +8,7 @@ const { ipcMain, dialog, shell } = require('electron');
 //   - bus events -> webContents 'lanchat:event' : main -> renderer notifications
 // The renderer only ever sees the small, explicit surface exposed in preload.js.
 
-function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, getWindow }) {
+function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, getWindow, onUnread }) {
   function emit(type, payload) {
     const win = getWindow();
     if (win && !win.isDestroyed()) win.webContents.send('lanchat:event', { type, payload });
@@ -95,6 +95,7 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       'discoveryPort',
       'audioInputId',
       'videoInputId',
+      'showAddresses',
     ];
     for (const k of keys) {
       if (k in patch) allowed[k] = patch[k];
@@ -150,6 +151,12 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     return [...list];
   });
 
+  // Renderer owns unread state; mirror it onto the status-menu item / badge.
+  ipcMain.handle('lanchat:setUnread', (_e, count) => {
+    if (onUnread) onUnread(count);
+    return true;
+  });
+
   ipcMain.handle('lanchat:refresh', () => {
     discovery.refresh();
     hub.emitPresence();
@@ -203,6 +210,7 @@ function publicConfig(config) {
     manualPeers,
     audioInputId,
     videoInputId,
+    showAddresses,
   } = config.data;
   return {
     iceServers,
@@ -213,6 +221,7 @@ function publicConfig(config) {
     manualPeers,
     audioInputId,
     videoInputId,
+    showAddresses,
   };
 }
 

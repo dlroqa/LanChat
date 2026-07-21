@@ -113,6 +113,10 @@ export default function App() {
         case 'identity':
           setSelf(payload);
           break;
+        case 'select-peer':
+          // Opened from the status-menu item.
+          setSelectedId(payload);
+          break;
         case 'peer-hello':
           if (payload.identity) knownPeers.current[payload.peerId] = payload.identity;
           break;
@@ -162,6 +166,12 @@ export default function App() {
     });
     return off;
   }, []);
+
+  // Mirror total unread onto the status-menu item and app badge.
+  useEffect(() => {
+    const total = Object.values(unread).reduce((a, b) => a + (b || 0), 0);
+    api.setUnread(total);
+  }, [unread]);
 
   // --- Load history when selecting a peer ---
   useEffect(() => {
@@ -267,6 +277,7 @@ export default function App() {
         tailnet={tailnet}
         selectedId={selectedId}
         unread={unread}
+        showAddresses={config.showAddresses}
         onSelect={setSelectedId}
         onOpenProfile={() => setModal('profile')}
         onOpenSettings={() => setModal('settings')}
@@ -281,6 +292,7 @@ export default function App() {
           typing={typing[selectedId]}
           progress={progress}
           previewUrl={previewUrl}
+          showAddresses={config.showAddresses}
           onSend={sendText}
           onAttach={attach}
           onTyping={onTyping}

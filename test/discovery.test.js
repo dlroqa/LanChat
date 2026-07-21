@@ -35,3 +35,45 @@ test('parseTailnetPeers is safe on empty/null input', () => {
   assert.deepEqual(parseTailnetPeers(null), []);
   assert.deepEqual(parseTailnetPeers({}), []);
 });
+
+// Tailscale device sharing: shared machines keep their OWNER's MagicDNS suffix,
+// which is the documented way to tell them apart from our own tailnet devices.
+const SHARED_SAMPLE = {
+  Self: { HostName: 'me', TailscaleIPs: ['100.85.49.69'] },
+  CurrentTailnet: { MagicDNSSuffix: 'tail910c1e.ts.net' },
+  Peer: {
+    mine: {
+      HostName: 'my-laptop',
+      DNSName: 'my-laptop.tail910c1e.ts.net.',
+      TailscaleIPs: ['100.1.1.1'],
+      OS: 'macOS',
+      Online: true,
+    },
+    shared: {
+      HostName: 'friends-pc',
+      DNSName: 'friends-pc.othertailnet.ts.net.',
+      TailscaleIPs: ['100.2.2.2'],
+      OS: 'windows',
+      Online: true,
+    },
+  },
+};
+
+test('parseTailnetPeers flags devices shared in from another tailnet', () => {
+  const peers = parseTailnetPeers(SHARED_SAMPLE);
+  const mine = peers.find((p) => p.hostname === 'my-laptop');
+  const shared = peers.find((p) => p.hostname === 'friends-pc');
+
+  assert.equal(mine.shared, false, 'own-tailnet device must not be flagged');
+  assert.equal(shared.shared, true, 'foreign DNS suffix means shared');
+  // Shared devices must still be discoverable, not filtered out.
+  assert.equal(shared.ip, '100.2.2.2');
+  assert.equal(shared.online, true);
+});
+
+test('parseTailnetPeers does not guess "shared" without a MagicDNS suffix', () => {
+  const noSuffix = { ...SHARED_SAMPLE, CurrentTailnet: {} };
+  for (const p of parseTailnetPeers(noSuffix)) {
+    assert.equal(p.shared, false, 'must not claim shared when it cannot be determined');
+  }
+});
