@@ -15,12 +15,18 @@ files:
 # WebRTC needs the built renderer; ensure it exists before packaging (npm run dist does this).
 asar: true
 
+# Ad-hoc signs the macOS bundle so Apple Silicon will launch it (see the script).
+afterPack: build/afterPack.js
+
 mac:
   category: public.app-category.social-networking
+  # Build for both Apple Silicon and Intel Macs.
   target:
-    - dmg
-    - zip
-  # Unsigned builds — see README for the Gatekeeper bypass.
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  # electron-builder skips its own signing; build/afterPack.js ad-hoc signs instead.
   identity: null
 
 win:

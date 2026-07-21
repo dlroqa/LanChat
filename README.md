@@ -37,9 +37,19 @@ Grab the installer for your OS from the [Releases page](https://github.com/dlroq
 - **Windows** — `LanChat-*.exe`
 - **Linux** — `LanChat-*.AppImage` (or `.deb`)
 
-> **Unsigned builds.** These are not code-signed yet.
-> - **macOS:** right-click the app → **Open**, then confirm. (Or `xattr -dr com.apple.quarantine /Applications/LanChat.app`.)
+> **Unsigned builds.** These are ad-hoc signed, not signed with an Apple/Microsoft
+> developer certificate, so your OS will warn you once.
+>
+> - **macOS:** drag LanChat to Applications, then right-click it → **Open** → **Open**.
+>   If macOS instead claims the app **"is damaged and can't be opened"**, that means the
+>   download quarantine flag is set — clear it and re-sign locally:
+>   ```bash
+>   xattr -dr com.apple.quarantine /Applications/LanChat.app
+>   codesign --force --deep --sign - /Applications/LanChat.app
+>   ```
+>   ("Damaged" is macOS's misleading wording for *unsigned*, not corrupt.)
 > - **Windows:** on the SmartScreen prompt choose **More info → Run anyway**.
+> - **Linux:** `chmod +x LanChat-*.AppImage && ./LanChat-*.AppImage`
 
 ### Option B — run from source
 
