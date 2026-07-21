@@ -41,13 +41,13 @@ Grab the installer for your OS from the [Releases page](https://github.com/dlroq
 > developer certificate, so your OS will warn you once.
 >
 > - **macOS:** drag LanChat to Applications, then right-click it → **Open** → **Open**.
->   If macOS instead claims the app **"is damaged and can't be opened"**, that means the
->   download quarantine flag is set — clear it and re-sign locally:
+>   If macOS claims the app **"is damaged and can't be opened"**, it isn't corrupt — that's
+>   Apple's wording for a quarantined download. Clear the flag:
 >   ```bash
 >   xattr -dr com.apple.quarantine /Applications/LanChat.app
->   codesign --force --deep --sign - /Applications/LanChat.app
 >   ```
->   ("Damaged" is macOS's misleading wording for *unsigned*, not corrupt.)
+>   See [Installing without Gatekeeper warnings](#installing-without-gatekeeper-warnings-macos)
+>   to skip the prompt entirely.
 > - **Windows:** on the SmartScreen prompt choose **More info → Run anyway**.
 > - **Linux:** `chmod +x LanChat-*.AppImage && ./LanChat-*.AppImage`
 
@@ -66,6 +66,63 @@ Build installers yourself:
 npm run dist            # current OS
 npm run dist:linux      # e.g. Linux AppImage + deb
 ```
+
+---
+
+## Installing without Gatekeeper warnings (macOS)
+
+The warning you see on macOS is **not** caused by the app being unsigned on its own — it's
+the `com.apple.quarantine` flag, which is attached by the program that *downloads* the file
+(browsers, Mail, AirDrop). Command-line tools don't attach it. So if the app reaches the Mac
+by any route other than a browser, **it opens with no prompt at all.**
+
+Getting rid of the prompt for downloads-from-the-web permanently requires notarization,
+which needs a paid Apple Developer ID. The two routes below are free and need no certificate.
+
+### Route 1 — copy it over your tailnet (no prompt)
+
+Since your machines are already on Tailscale, copy the app straight to the other Mac instead
+of downloading it there:
+
+```bash
+# from a machine that already has the file
+scp LanChat-0.1.1-arm64.dmg you@other-mac:~/Downloads/
+```
+
+`scp`, `rsync`, `cp`, and USB drives do not set the quarantine flag, so the copied app just
+opens. Once one Mac is running LanChat you can also send the installer to everyone else
+**through LanChat itself** — same effect, no terminal needed.
+
+> Use `LanChat-0.1.1.dmg` (no `-arm64`) for Intel Macs.
+
+### Route 2 — build it on the target Mac (no prompt)
+
+Apps you compile locally are never quarantined:
+
+```bash
+git clone https://github.com/dlroqa/LanChat.git
+cd LanChat
+npm install
+npm run dist        # produces release/LanChat-*.dmg, already ad-hoc signed
+```
+
+### Route 3 — clear the flag after downloading
+
+If you did download through a browser, one command fixes it:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/LanChat.app
+```
+
+> **Not recommended:** disabling Gatekeeper system-wide (`spctl --master-disable`). It weakens
+> security for *every* app on the machine to solve a single-app problem.
+
+### A note on Homebrew
+
+Installing via a Homebrew tap is **not** a workaround: Homebrew has deprecated
+`--no-quarantine` and is [ending support for casks that fail Gatekeeper checks on
+September 1, 2026](https://github.com/Homebrew/brew/issues/20755). Distributing through
+Homebrew will require a signed and notarized app.
 
 ---
 
