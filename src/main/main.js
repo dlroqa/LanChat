@@ -17,6 +17,9 @@ const { createUpdater } = require('./updater');
 const { createLinkStats } = require('./linkStats');
 const { createAgentHub } = require('./agents');
 
+// Long enough that the update check never competes with first-run setup.
+const STARTUP_UPDATE_CHECK_DELAY = 4000;
+
 const isDev = process.env.LANCHAT_DEV === '1';
 
 // Allow running multiple instances on one machine for testing:
@@ -155,6 +158,19 @@ async function startServices() {
   // Agents are restored last: enabled ones reconnect, disabled ones appear in
   // the roster as offline. A failure here must not stop the app from starting.
   agentHub.startAll().catch((err) => console.error('[agents] startup failed:', err.message));
+
+  // Check GitHub for a newer release on every launch. Deferred a few seconds so
+  // it never competes with first-run setup or the initial peer scan, and fully
+  // best-effort: no network, no release, or a rate limit must never surface as
+  // an error on startup.
+  setTimeout(() => {
+    updater
+      .check()
+      .then((res) => {
+        if (res && res.status === 'available') bus.emit('update-available', res);
+      })
+      .catch((err) => console.warn('[updater] startup check skipped:', err.message));
+  }, STARTUP_UPDATE_CHECK_DELAY);
 
   services = { config, bus, hub, server, discovery, store, downloadsDir, linkStats, agentHub };
   return ipcApi;

@@ -6,6 +6,7 @@ import IncomingCall from './components/IncomingCall.jsx';
 import ProfileModal from './components/ProfileModal.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
 import AddPeerModal from './components/AddPeerModal.jsx';
+import UpdatePrompt from './components/UpdatePrompt.jsx';
 import { CallManager } from './lib/rtc.js';
 import { Ringer, playNotification } from './lib/sounds.js';
 import ConnectionPanel from './components/ConnectionPanel.jsx';
@@ -36,6 +37,7 @@ export default function App() {
   const [ptt, setPtt] = useState({ transmitting: false, connecting: false, talkers: [], inboundStreams: [] });
   const [agentStatus, setAgentStatus] = useState({}); // agentId -> {status, detail, streaming}
   const [approvals, setApprovals] = useState({}); // agentId -> pending approval request
+  const [update, setUpdate] = useState(null); // newer release found at startup
 
   const configRef = useRef(config);
   const selectedRef = useRef(selectedId);
@@ -264,6 +266,11 @@ export default function App() {
             [payload.agentId]: { ...s[payload.agentId], streaming: (s[payload.agentId]?.streaming || '') + payload.delta },
           }));
           break;
+        case 'update-available':
+          // Suppressed for a release the user explicitly skipped, and while
+          // first-run setup is still on screen.
+          if (payload.latest !== configRef.current.skippedUpdateVersion) setUpdate(payload);
+          break;
         case 'toast':
           toast(payload.text, payload.level);
           break;
@@ -485,6 +492,18 @@ export default function App() {
           soundUrl={soundUrl}
           onSave={saveSettings}
           onClose={() => setModal(null)}
+        />
+      )}
+      {update && !firstRun && (
+        <UpdatePrompt
+          info={update}
+          onClose={() => setUpdate(null)}
+          onSkip={async () => {
+            const version = update.latest;
+            setUpdate(null);
+            setConfig(await api.setConfig({ skippedUpdateVersion: version }));
+            toast(`You will not be reminded about ${version} again`);
+          }}
         />
       )}
       {modal === 'addpeer' && (

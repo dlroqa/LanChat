@@ -1690,3 +1690,20 @@ code.path {
   height: 38px;
   margin-bottom: 2px;
 }
+
+/* Release notes inside the update prompt. Selectable and scroll-capped so a
+   long changelog cannot push the action buttons off screen. */
+.update-notes {
+  margin: 0;
+  padding: 10px;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  user-select: text;
+}

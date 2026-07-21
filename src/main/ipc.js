@@ -26,6 +26,7 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   bus.on('update-progress', (p) => emit('update-progress', p));
   bus.on('link-stats', (s) => emit('link-stats', s));
   bus.on('update-log', (m) => emit('toast', { level: 'info', text: m }));
+  bus.on('update-available', (info) => emit('update-available', info));
   bus.on('agent-status', (s) => emit('agent-status', s));
   bus.on('agent-delta', (d) => emit('agent-delta', d));
   bus.on('agent-approval', (a) => emit('agent-approval', a));
@@ -136,6 +137,7 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       'pttEnabled',
       'pttKey',
       'pttCustomCode',
+      'skippedUpdateVersion',
       'pttAllowIncoming',
     ];
     for (const k of keys) {
@@ -390,6 +392,7 @@ function publicConfig(config) {
     pttKey,
     pttCustomCode,
     pttAllowIncoming,
+    skippedUpdateVersion,
   } = config.data;
   return {
     iceServers,
@@ -412,6 +415,7 @@ function publicConfig(config) {
     pttKey,
     pttCustomCode,
     pttAllowIncoming,
+    skippedUpdateVersion,
   };
 }
 
