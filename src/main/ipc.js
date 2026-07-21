@@ -12,7 +12,7 @@ const { LOCAL_ORIGIN: AGENT_LOCAL_ORIGIN } = require('./agents');
 //   - bus events -> webContents 'lanchat:event' : main -> renderer notifications
 // The renderer only ever sees the small, explicit surface exposed in preload.js.
 
-function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, updater, linkStats, agentHub, outbox, downloadsDir, getWindow, onUnread }) {
+function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, updater, linkStats, pip, agentHub, outbox, downloadsDir, getWindow, onUnread }) {
   function emit(type, payload) {
     const win = getWindow();
     if (win && !win.isDestroyed()) win.webContents.send('lanchat:event', { type, payload });
@@ -25,6 +25,7 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   bus.on('file-progress', (p) => emit('file-progress', p));
   bus.on('update-progress', (p) => emit('update-progress', p));
   bus.on('link-stats', (s) => emit('link-stats', s));
+  bus.on('pip', (on) => emit('pip', on));
   bus.on('update-log', (m) => emit('toast', { level: 'info', text: m }));
   bus.on('update-available', (info) => emit('update-available', info));
   bus.on('outbox-counts', (counts) => emit('outbox-counts', counts));
@@ -303,6 +304,21 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     const key = kind === 'ringtone' ? 'customRingtonePath' : 'customNotificationPath';
     config.set({ [key]: dest });
     return { path: dest, name: path.basename(src) };
+  });
+
+  // The renderer owns call state; main needs it to know when minimising should
+  // dock to picture-in-picture instead.
+  ipcMain.handle('lanchat:setCallActive', (_e, active) => {
+    if (pip) pip.setCallActive(active);
+    return true;
+  });
+  ipcMain.handle('lanchat:exitPip', () => {
+    if (pip) pip.exit();
+    return true;
+  });
+  ipcMain.handle('lanchat:togglePip', () => {
+    if (pip) pip.toggle();
+    return true;
   });
 
   ipcMain.handle('lanchat:linkStats', () => (linkStats ? linkStats.all() : []));

@@ -34,6 +34,7 @@ export default function App() {
   const [call, setCall] = useState({ status: 'idle' });
   const [linkStats, setLinkStats] = useState({}); // peerId -> stats
   const [callFullscreen, setCallFullscreen] = useState(false);
+  const [pipMode, setPipMode] = useState(false);
   const [ptt, setPtt] = useState({ transmitting: false, connecting: false, talkers: [], inboundStreams: [] });
   const [agentStatus, setAgentStatus] = useState({}); // agentId -> {status, detail, streaming}
   const [approvals, setApprovals] = useState({}); // agentId -> pending approval request
@@ -168,6 +169,9 @@ export default function App() {
           break;
         case 'tailnet-status':
           setTailnetStatus(payload);
+          break;
+        case 'pip':
+          setPipMode(Boolean(payload));
           break;
         case 'link-stats':
           setLinkStats((m) => ({ ...m, [payload.peerId]: payload }));
@@ -396,7 +400,28 @@ export default function App() {
   }
 
   const inCall = ['outgoing', 'connecting', 'in-call'].includes(call.status);
+
+  // Main needs to know a video call is live to intercept minimise.
+  useEffect(() => {
+    api.setCallActive(inCall && Boolean(call.withVideo));
+  }, [inCall, call.withVideo]);
   const incoming = call.status === 'incoming';
+
+  // Docked picture-in-picture: only the video, nothing else.
+  if (pipMode && inCall) {
+    return (
+      <CallOverlay
+        call={call}
+        pip
+        onExitPip={() => api.exitPip()}
+        onHangup={() => {
+          callRef.current.hangup();
+          api.exitPip();
+        }}
+        onAudioStats={() => callRef.current.getAudioStats()}
+      />
+    );
+  }
 
   return (
     <div

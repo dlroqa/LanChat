@@ -25,6 +25,7 @@ A simple, peer-to-peer **LAN & Tailscale chat** app — text, voice, video, and 
 | 📻 **Push to talk** | Hold ⌘ (Ctrl on Windows/Linux) to transmit instantly — walkie-talkie style, no ringing. |
 | 🎚️ **Source selection** | Choose your microphone and camera — in Settings, or switch live mid-call. |
 | 📺 **Docked call panel** | Video plays portrait in the right panel; one button expands it full screen. |
+| 🪟 **Picture-in-picture** | Minimise during a video call and it shrinks to a floating tile in the top-right corner, always on top. |
 | 📶 **Live connection graphs** | When not in a call, the panel charts real round-trip latency and link quality. |
 | 🔊 **Sound choices** | 6 ringtones + 8 message sounds, each with volume control and a custom-file option. |
 | 📎 **File sharing** | Send any file, photo, or video — images & clips preview inline. Drag-and-drop supported. |

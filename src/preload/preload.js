@@ -39,6 +39,10 @@ contextBridge.exposeInMainWorld('lanchat', {
   pickSound: (kind) => invoke('lanchat:pickSound', { kind }),
   linkStats: () => invoke('lanchat:linkStats'),
 
+  setCallActive: (active) => invoke('lanchat:setCallActive', active),
+  exitPip: () => invoke('lanchat:exitPip'),
+  togglePip: () => invoke('lanchat:togglePip'),
+
   appVersion: () => invoke('lanchat:appVersion'),
   checkForUpdates: () => invoke('lanchat:checkForUpdates'),
   downloadUpdate: () => invoke('lanchat:downloadUpdate'),

@@ -16,6 +16,8 @@ export default function CallOverlay({
   onAudioStats,
   fullscreen = true,
   onToggleFullscreen,
+  pip = false,
+  onExitPip,
 }) {
   const localRef = useRef(null);
   const remoteRef = useRef(null);
@@ -79,7 +81,7 @@ export default function CallOverlay({
   const showRemoteVideo = call.withVideo && hasRemoteVideo;
 
   return (
-    <div className={fullscreen ? 'call' : 'call docked'}>
+    <div className={pip ? 'call pip' : fullscreen ? 'call' : 'call docked'}>
       <div className="call-stage">
         {/* One always-mounted remote element. Swapping between two <video> tags
             reassigned the ref without re-running the attach effect, so the remote
@@ -112,7 +114,18 @@ export default function CallOverlay({
         )}
       </div>
 
-      <AudioDiagnostics
+      {pip && (
+        <div className="pip-controls">
+          <button className="pip-btn" onClick={onExitPip} title="Back to LanChat">
+            <Minimize size={16} />
+          </button>
+          <button className="pip-btn hang" onClick={onHangup} title="Hang up">
+            <PhoneOff size={16} />
+          </button>
+        </div>
+      )}
+
+      {!pip && <AudioDiagnostics
         levels={levels}
         stats={audioStats}
         muted={call.muted}
@@ -122,9 +135,9 @@ export default function CallOverlay({
           setPlayError(null);
           attachStream(remoteAudioRef.current, call.remoteStream, (err) => setPlayError(err.message));
         }}
-      />
+      />}
 
-      {showDevices && (
+      {!pip && showDevices && (
         <div className="device-panel" role="dialog" aria-label="Audio and video sources">
           <div className="device-panel-title">Sources</div>
           <DevicePicker
@@ -137,7 +150,7 @@ export default function CallOverlay({
         </div>
       )}
 
-      <div className="call-bar">
+      {!pip && <div className="call-bar">
         <button
           className={`call-btn ${showDevices ? 'active' : ''}`}
           onClick={() => setShowDevices((v) => !v)}
@@ -170,7 +183,7 @@ export default function CallOverlay({
         <button className="call-btn hang" onClick={onHangup} title="Hang up">
           <PhoneOff size={24} />
         </button>
-      </div>
+      </div>}
     </div>
   );
 }

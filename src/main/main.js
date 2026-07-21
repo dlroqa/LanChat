@@ -15,6 +15,7 @@ const { createIpc } = require('./ipc');
 const { createTray } = require('./tray');
 const { createUpdater } = require('./updater');
 const { createLinkStats } = require('./linkStats');
+const { createPip } = require('./pip');
 const { createAgentHub } = require('./agents');
 const { Outbox } = require('./outbox');
 
@@ -32,6 +33,7 @@ app.setName('LanChat');
 
 let mainWindow = null;
 let tray = null;
+let pip = null;
 let services = null;
 
 function getWindow() {
@@ -67,6 +69,8 @@ function createWindow() {
       mainWindow.hide();
     }
   });
+
+  if (pip) pip.attach(mainWindow);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -129,6 +133,7 @@ async function startServices() {
   const outbox = new Outbox(app.getPath('userData'), { hub, bus, store });
   const updater = createUpdater({ bus });
   const linkStats = createLinkStats({ hub, bus });
+  pip = createPip({ getWindow, onChange: (on) => bus.emit('pip', on) });
   const agentHub = createAgentHub({
     userDataDir: app.getPath('userData'),
     hub,
@@ -147,6 +152,7 @@ async function startServices() {
     discovery,
     updater,
     linkStats,
+    pip,
     agentHub,
     outbox,
     downloadsDir,

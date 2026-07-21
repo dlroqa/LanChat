@@ -1778,3 +1778,76 @@ code.path {
   align-items: center;
   justify-content: center;
 }
+
+/* ---------------- Picture-in-picture (minimised video call) ----------------
+   The window itself is shrunk and pinned top-right by the main process; this
+   just fills it with video and shows controls on hover. */
+.call.pip {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  -webkit-app-region: drag; /* the tile can be dragged anywhere */
+}
+.call.pip .call-stage {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+  max-height: none;
+  border-radius: 0;
+}
+.call.pip .call-remote {
+  object-fit: cover;
+}
+.call.pip .call-local,
+.call.pip .call-status .t {
+  display: none;
+}
+.call.pip .call-status {
+  top: 6px;
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.call.pip:hover .call-status {
+  opacity: 1;
+}
+.call.pip .call-audio-only {
+  transform: scale(0.55);
+}
+.pip-controls {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  -webkit-app-region: no-drag; /* buttons must stay clickable */
+}
+.call.pip:hover .pip-controls {
+  opacity: 1;
+}
+.pip-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: rgba(30, 34, 45, 0.85);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(6px);
+  transition: background 0.12s ease;
+}
+.pip-btn:hover {
+  background: var(--surface-hover);
+}
+.pip-btn.hang {
+  background: var(--danger);
+}
+.pip-btn.hang:hover {
+  background: var(--danger-hover);
+}
