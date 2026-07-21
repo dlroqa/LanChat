@@ -28,6 +28,7 @@ A simple, peer-to-peer **LAN & Tailscale chat** app — text, voice, video, and 
 | 🔔 **Status menu** | Lives in the macOS menu bar, Windows tray, and Ubuntu status area — who's online, unread badge, quick jump into a chat. |
 | 🔒 **Addresses hidden** | IP addresses are hidden by default; peers are identified by name. |
 | 🤝 **Shared tailnets** | Devices shared in from another tailnet are discovered and marked. |
+| ⬆️ **Self-updating** | **Settings → Updates → Check for Updates** pulls the latest GitHub release and installs it. |
 
 ---
 
@@ -72,6 +73,25 @@ npm run dist:linux      # e.g. Linux AppImage + deb
 ```
 
 ---
+
+## Updating
+
+Open **Settings → Updates → Check for Updates**. LanChat queries this repo's
+[latest release](https://github.com/dlroqa/LanChat/releases/latest), and if a newer version
+exists it downloads the right file for your machine and installs it:
+
+| Platform | What happens |
+|---|---|
+| **macOS** | Downloads the `.zip`, re-signs it ad-hoc, replaces the app in place, and relaunches. |
+| **Windows** | Runs the NSIS installer, which upgrades in place and relaunches. |
+| **Linux (AppImage)** | Replaces the running AppImage and relaunches. |
+| **Linux (.deb)** | Downloads the package and opens it — installing a `.deb` needs root, so your package manager finishes the job. |
+
+> **Why not auto-update in the background?** Electron's built-in updater (Squirrel) refuses to
+> apply updates unless the app has a paid **Apple Developer ID** signature. LanChat is ad-hoc
+> signed, so it uses a self-contained updater instead: HTTPS-only downloads from this repo's
+> releases, with the file size verified against what GitHub reports before anything is run.
+> Updates are always started by you — nothing is installed silently.
 
 ## Installing without Gatekeeper warnings (macOS)
 

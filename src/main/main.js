@@ -13,6 +13,7 @@ const { createFileSender } = require('./fileTransfer');
 const { MessageStore } = require('./store');
 const { createIpc } = require('./ipc');
 const { createTray } = require('./tray');
+const { createUpdater } = require('./updater');
 
 const isDev = process.env.LANCHAT_DEV === '1';
 
@@ -118,6 +119,8 @@ async function startServices() {
   const discovery = createDiscovery({ config, getIdentity, hub, bus });
   const fileSender = createFileSender({ hub, getIdentity, bus });
 
+  const updater = createUpdater({ bus });
+
   const ipcApi = createIpc({
     config,
     getIdentity,
@@ -126,6 +129,7 @@ async function startServices() {
     store,
     fileSender,
     discovery,
+    updater,
     getWindow,
     // `tray` is resolved lazily: the tray is created after services start.
     onUnread: (count) => tray && tray.setUnread(count),

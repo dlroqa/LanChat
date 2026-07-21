@@ -8,7 +8,7 @@ const { ipcMain, dialog, shell } = require('electron');
 //   - bus events -> webContents 'lanchat:event' : main -> renderer notifications
 // The renderer only ever sees the small, explicit surface exposed in preload.js.
 
-function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, getWindow, onUnread }) {
+function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, updater, getWindow, onUnread }) {
   function emit(type, payload) {
     const win = getWindow();
     if (win && !win.isDestroyed()) win.webContents.send('lanchat:event', { type, payload });
@@ -18,6 +18,8 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   bus.on('presence', (list) => emit('presence', list));
   bus.on('tailnet-peers', (list) => emit('tailnet-peers', list));
   bus.on('file-progress', (p) => emit('file-progress', p));
+  bus.on('update-progress', (p) => emit('update-progress', p));
+  bus.on('update-log', (m) => emit('toast', { level: 'info', text: m }));
 
   bus.on('file-received', (info) => {
     const message = {
@@ -150,6 +152,12 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     discovery.refresh();
     return [...list];
   });
+
+  // ---- updates ----
+  ipcMain.handle('lanchat:checkForUpdates', () => updater.check());
+  ipcMain.handle('lanchat:downloadUpdate', () => updater.download());
+  ipcMain.handle('lanchat:installUpdate', () => updater.install());
+  ipcMain.handle('lanchat:appVersion', () => require('electron').app.getVersion());
 
   // Renderer owns unread state; mirror it onto the status-menu item / badge.
   ipcMain.handle('lanchat:setUnread', (_e, count) => {

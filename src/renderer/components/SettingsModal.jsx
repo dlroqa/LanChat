@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import DevicePicker from './DevicePicker.jsx';
+import UpdateSection from './UpdateSection.jsx';
 
 const DEFAULT_STUN = 'stun:stun.l.google.com:19302';
 
@@ -55,6 +56,9 @@ export default function SettingsModal({ config, self, onSave, onClose }) {
           on={showAddresses}
           set={setShowAddresses}
         />
+
+        <div className="section-head">Updates</div>
+        <UpdateSection />
 
         <div className="field" style={{ marginTop: 18 }}>
           <label>This device</label>

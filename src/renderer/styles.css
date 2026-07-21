@@ -223,6 +223,40 @@ input:focus-visible {
 .peer.offline .name {
   opacity: 0.55;
 }
+/* update checker */
+.update-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.update-status {
+  font-size: 12px;
+  color: var(--fg-faint);
+  margin-top: 2px;
+  max-width: 240px;
+}
+.release-notes {
+  margin-top: 12px;
+  font-size: 12.5px;
+}
+.release-notes summary {
+  cursor: pointer;
+  color: var(--fg-muted);
+}
+.release-notes pre {
+  white-space: pre-wrap;
+  background: var(--bg-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  max-height: 180px;
+  overflow-y: auto;
+  margin: 8px 0 0;
+  user-select: text;
+  font-size: 12px;
+}
+
 /* small inline label, e.g. a peer shared in from another tailnet */
 .tag {
   display: inline-block;

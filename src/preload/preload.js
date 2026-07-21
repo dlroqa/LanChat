@@ -20,6 +20,11 @@ contextBridge.exposeInMainWorld('lanchat', {
   sendFilePaths: (peerId, paths) => invoke('lanchat:sendFilePaths', { peerId, paths }),
 
   setUnread: (count) => invoke('lanchat:setUnread', count),
+
+  appVersion: () => invoke('lanchat:appVersion'),
+  checkForUpdates: () => invoke('lanchat:checkForUpdates'),
+  downloadUpdate: () => invoke('lanchat:downloadUpdate'),
+  installUpdate: () => invoke('lanchat:installUpdate'),
   addManualPeer: (ip, port) => invoke('lanchat:addManualPeer', { ip, port }),
   refresh: () => invoke('lanchat:refresh'),
   revealFile: (filePath) => invoke('lanchat:revealFile', filePath),
