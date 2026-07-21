@@ -7,7 +7,8 @@ import ProfileModal from './components/ProfileModal.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
 import AddPeerModal from './components/AddPeerModal.jsx';
 import { CallManager } from './lib/rtc.js';
-import { Ringer } from './lib/ringtone.js';
+import { Ringer, playNotification } from './lib/sounds.js';
+import ConnectionPanel from './components/ConnectionPanel.jsx';
 
 const api = window.lanchat;
 
@@ -27,6 +28,8 @@ export default function App() {
   const [firstRun, setFirstRun] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [call, setCall] = useState({ status: 'idle' });
+  const [linkStats, setLinkStats] = useState({}); // peerId -> stats
+  const [callFullscreen, setCallFullscreen] = useState(false);
 
   const configRef = useRef(config);
   const selectedRef = useRef(selectedId);
@@ -60,9 +63,18 @@ export default function App() {
   // Ring while a call is pending; stop the moment it connects or ends.
   useEffect(() => {
     const ringer = ringerRef.current;
-    if (call.status === 'incoming') ringer.start('incoming');
-    else if (call.status === 'outgoing') ringer.start('outgoing');
+    const opts = {
+      ringtone: configRef.current.ringtone || 'classic',
+      volume: configRef.current.ringtoneVolume ?? 0.8,
+      customUrl: soundUrl(configRef.current.customRingtonePath),
+    };
+    if (call.status === 'incoming') ringer.start('incoming', opts);
+    else if (call.status === 'outgoing') ringer.start('outgoing', opts);
     else ringer.stop();
+  }, [call.status]);
+
+  useEffect(() => {
+    if (call.status === 'idle') setCallFullscreen(false);
   }, [call.status]);
 
   // Never leave a tone playing if the window closes mid-ring.
@@ -111,6 +123,9 @@ export default function App() {
         case 'tailnet-peers':
           setTailnet(payload);
           break;
+        case 'link-stats':
+          setLinkStats((m) => ({ ...m, [payload.peerId]: payload }));
+          break;
         case 'identity':
           setSelf(payload);
           break;
@@ -123,8 +138,17 @@ export default function App() {
           break;
         case 'chat':
           appendMessage(payload.peerId, payload);
-          if (payload.direction === 'in' && payload.peerId !== selectedRef.current) {
-            setUnread((u) => ({ ...u, [payload.peerId]: (u[payload.peerId] || 0) + 1 }));
+          if (payload.direction === 'in') {
+            const cfg = configRef.current;
+            if (!cfg.muteNotifications) {
+              playNotification(cfg.notificationSound || 'ping', {
+                volume: cfg.notificationVolume ?? 0.7,
+                customUrl: soundUrl(cfg.customNotificationPath),
+              });
+            }
+            if (payload.peerId !== selectedRef.current) {
+              setUnread((u) => ({ ...u, [payload.peerId]: (u[payload.peerId] || 0) + 1 }));
+            }
           }
           break;
         case 'typing':
@@ -191,6 +215,11 @@ export default function App() {
     const base = live || knownPeers.current[selectedId] || { id: selectedId, name: 'Unknown' };
     return { ...base, online: live ? live.online : false };
   }, [selectedId, peers]);
+
+  const soundUrl = (path) =>
+    path && selfRef.current
+      ? `http://localhost:${selfRef.current.servicePort}/lanchat/preview?path=${encodeURIComponent(path)}`
+      : null;
 
   const previewUrl = (path) =>
     path && self ? `http://localhost:${self.servicePort}/lanchat/preview?path=${encodeURIComponent(path)}` : null;
@@ -305,11 +334,35 @@ export default function App() {
         {dragOver && <div className="drop-overlay">Drop to send</div>}
       </div>
 
+      <aside className="side-panel">
+        {inCall ? (
+          <CallOverlay
+            call={call}
+            devices={{ audioInputId: config.audioInputId, videoInputId: config.videoInputId }}
+            fullscreen={false}
+            onToggleFullscreen={() => setCallFullscreen(true)}
+            onHangup={() => callRef.current.hangup()}
+            onToggleMute={() => callRef.current.toggleMute()}
+            onToggleCamera={() => callRef.current.toggleCamera()}
+            onSwitchDevice={switchDevice}
+            onAudioStats={() => callRef.current.getAudioStats()}
+          />
+        ) : (
+          <ConnectionPanel peer={selectedPeer} stats={linkStats[selectedId]} />
+        )}
+      </aside>
+
       {modal === 'profile' && (
         <ProfileModal self={self} firstRun={firstRun} onSave={saveProfile} onClose={() => setModal(null)} />
       )}
       {modal === 'settings' && (
-        <SettingsModal config={config} self={self} onSave={saveSettings} onClose={() => setModal(null)} />
+        <SettingsModal
+          config={config}
+          self={self}
+          soundUrl={soundUrl}
+          onSave={saveSettings}
+          onClose={() => setModal(null)}
+        />
       )}
       {modal === 'addpeer' && (
         <AddPeerModal defaultPort={self?.servicePort} onAdd={addPeer} onClose={() => setModal(null)} />
@@ -322,10 +375,12 @@ export default function App() {
           onDecline={() => callRef.current.decline()}
         />
       )}
-      {inCall && (
+      {inCall && callFullscreen && (
         <CallOverlay
           call={call}
           devices={{ audioInputId: config.audioInputId, videoInputId: config.videoInputId }}
+          fullscreen
+          onToggleFullscreen={() => setCallFullscreen(false)}
           onHangup={() => callRef.current.hangup()}
           onToggleMute={() => callRef.current.toggleMute()}
           onToggleCamera={() => callRef.current.toggleCamera()}

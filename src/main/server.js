@@ -24,6 +24,12 @@ function createServer({ config, getIdentity, hub, bus, downloadsDir }) {
   const previewable = new Set();
   bus.on('file-received', (info) => info?.path && previewable.add(info.path));
   bus.on('file-sent', (p) => p && previewable.add(p));
+  bus.on('allow-preview', (p) => p && previewable.add(p));
+  // Custom notification sounds persist across restarts, so re-allow them.
+  for (const key of ['customRingtonePath', 'customNotificationPath']) {
+    const p = config.get(key);
+    if (p) previewable.add(p);
+  }
 
   function handleWhoami(res) {
     res.writeHead(200, { 'Content-Type': 'application/json' });

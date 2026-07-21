@@ -14,6 +14,7 @@ const { MessageStore } = require('./store');
 const { createIpc } = require('./ipc');
 const { createTray } = require('./tray');
 const { createUpdater } = require('./updater');
+const { createLinkStats } = require('./linkStats');
 
 const isDev = process.env.LANCHAT_DEV === '1';
 
@@ -120,6 +121,7 @@ async function startServices() {
   const fileSender = createFileSender({ hub, getIdentity, bus });
 
   const updater = createUpdater({ bus });
+  const linkStats = createLinkStats({ hub, bus });
 
   const ipcApi = createIpc({
     config,
@@ -130,6 +132,7 @@ async function startServices() {
     fileSender,
     discovery,
     updater,
+    linkStats,
     getWindow,
     // `tray` is resolved lazily: the tray is created after services start.
     onUnread: (count) => tray && tray.setUnread(count),
@@ -137,8 +140,9 @@ async function startServices() {
 
   await server.start();
   discovery.start();
+  linkStats.start();
 
-  services = { config, bus, hub, server, discovery, store, downloadsDir };
+  services = { config, bus, hub, server, discovery, store, downloadsDir, linkStats };
   return ipcApi;
 }
 
@@ -170,6 +174,7 @@ if (!gotLock && !process.env.LANCHAT_USERDATA) {
     if (tray) tray.destroy();
     if (services) {
       services.discovery.stop();
+      services.linkStats.stop();
       services.server.stop();
     }
   });

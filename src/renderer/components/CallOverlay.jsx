@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import Avatar from './Avatar.jsx';
 import DevicePicker from './DevicePicker.jsx';
 import { createLevelMeter } from '../lib/audioMeter.js';
-import { Mic, MicOff, Video, VideoOff, PhoneOff, Settings } from '../lib/icons.jsx';
+import { Mic, MicOff, Video, VideoOff, PhoneOff, Settings, Maximize, Minimize } from '../lib/icons.jsx';
 
 // Full-screen active-call surface: remote video (or audio-only card), local PiP,
 // and the control bar. Driven entirely by CallManager state passed as `call`.
@@ -14,6 +14,8 @@ export default function CallOverlay({
   onToggleCamera,
   onSwitchDevice,
   onAudioStats,
+  fullscreen = true,
+  onToggleFullscreen,
 }) {
   const localRef = useRef(null);
   const remoteRef = useRef(null);
@@ -77,7 +79,7 @@ export default function CallOverlay({
   const showRemoteVideo = call.withVideo && hasRemoteVideo;
 
   return (
-    <div className="call">
+    <div className={fullscreen ? 'call' : 'call docked'}>
       <div className="call-stage">
         {/* One always-mounted remote element. Swapping between two <video> tags
             reassigned the ref without re-running the attach effect, so the remote
@@ -154,6 +156,15 @@ export default function CallOverlay({
             title={call.cameraOff ? 'Turn camera on' : 'Turn camera off'}
           >
             {call.cameraOff ? <VideoOff size={24} /> : <Video size={24} />}
+          </button>
+        )}
+        {onToggleFullscreen && (
+          <button
+            className="call-btn"
+            onClick={onToggleFullscreen}
+            title={fullscreen ? 'Exit full screen' : 'Full screen'}
+          >
+            {fullscreen ? <Minimize size={22} /> : <Maximize size={22} />}
           </button>
         )}
         <button className="call-btn hang" onClick={onHangup} title="Hang up">

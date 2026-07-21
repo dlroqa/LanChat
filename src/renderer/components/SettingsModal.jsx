@@ -1,15 +1,25 @@
 import React, { useState } from 'react';
 import DevicePicker from './DevicePicker.jsx';
 import UpdateSection from './UpdateSection.jsx';
+import SoundSettings from './SoundSettings.jsx';
 
 const DEFAULT_STUN = 'stun:stun.l.google.com:19302';
 
 // Settings: audio/video sources, discovery toggles, optional STUN, network info.
-export default function SettingsModal({ config, self, onSave, onClose }) {
+export default function SettingsModal({ config, self, soundUrl, onSave, onClose }) {
   const [enableTailscale, setTs] = useState(config.enableTailscale);
   const [enableLan, setLan] = useState(config.enableLan);
   const [useStun, setUseStun] = useState((config.iceServers || []).length > 0);
   const [showAddresses, setShowAddresses] = useState(Boolean(config.showAddresses));
+  const [sounds, setSounds] = useState({
+    ringtone: config.ringtone,
+    ringtoneVolume: config.ringtoneVolume,
+    customRingtonePath: config.customRingtonePath,
+    notificationSound: config.notificationSound,
+    notificationVolume: config.notificationVolume,
+    customNotificationPath: config.customNotificationPath,
+    muteNotifications: config.muteNotifications,
+  });
   const [devices, setDevices] = useState({
     audioInputId: config.audioInputId || null,
     videoInputId: config.videoInputId || null,
@@ -22,6 +32,7 @@ export default function SettingsModal({ config, self, onSave, onClose }) {
       iceServers: useStun ? [{ urls: DEFAULT_STUN }] : [],
       showAddresses,
       ...devices,
+      ...sounds,
     });
     onClose();
   }
@@ -37,6 +48,13 @@ export default function SettingsModal({ config, self, onSave, onClose }) {
           audioInputId={devices.audioInputId}
           videoInputId={devices.videoInputId}
           onChange={(key, value) => setDevices((d) => ({ ...d, [key]: value }))}
+        />
+
+        <div className="section-head">Sounds</div>
+        <SoundSettings
+          value={sounds}
+          soundUrl={soundUrl}
+          onChange={(patch) => setSounds((v) => ({ ...v, ...patch }))}
         />
 
         <div className="section-head">Discovery</div>

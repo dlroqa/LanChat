@@ -23,6 +23,9 @@ A simple, peer-to-peer **LAN & Tailscale chat** app — text, voice, video, and 
 | 📞 **Voice calls** | Crisp P2P audio over LAN/tailnet, with ring tone and ringback. |
 | 🎥 **Video calls** | Camera calls with mute / camera toggle and picture-in-picture. |
 | 🎚️ **Source selection** | Choose your microphone and camera — in Settings, or switch live mid-call. |
+| 📺 **Docked call panel** | Video plays portrait in the right panel; one button expands it full screen. |
+| 📶 **Live connection graphs** | When not in a call, the panel charts real round-trip latency and link quality. |
+| 🔊 **Sound choices** | 6 ringtones + 8 message sounds, each with volume control and a custom-file option. |
 | 📎 **File sharing** | Send any file, photo, or video — images & clips preview inline. Drag-and-drop supported. |
 | 🪪 **Simple identity** | Pick a display name + color. No sign-up. |
 | 🔔 **Status menu** | Lives in the macOS menu bar, Windows tray, and Ubuntu status area — who's online, unread badge, quick jump into a chat. |

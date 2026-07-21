@@ -93,26 +93,43 @@ function bubble(x, y) {
   return true;
 }
 
+// Unread badge: a filled dot in the top-right corner.
+function badge(x, y) {
+  return circle(x, y, 0.79, 0.21, 0.2);
+}
+
 // Renders with 4x supersampling for clean edges at tray sizes.
-function render(size, { rgb, background }) {
+function render(size, { rgb, background, dot }) {
   const SS = 4;
   const out = Buffer.alloc(size * size * 4);
   for (let py = 0; py < size; py += 1) {
     for (let px = 0; px < size; px += 1) {
       let hits = 0;
       let bgHits = 0;
+      let dotHits = 0;
       for (let sy = 0; sy < SS; sy += 1) {
         for (let sx = 0; sx < SS; sx += 1) {
           const x = (px + (sx + 0.5) / SS) / size;
           const y = (py + (sy + 0.5) / SS) / size;
-          if (bubble(x, y)) hits += 1;
+          if (dot && badge(x, y)) dotHits += 1;
+          else if (bubble(x, y)) hits += 1;
           if (background && roundRect(x, y, 0.02, 0.02, 0.98, 0.98, 0.22)) bgHits += 1;
         }
       }
       const total = SS * SS;
       const fg = hits / total;
       const bg = bgHits / total;
+      const dt = dotHits / total;
       const i = (py * size + px) * 4;
+
+      if (dot && dt > 0) {
+        // Unread dot drawn in online-green, over whatever is beneath it.
+        out[i] = 34;
+        out[i + 1] = 197;
+        out[i + 2] = 94;
+        out[i + 3] = Math.round(dt * 255);
+        continue;
+      }
 
       if (background) {
         // Coloured tile behind a white bubble (application icon).
@@ -158,5 +175,8 @@ write(path.join(ASSETS, 'tray.png'), 16, { rgb: BRAND });
 write(path.join(ASSETS, 'tray@2x.png'), 32, { rgb: BRAND });
 write(path.join(ASSETS, 'tray@3x.png'), 48, { rgb: BRAND });
 // Application icon (also removes electron-builder's "default icon" warning).
+// Unread variants: coloured (not template) so the green dot is never tinted away.
+write(path.join(ASSETS, 'trayUnread.png'), 16, { rgb: BRAND, dot: true });
+write(path.join(ASSETS, 'trayUnread@2x.png'), 32, { rgb: BRAND, dot: true });
 write(path.join(BUILD, 'icon.png'), 512, { background: BRAND });
 console.log('Done.');

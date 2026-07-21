@@ -1,6 +1,8 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
 const { ipcMain, dialog, shell } = require('electron');
 
 // Bridges the main-process services to the renderer:
@@ -8,7 +10,7 @@ const { ipcMain, dialog, shell } = require('electron');
 //   - bus events -> webContents 'lanchat:event' : main -> renderer notifications
 // The renderer only ever sees the small, explicit surface exposed in preload.js.
 
-function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, updater, getWindow, onUnread }) {
+function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, updater, linkStats, getWindow, onUnread }) {
   function emit(type, payload) {
     const win = getWindow();
     if (win && !win.isDestroyed()) win.webContents.send('lanchat:event', { type, payload });
@@ -19,6 +21,7 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   bus.on('tailnet-peers', (list) => emit('tailnet-peers', list));
   bus.on('file-progress', (p) => emit('file-progress', p));
   bus.on('update-progress', (p) => emit('update-progress', p));
+  bus.on('link-stats', (s) => emit('link-stats', s));
   bus.on('update-log', (m) => emit('toast', { level: 'info', text: m }));
 
   bus.on('file-received', (info) => {
@@ -42,6 +45,8 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   bus.on('peer-message', (msg) => {
     const from = msg.from;
     if (!from) return;
+    // Link-quality control frames are consumed here, never shown as chat.
+    if (linkStats && linkStats.handleMessage(msg)) return;
     switch (msg.type) {
       case 'chat': {
         const message = {
@@ -98,6 +103,13 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       'audioInputId',
       'videoInputId',
       'showAddresses',
+      'ringtone',
+      'ringtoneVolume',
+      'customRingtonePath',
+      'notificationSound',
+      'notificationVolume',
+      'customNotificationPath',
+      'muteNotifications',
     ];
     for (const k of keys) {
       if (k in patch) allowed[k] = patch[k];
@@ -152,6 +164,29 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     discovery.refresh();
     return [...list];
   });
+
+  // Copies a chosen audio file into userData so it survives the original moving,
+  // and whitelists it for the local preview endpoint the renderer plays it from.
+  ipcMain.handle('lanchat:pickSound', async (_e, { kind }) => {
+    const win = getWindow();
+    const result = await dialog.showOpenDialog(win, {
+      title: 'Choose a sound',
+      filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'] }],
+      properties: ['openFile'],
+    });
+    if (result.canceled || !result.filePaths[0]) return null;
+    const src = result.filePaths[0];
+    const soundsDir = path.join(config.dir, 'sounds');
+    fs.mkdirSync(soundsDir, { recursive: true });
+    const dest = path.join(soundsDir, `${kind}${path.extname(src)}`);
+    fs.copyFileSync(src, dest);
+    bus.emit('allow-preview', dest);
+    const key = kind === 'ringtone' ? 'customRingtonePath' : 'customNotificationPath';
+    config.set({ [key]: dest });
+    return { path: dest, name: path.basename(src) };
+  });
+
+  ipcMain.handle('lanchat:linkStats', () => (linkStats ? linkStats.all() : []));
 
   // ---- updates ----
   ipcMain.handle('lanchat:checkForUpdates', () => updater.check());
@@ -219,6 +254,13 @@ function publicConfig(config) {
     audioInputId,
     videoInputId,
     showAddresses,
+    ringtone,
+    ringtoneVolume,
+    customRingtonePath,
+    notificationSound,
+    notificationVolume,
+    customNotificationPath,
+    muteNotifications,
   } = config.data;
   return {
     iceServers,
@@ -230,6 +272,13 @@ function publicConfig(config) {
     audioInputId,
     videoInputId,
     showAddresses,
+    ringtone,
+    ringtoneVolume,
+    customRingtonePath,
+    notificationSound,
+    notificationVolume,
+    customNotificationPath,
+    muteNotifications,
   };
 }
 

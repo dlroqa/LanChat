@@ -15,6 +15,13 @@ const DEFAULTS = Object.freeze({
   discoveryPort: 47101, // UDP LAN broadcast port
   iceServers: [], // e.g. [{ urls: 'stun:stun.l.google.com:19302' }]
   showAddresses: false, // hide peers' IP addresses in the UI by default
+  ringtone: 'classic', // see renderer lib/sounds.js
+  ringtoneVolume: 0.8,
+  customRingtonePath: null,
+  notificationSound: 'ping',
+  notificationVolume: 0.7,
+  customNotificationPath: null,
+  muteNotifications: false,
   audioInputId: null, // preferred microphone (null = system default)
   videoInputId: null, // preferred camera (null = system default)
   enableTailscale: true,

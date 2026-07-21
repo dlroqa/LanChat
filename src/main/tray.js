@@ -15,7 +15,15 @@ function iconPath(name) {
   return path.join(__dirname, 'assets', name);
 }
 
-function loadTrayImage() {
+function loadTrayImage(unread = false) {
+  if (unread) {
+    // Coloured (non-template) so the green dot survives macOS menu-bar tinting.
+    return nativeImage.createFromPath(iconPath(process.platform === 'linux' ? 'trayUnread@2x.png' : 'trayUnread.png'));
+  }
+  return loadBaseImage();
+}
+
+function loadBaseImage() {
   // macOS uses a template image so the system tints it for light/dark menu bars.
   if (process.platform === 'darwin') {
     const img = nativeImage.createFromPath(iconPath('trayTemplate.png'));
@@ -32,6 +40,7 @@ function loadTrayImage() {
 function createTray({ getWindow, showWindow, onSelectPeer, getPresence, onQuit }) {
   let tray = null;
   let unread = 0;
+  let blinkTimer = null;
 
   try {
     const image = loadTrayImage();
@@ -85,9 +94,35 @@ function createTray({ getWindow, showWindow, onSelectPeer, getPresence, onQuit }
     tray.setContextMenu(buildMenu());
   }
 
+  // Blinks between the plain and dotted icon so a new message is noticeable
+  // without being permanently distracting.
+  function startBlink() {
+    if (blinkTimer) return;
+    let on = false;
+    blinkTimer = setInterval(() => {
+      if (!tray) return;
+      on = !on;
+      try {
+        tray.setImage(loadTrayImage(on));
+      } catch {}
+    }, 700);
+  }
+
+  function stopBlink() {
+    if (blinkTimer) clearInterval(blinkTimer);
+    blinkTimer = null;
+    if (tray) {
+      try {
+        tray.setImage(loadTrayImage(false));
+      } catch {}
+    }
+  }
+
   function setUnread(count) {
     unread = Number(count) || 0;
     if (!tray) return;
+    if (unread > 0) startBlink();
+    else stopBlink();
     // macOS can show a count beside the menu bar icon.
     if (process.platform === 'darwin') tray.setTitle(unread > 0 ? ` ${unread}` : '');
     if (app.setBadgeCount) {
@@ -115,6 +150,7 @@ function createTray({ getWindow, showWindow, onSelectPeer, getPresence, onQuit }
     update,
     setUnread,
     destroy: () => {
+      stopBlink();
       if (tray) tray.destroy();
       tray = null;
     },
