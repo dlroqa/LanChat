@@ -79,10 +79,6 @@ function runProcess({ file, args, cwd, env, timeoutMs, onDelta, onChild }) {
       }
       resolve({ text: text.slice(-MAX_OUTPUT_CHARS), code });
     });
-
-    // Exposed so stop() can terminate an in-flight run.
-    resolve.child = child;
-    if (typeof onDelta === 'function' && onDelta.registerChild) onDelta.registerChild(child);
   });
 }
 
