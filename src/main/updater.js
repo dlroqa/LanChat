@@ -226,7 +226,11 @@ function createUpdater({ bus }) {
     if (!asset) {
       return { status: 'no-asset', current, latest, url: release.html_url };
     }
-    pending = { version: latest, asset, file: null };
+    // Keep an already-downloaded update for this version intact, so a periodic
+    // re-check can't reset it out from under a pending install.
+    if (!(pending && pending.version === latest && pending.file)) {
+      pending = { version: latest, asset, file: null };
+    }
     return {
       status: 'available',
       current,

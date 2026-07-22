@@ -1037,6 +1037,52 @@ input:focus-visible {
   border-color: var(--danger);
 }
 
+/* Subtle, non-blocking update notice pinned to the top-centre of the window. */
+.update-banner {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 90; /* above app content, below modal overlays (100) so dialogs cover it */
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 7px 8px 7px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  animation: dropin 0.22s ease;
+  max-width: min(92vw, 540px);
+}
+.update-banner-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--primary);
+  box-shadow: 0 0 0 4px var(--primary-soft);
+  flex-shrink: 0;
+}
+.update-banner-text {
+  font-size: 13px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.update-banner-text strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+.update-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.update-banner-btn {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
 @keyframes fade {
   from {
     opacity: 0;

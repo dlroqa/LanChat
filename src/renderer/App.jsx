@@ -7,6 +7,7 @@ import ProfileModal from './components/ProfileModal.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
 import AddPeerModal from './components/AddPeerModal.jsx';
 import UpdatePrompt from './components/UpdatePrompt.jsx';
+import UpdateBanner from './components/UpdateBanner.jsx';
 import { CallManager } from './lib/rtc.js';
 import { Ringer, playNotification, playCallEvent, playPttCue } from './lib/sounds.js';
 import ConnectionPanel from './components/ConnectionPanel.jsx';
@@ -43,10 +44,12 @@ export default function App() {
   const [group, setGroup] = useState({ status: 'idle', participants: [], count: 0 });
   const [agentStatus, setAgentStatus] = useState({}); // agentId -> {status, detail, streaming}
   const [approvals, setApprovals] = useState({}); // agentId -> pending approval request
-  const [update, setUpdate] = useState(null); // newer release found at startup
+  const [update, setUpdate] = useState(null); // full modal: download/install flow
+  const [updateBanner, setUpdateBanner] = useState(null); // subtle top-centre notice
   const [queued, setQueued] = useState({}); // peerId -> messages waiting to send
 
   const configRef = useRef(config);
+  const laterDismissedRef = useRef(null); // update version dismissed with "Later" this session
   const selectedRef = useRef(selectedId);
   const knownPeers = useRef({});
   const peersRef = useRef([]);
@@ -320,9 +323,16 @@ export default function App() {
           }));
           break;
         case 'update-available':
-          // Suppressed for a release the user explicitly skipped, and while
-          // first-run setup is still on screen.
-          if (payload.latest !== configRef.current.skippedUpdateVersion) setUpdate(payload);
+          // A subtle top-centre banner rather than a blocking modal, so it can
+          // appear at any time while the app is open without interrupting.
+          // Suppressed for a release the user explicitly skipped, or dismissed
+          // with "Later" this session; first-run setup hides it in the render.
+          if (
+            payload.latest !== configRef.current.skippedUpdateVersion &&
+            payload.latest !== laterDismissedRef.current
+          ) {
+            setUpdateBanner(payload);
+          }
           break;
         case 'toast':
           toast(payload.text, payload.level);
@@ -581,9 +591,23 @@ export default function App() {
           onClose={() => setModal(null)}
         />
       )}
+      {updateBanner && !firstRun && !update && (
+        <UpdateBanner
+          info={updateBanner}
+          onUpdateNow={() => {
+            setUpdate(updateBanner);
+            setUpdateBanner(null);
+          }}
+          onLater={() => {
+            laterDismissedRef.current = updateBanner.latest;
+            setUpdateBanner(null);
+          }}
+        />
+      )}
       {update && !firstRun && (
         <UpdatePrompt
           info={update}
+          autoStart
           onClose={() => setUpdate(null)}
           onSkip={async () => {
             const version = update.latest;

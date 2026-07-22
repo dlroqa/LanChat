@@ -11,12 +11,19 @@ const api = window.lanchat;
 // launch, "Skip this version" records the version so this particular release
 // never prompts again. An update prompt that cannot be silenced becomes a
 // prompt people learn to dismiss without reading.
-export default function UpdatePrompt({ info, onClose, onSkip }) {
+export default function UpdatePrompt({ info, onClose, onSkip, autoStart = false }) {
   const [phase, setPhase] = useState('available'); // available|downloading|ready|manual|error
   const [progress, setProgress] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => api.onEvent((evt) => evt.type === 'update-progress' && setProgress(evt.payload)), []);
+
+  // Opened via the "Update now" banner button: start downloading straight away
+  // so a single click begins the update, with progress shown here.
+  useEffect(() => {
+    if (autoStart) download();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function download() {
     setPhase('downloading');

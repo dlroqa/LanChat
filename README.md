@@ -35,7 +35,7 @@ A simple, peer-to-peer **LAN & Tailscale chat** app — text, voice, video, and 
 | 🔒 **Addresses hidden** | IP addresses are hidden by default; peers are identified by name. |
 | 🤝 **Shared tailnets** | Devices shared in from another tailnet are discovered and marked. |
 | ⬆️ **Self-updating** | **Settings → Updates → Check for Updates** pulls the latest GitHub release and installs it. |
-| 🔔 **Update reminder** | On launch, if a newer release exists, LanChat encourages you to update so features stay compatible with peers. |
+| 🔔 **Update notice** | A subtle banner slides in at the top of the window whenever a newer release is found — while you're using the app, not just at launch — with **Update now** or **Later**. |
 | 🪟 **Windows convenience** | Installer adds a desktop shortcut; an optional setting starts LanChat in the tray at Windows login. |
 
 ---
@@ -92,7 +92,10 @@ npm run dist:linux      # e.g. Linux AppImage + deb
 
 ## Updating
 
-Open **Settings → Updates → Check for Updates**. LanChat queries this repo's
+LanChat checks for a newer release on launch and periodically while it stays open. When one is
+found, a subtle banner slides in at the top-centre of the window: choose **Update now** to
+download and install it, or **Later** to dismiss it for this session. You can also check any
+time under **Settings → Updates → Check for Updates**. Either way LanChat queries this repo's
 [latest release](https://github.com/dlroqa/LanChat/releases/latest), and if a newer version
 exists it downloads the right file for your machine and installs it:
 

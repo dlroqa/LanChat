@@ -21,6 +21,9 @@ const { Outbox } = require('./outbox');
 
 // Long enough that the update check never competes with first-run setup.
 const STARTUP_UPDATE_CHECK_DELAY = 4000;
+// Re-check periodically so a session left open for hours still learns about a
+// release that shipped after launch.
+const PERIODIC_UPDATE_CHECK_INTERVAL = 6 * 60 * 60 * 1000;
 
 const isDev = process.env.LANCHAT_DEV === '1';
 
@@ -197,14 +200,18 @@ async function startServices() {
   // it never competes with first-run setup or the initial peer scan, and fully
   // best-effort: no network, no release, or a rate limit must never surface as
   // an error on startup.
-  setTimeout(() => {
+  const runUpdateCheck = () =>
     updater
       .check()
       .then((res) => {
         if (res && res.status === 'available') bus.emit('update-available', res);
       })
-      .catch((err) => console.warn('[updater] startup check skipped:', err.message));
-  }, STARTUP_UPDATE_CHECK_DELAY);
+      .catch((err) => console.warn('[updater] check skipped:', err.message));
+
+  setTimeout(runUpdateCheck, STARTUP_UPDATE_CHECK_DELAY);
+  // Keep watching while the app stays open; the renderer decides whether the
+  // notice actually surfaces (skipped/"Later" versions are suppressed there).
+  setInterval(runUpdateCheck, PERIODIC_UPDATE_CHECK_INTERVAL);
 
   services = { config, bus, hub, server, discovery, store, downloadsDir, linkStats, agentHub, outbox };
   return ipcApi;
