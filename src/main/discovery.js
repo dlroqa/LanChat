@@ -14,6 +14,9 @@ const { execFile } = require('node:child_process');
 const TAILSCALE_INTERVAL = 5000;
 const LAN_INTERVAL = 3000;
 const PROBE_TIMEOUT = 2500;
+// Below the poll interval, so a hung daemon call fails cleanly and the next
+// poll retries rather than stacking up.
+const TAILSCALE_STATUS_TIMEOUT = 4000;
 
 function probeWhoami(ip, port) {
   return new Promise((resolve) => {
@@ -115,22 +118,95 @@ function resetTailscaleBinary() {
   cachedBinary = undefined;
 }
 
-function tailscaleStatus() {
+// Pulls the JSON status object out of `tailscale status --json` output.
+//
+// Two things make the naive `JSON.parse(stdout)` fragile, and both show up as a
+// working tailnet reading "not responding":
+//   - A GUI/helper `tailscale` binary can print a log or warning line before the
+//     JSON, so the string is not clean JSON.
+//   - The CLI can print a complete status yet still exit non-zero (a health
+//     warning, certain backend states) — the caller must not discard good JSON
+//     just because the exit code was not zero.
+// So we trust a valid status object wherever we can find it, regardless of the
+// exit code, and only fall back to an error when there is genuinely no status.
+function extractStatusJson(stdout) {
+  if (!stdout) return null;
+  const text = String(stdout);
+  const looksLikeStatus = (o) =>
+    o && typeof o === 'object' && (o.Self || o.Peer || o.BackendState || o.Version);
+  try {
+    const obj = JSON.parse(text);
+    if (looksLikeStatus(obj)) return obj;
+  } catch {
+    // Not clean JSON — try to carve the object out of surrounding noise.
+  }
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try {
+      const obj = JSON.parse(text.slice(start, end + 1));
+      if (looksLikeStatus(obj)) return obj;
+    } catch {
+      // Still not parseable — treated as no status below.
+    }
+  }
+  return null;
+}
+
+// Every CLI worth trying, most-likely first, PATH last. The first binary that
+// merely *exists* is not always the one that answers `status --json` (a GUI
+// helper binary can exist yet not behave as the CLI), so we try each until one
+// actually returns a status, then remember the winner.
+function tailscaleCandidates() {
+  const list = [];
+  if (cachedBinary) list.push(cachedBinary);
+  for (const p of TAILSCALE_PATHS[process.platform] || []) if (!list.includes(p)) list.push(p);
+  if (!list.includes('tailscale')) list.push('tailscale'); // resolved via PATH
+  return list;
+}
+
+function runTailscaleStatus(bin) {
   return new Promise((resolve) => {
-    execFile(findTailscaleBinary(), ['status', '--json'], { maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
-      if (err) {
-        // ENOENT means we never found the CLI at all; anything else (not logged
-        // in, daemon down) is a real Tailscale state worth surfacing separately.
-        resolve({ __error: err.code === 'ENOENT' ? 'not-installed' : 'unavailable' });
-        return;
+    execFile(
+      bin,
+      ['status', '--json'],
+      { maxBuffer: 8 * 1024 * 1024, timeout: TAILSCALE_STATUS_TIMEOUT },
+      (err, stdout, stderr) => {
+        const status = extractStatusJson(stdout);
+        if (status) return resolve({ status });
+        // ENOENT: this path isn't a runnable binary. Anything else: it ran but
+        // gave us no status (daemon down, signed out, timed out).
+        if (err && err.code === 'ENOENT') return resolve({ missing: true });
+        resolve({ detail: String(stderr || (err && err.message) || '').trim().slice(0, 300) || null });
       }
-      try {
-        resolve(JSON.parse(stdout));
-      } catch {
-        resolve({ __error: 'unavailable' });
-      }
-    });
+    );
   });
+}
+
+async function tailscaleStatus() {
+  let sawRunnable = false;
+  let lastDetail = null;
+  for (const bin of tailscaleCandidates()) {
+    const r = await runTailscaleStatus(bin);
+    if (r.status) {
+      // Log once whenever the answering CLI changes — confirms which binary the
+      // tailnet is being read from, without spamming every 5s poll.
+      if (cachedBinary !== bin) console.log('[discovery] tailscale CLI answered:', bin);
+      cachedBinary = bin; // remember the CLI that actually answered
+      return r.status;
+    }
+    if (!r.missing) {
+      sawRunnable = true;
+      lastDetail = r.detail || lastDetail;
+    }
+  }
+  // No candidate produced a status. If none were even runnable it's genuinely
+  // not installed; otherwise the CLI is present but the daemon isn't answering.
+  if (!sawRunnable) {
+    cachedBinary = undefined; // re-scan next time, in case it gets installed
+    return { __error: 'not-installed' };
+  }
+  return { __error: 'unavailable', detail: lastDetail };
 }
 
 function createDiscovery({ config, getIdentity, hub, bus }) {
@@ -158,7 +234,12 @@ function createDiscovery({ config, getIdentity, hub, bus }) {
       // Surface *why* the tailnet list is empty instead of showing nothing at
       // all — "not installed" and "installed but signed out" need different fixes.
       if (status && status.__error === 'not-installed') resetTailscaleBinary();
-      bus.emit('tailnet-status', { ok: false, reason: (status && status.__error) || 'unavailable' });
+      if (status && status.detail) console.warn('[discovery] tailscale status:', status.detail);
+      bus.emit('tailnet-status', {
+        ok: false,
+        reason: (status && status.__error) || 'unavailable',
+        detail: (status && status.detail) || null,
+      });
       bus.emit('tailnet-peers', []);
       return;
     }
@@ -254,4 +335,11 @@ function createDiscovery({ config, getIdentity, hub, bus }) {
   return { start, stop, refresh, probeWhoami };
 }
 
-module.exports = { createDiscovery, probeWhoami, parseTailnetPeers, findTailscaleBinary, TAILSCALE_PATHS };
+module.exports = {
+  createDiscovery,
+  probeWhoami,
+  parseTailnetPeers,
+  findTailscaleBinary,
+  TAILSCALE_PATHS,
+  extractStatusJson,
+};

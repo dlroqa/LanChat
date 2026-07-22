@@ -101,3 +101,37 @@ test('an unknown install still falls back to PATH rather than giving up', () => 
   const resolved = findTailscaleBinary();
   assert.ok(typeof resolved === 'string' && resolved.length > 0);
 });
+
+// --- Tolerant status parsing ---
+//
+// A working tailnet used to read "Tailscale is not responding" whenever the CLI
+// printed anything other than pristine JSON, or exited non-zero while still
+// printing a full status. extractStatusJson recovers the status in those cases.
+const { extractStatusJson } = require('../src/main/discovery.js');
+
+test('extractStatusJson parses a clean status payload', () => {
+  const out = JSON.stringify({ Version: '1.0', BackendState: 'Running', Self: { HostName: 'me' }, Peer: {} });
+  const status = extractStatusJson(out);
+  assert.ok(status && status.Self.HostName === 'me');
+});
+
+test('extractStatusJson recovers a status printed after a warning line', () => {
+  // e.g. a GUI/helper binary emitting a log line before the JSON object.
+  const out = 'health check: an update is available\n' + JSON.stringify({ Version: '1.0', Peer: { k: {} } });
+  const status = extractStatusJson(out);
+  assert.ok(status, 'the JSON after the preamble must still be recovered');
+  assert.ok(status.Peer.k, 'peers must survive the noise');
+});
+
+test('extractStatusJson recovers a status followed by trailing noise', () => {
+  const out = JSON.stringify({ BackendState: 'Running', Peer: {} }) + '\n# some trailing warning';
+  assert.ok(extractStatusJson(out), 'trailing text after the object must not defeat parsing');
+});
+
+test('extractStatusJson rejects unrelated JSON and junk', () => {
+  assert.equal(extractStatusJson(''), null);
+  assert.equal(extractStatusJson(null), null);
+  assert.equal(extractStatusJson('not json at all'), null);
+  // Valid JSON, but not a Tailscale status — must not be mistaken for one.
+  assert.equal(extractStatusJson('{"error":"something else"}'), null);
+});
