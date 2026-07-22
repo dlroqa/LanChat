@@ -146,6 +146,14 @@ export const Radio = (p) => (
     <rect x="10" y="17" width="4" height="2.5" rx="0.6" />
   </S>
 );
+export const GroupCall = (p) => (
+  <S {...p}>
+    <path d="M14 8a3 3 0 1 0-4 0" />
+    <path d="M3 20a6 6 0 0 1 12 0" />
+    <rect x="15" y="11" width="8" height="7" rx="1.5" />
+    <path d="m23 12.5-2 1.8 2 1.8z" />
+  </S>
+);
 export const Users = (p) => (
   <S {...p}>
     <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />

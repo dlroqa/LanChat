@@ -22,6 +22,7 @@ A simple, peer-to-peer **LAN & Tailscale chat** app — text, voice, video, and 
 | 💬 **Text chat** | 1:1 messaging with typing indicators and local history. |
 | 📞 **Voice calls** | Crisp P2P audio over LAN/tailnet, with ring tone and ringback. |
 | 🎥 **Video calls** | Camera calls with mute / camera toggle and picture-in-picture. |
+| 👥 **Group video calls** | Call several people at once — a direct peer-to-peer mesh, no server. Best for small groups (up to ~5 others). |
 | 📻 **Push to talk** | Hold ⌘ (Ctrl on Windows/Linux) to transmit instantly — walkie-talkie style, no ringing. |
 | 🎚️ **Source selection** | Choose your microphone and camera — in Settings, or switch live mid-call. |
 | 📺 **Docked call panel** | Video plays portrait in the right panel; one button expands it full screen. |

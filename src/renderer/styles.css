@@ -1851,3 +1851,123 @@ code.path {
 .pip-btn.hang:hover {
   background: var(--danger-hover);
 }
+
+/* ---------------- Group call ---------------- */
+.group-call {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: #0a0c10;
+  display: flex;
+  flex-direction: column;
+}
+.gc-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px;
+  color: var(--fg);
+}
+.gc-title {
+  font-weight: 600;
+}
+.gc-count {
+  font-size: 12.5px;
+  color: var(--fg-muted);
+  background: var(--surface);
+  padding: 2px 10px;
+  border-radius: 12px;
+}
+.gc-grid {
+  flex: 1;
+  display: grid;
+  gap: 10px;
+  padding: 0 14px 8px;
+  align-content: center;
+  min-height: 0;
+}
+.gc-tile {
+  position: relative;
+  background: #000;
+  border-radius: 12px;
+  overflow: hidden;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--border);
+}
+.gc-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #000;
+}
+.gc-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+}
+.gc-label {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  font-size: 12px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 2px 8px;
+  border-radius: 8px;
+  max-width: calc(100% - 16px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gc-connecting {
+  color: var(--warn);
+}
+
+/* group-call participant picker */
+.gc-picker {
+  max-height: 280px;
+  overflow-y: auto;
+  margin: 4px 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.gc-pick {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.gc-pick:hover {
+  background: var(--surface);
+}
+.gc-pick.sel {
+  background: var(--primary-soft);
+}
+.gc-pick.disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.gc-pick input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+}
+.gc-pick .meta {
+  min-width: 0;
+  flex: 1;
+}
+.gc-pick .name {
+  font-weight: 500;
+}
+.gc-pick .sub {
+  font-size: 12px;
+  color: var(--fg-faint);
+}

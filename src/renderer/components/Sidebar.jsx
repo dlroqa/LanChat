@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import Avatar from './Avatar.jsx';
-import { Settings, Plus, Search, Refresh, Users } from '../lib/icons.jsx';
+import { Settings, Plus, Search, Refresh, Users, GroupCall } from '../lib/icons.jsx';
 import { platformLabel } from '../lib/util.js';
 
 export default function Sidebar({
@@ -17,6 +17,7 @@ export default function Sidebar({
   onOpenSettings,
   onAddPeer,
   onRefresh,
+  onNewGroupCall,
 }) {
   const [q, setQ] = useState('');
 
@@ -67,6 +68,14 @@ export default function Sidebar({
       <div className="section-label">
         <span>People</span>
         <span style={{ display: 'flex', gap: 2 }}>
+          <button
+            className="icon-btn"
+            style={{ width: 26, height: 26 }}
+            onClick={onNewGroupCall}
+            title="Start a group call"
+          >
+            <GroupCall size={16} />
+          </button>
           <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={onRefresh} title="Refresh">
             <Refresh size={15} />
           </button>

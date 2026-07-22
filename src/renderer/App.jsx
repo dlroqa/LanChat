@@ -12,6 +12,10 @@ import { Ringer, playNotification } from './lib/sounds.js';
 import ConnectionPanel from './components/ConnectionPanel.jsx';
 import PttBar from './components/PttBar.jsx';
 import { PttManager, attachPttKey, defaultPttKey } from './lib/ptt.js';
+import GroupCallView from './components/GroupCallView.jsx';
+import GroupInvite from './components/GroupInvite.jsx';
+import NewGroupCallModal from './components/NewGroupCallModal.jsx';
+import { GroupCallManager } from './lib/groupCall.js';
 
 const api = window.lanchat;
 
@@ -36,6 +40,7 @@ export default function App() {
   const [callFullscreen, setCallFullscreen] = useState(false);
   const [pipMode, setPipMode] = useState(false);
   const [ptt, setPtt] = useState({ transmitting: false, connecting: false, talkers: [], inboundStreams: [] });
+  const [group, setGroup] = useState({ status: 'idle', participants: [], count: 0 });
   const [agentStatus, setAgentStatus] = useState({}); // agentId -> {status, detail, streaming}
   const [approvals, setApprovals] = useState({}); // agentId -> pending approval request
   const [update, setUpdate] = useState(null); // newer release found at startup
@@ -49,6 +54,9 @@ export default function App() {
   const callRef = useRef(null);
   const ringerRef = useRef(null);
   const pttRef = useRef(null);
+  const groupRef = useRef(null);
+  const inCallRef = useRef(false);
+  const groupActiveRef = useRef(false);
   const selectedPeerRef = useRef(null);
   const selfRef = useRef(null);
   const loadedPeers = useRef(new Set());
@@ -72,6 +80,20 @@ export default function App() {
     });
   }
   if (!ringerRef.current) ringerRef.current = new Ringer();
+  if (!groupRef.current) {
+    groupRef.current = new GroupCallManager({
+      sendSignal: (peerId, signal) => api.sendSignal(peerId, signal),
+      onState: (s) => setGroup(s),
+      getIceServers: () => configRef.current.iceServers || [],
+      getDevices: () => ({
+        audioInputId: configRef.current.audioInputId || null,
+        videoInputId: configRef.current.videoInputId || null,
+      }),
+      getSelf: () => ({ id: selfRef.current?.id || null, name: selfRef.current?.name || null }),
+      isBusy: () => inCallRef.current, // a 1:1 call is in progress
+      onError: (msg) => toast(msg, 'error'),
+    });
+  }
   if (!pttRef.current) {
     pttRef.current = new PttManager({
       sendSignal: (peerId, signal) => api.sendSignal(peerId, signal),
@@ -90,10 +112,10 @@ export default function App() {
       volume: configRef.current.ringtoneVolume ?? 0.8,
       customUrl: soundUrl(configRef.current.customRingtonePath),
     };
-    if (call.status === 'incoming') ringer.start('incoming', opts);
-    else if (call.status === 'outgoing') ringer.start('outgoing', opts);
+    if (call.status === 'incoming' || group.status === 'invited') ringer.start('incoming', opts);
+    else if (call.status === 'outgoing' || group.status === 'inviting') ringer.start('outgoing', opts);
     else ringer.stop();
-  }, [call.status]);
+  }, [call.status, group.status]);
 
   useEffect(() => {
     if (call.status === 'idle') setCallFullscreen(false);
@@ -119,6 +141,7 @@ export default function App() {
   }, [config.pttKey, config.pttCustomCode, config.pttEnabled, call.status]);
 
   useEffect(() => () => pttRef.current?.closeAll(), []);
+  useEffect(() => () => groupRef.current?.leave(), []);
 
   function toast(text, level = 'info') {
     const id = Math.random().toString(36).slice(2);
@@ -230,16 +253,28 @@ export default function App() {
             );
           }
           break;
-        case 'signal':
-          // PTT rides its own channel so it never disturbs a normal call.
-          if (payload.signal && payload.signal.channel === 'ptt') {
+        case 'signal': {
+          const sig = payload.signal;
+          // Each real-time feature rides its own channel so they never collide.
+          if (sig && sig.channel === 'ptt') {
             if (configRef.current.pttAllowIncoming !== false) {
-              pttRef.current.handleSignal(payload.peerId, payload.signal);
+              pttRef.current.handleSignal(payload.peerId, sig);
             }
+          } else if (sig && sig.channel === 'group') {
+            // Refuse a group invite while a 1:1 call is active.
+            if (inCallRef.current && sig.kind === 'invite') {
+              api.sendSignal(payload.peerId, { channel: 'group', roomId: sig.roomId, kind: 'decline' });
+            } else {
+              groupRef.current.handleSignal(payload.peerId, sig);
+            }
+          } else if (groupActiveRef.current && sig && sig.kind === 'offer') {
+            // Busy: a group call is running, so refuse an incoming 1:1 call.
+            api.sendSignal(payload.peerId, { kind: 'busy', callId: sig.callId });
           } else {
-            callRef.current.handleSignal(payload.peerId, payload.signal);
+            callRef.current.handleSignal(payload.peerId, sig);
           }
           break;
+        }
         case 'file-offer':
           // Placeholder bubble so incoming transfers show up with progress.
           appendMessage(payload.peerId, {
@@ -400,12 +435,21 @@ export default function App() {
   }
 
   const inCall = ['outgoing', 'connecting', 'in-call'].includes(call.status);
+  const groupActive = ['inviting', 'in-call'].includes(group.status);
+  const groupInvited = group.status === 'invited';
+  inCallRef.current = inCall;
+  groupActiveRef.current = groupActive;
 
   // Main needs to know a video call is live to intercept minimise.
   useEffect(() => {
     api.setCallActive(inCall && Boolean(call.withVideo));
   }, [inCall, call.withVideo]);
   const incoming = call.status === 'incoming';
+
+  function startGroupCall(chosenPeers, withVideo) {
+    if (inCall) return toast('Finish your current call first', 'error');
+    groupRef.current.host(chosenPeers, withVideo);
+  }
 
   // Docked picture-in-picture: only the video, nothing else.
   if (pipMode && inCall) {
@@ -448,6 +492,7 @@ export default function App() {
         onOpenProfile={() => setModal('profile')}
         onOpenSettings={() => setModal('settings')}
         onAddPeer={() => setModal('addpeer')}
+        onNewGroupCall={() => setModal('newgroup')}
         onRefresh={() => (api.refresh(), toast('Refreshing…'))}
       />
 
@@ -554,6 +599,26 @@ export default function App() {
           onAccept={() => callRef.current.accept().catch((err) => toast(`Cannot answer: ${err.message}`, 'error'))}
           onDecline={() => callRef.current.decline()}
         />
+      )}
+
+      {groupInvited && group.invite && (
+        <GroupInvite
+          invite={group.invite}
+          onAccept={() => groupRef.current.accept()}
+          onDecline={() => groupRef.current.decline()}
+        />
+      )}
+      {groupActive && (
+        <GroupCallView
+          call={group}
+          self={self}
+          onLeave={() => groupRef.current.leave()}
+          onToggleMute={() => groupRef.current.toggleMute()}
+          onToggleCamera={() => groupRef.current.toggleCamera()}
+        />
+      )}
+      {modal === 'newgroup' && (
+        <NewGroupCallModal peers={peers} onStart={startGroupCall} onClose={() => setModal(null)} />
       )}
       {inCall && callFullscreen && (
         <CallOverlay
