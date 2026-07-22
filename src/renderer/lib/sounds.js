@@ -153,6 +153,32 @@ export function playCallEvent(kind, { volume = 0.6 } = {}) {
   }
 }
 
+// Radio-style push-to-talk cues, so hold-to-talk feels like a GMRS/ham handheld.
+// The transmitter hears a short rising "talk-permit" tone the instant they key
+// up — a prompt to press first, then speak — while the receiver hears a distinct
+// descending "incoming" tone a beat before the audio streams. Kept short and in
+// different registers so the two are never mistaken for each other.
+const PTT_CUES = {
+  transmit: [
+    [587, 0, 0.07, 'sine'],
+    [880, 0.06, 0.13, 'sine'],
+  ],
+  incoming: [
+    [1175, 0, 0.07, 'sine'],
+    [880, 0.06, 0.13, 'sine'],
+  ],
+};
+
+export function playPttCue(kind, { volume = 0.6 } = {}) {
+  const notes = PTT_CUES[kind];
+  if (!notes) return;
+  try {
+    playPattern(notes, volume);
+  } catch {
+    // Audio unavailable — never let a cue break push-to-talk.
+  }
+}
+
 function playFile(url, volume) {
   try {
     const el = new Audio(url);

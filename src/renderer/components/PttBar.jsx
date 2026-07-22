@@ -3,7 +3,8 @@ import { Radio } from '../lib/icons.jsx';
 import { PTT_KEYS } from '../lib/ptt.js';
 
 // Push-to-talk control. Hold the key (or hold the button) to transmit; there is
-// no ringing on either side — audio starts the moment the channel is up.
+// no ringing on either side — just a short radio-style cue (a "go ahead" beep as
+// you key up, an "incoming" beep for the listener) before the audio streams.
 export default function PttBar({ peer, state, keyName, onHoldStart, onHoldEnd }) {
   if (!peer) return null;
   const keyLabel = (PTT_KEYS[keyName] || PTT_KEYS.meta).label;

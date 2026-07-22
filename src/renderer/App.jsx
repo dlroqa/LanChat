@@ -8,7 +8,7 @@ import SettingsModal from './components/SettingsModal.jsx';
 import AddPeerModal from './components/AddPeerModal.jsx';
 import UpdatePrompt from './components/UpdatePrompt.jsx';
 import { CallManager } from './lib/rtc.js';
-import { Ringer, playNotification, playCallEvent } from './lib/sounds.js';
+import { Ringer, playNotification, playCallEvent, playPttCue } from './lib/sounds.js';
 import ConnectionPanel from './components/ConnectionPanel.jsx';
 import PttBar from './components/PttBar.jsx';
 import { PttManager, attachPttKey, defaultPttKey } from './lib/ptt.js';
@@ -103,6 +103,9 @@ export default function App() {
       getIceServers: () => configRef.current.iceServers || [],
       getDevices: () => ({ audioInputId: configRef.current.audioInputId || null }),
       onError: (msg) => toast(msg, 'error'),
+      // Radio-style beeps: a local "go ahead" tone when we key up, a short
+      // "incoming" tone when a peer starts talking at us.
+      onCue: (kind) => playPttCue(kind, { volume: configRef.current.notificationVolume ?? 0.6 }),
     });
   }
 

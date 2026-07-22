@@ -14,12 +14,15 @@
 const IDLE_RELEASE_MS = 60000; // drop the mic after this long without talking
 
 export class PttManager {
-  constructor({ sendSignal, onState, getIceServers, getDevices, onError }) {
+  constructor({ sendSignal, onState, getIceServers, getDevices, onError, onCue }) {
     this.sendSignal = sendSignal;
     this.onState = onState;
     this.getIceServers = getIceServers || (() => []);
     this.getDevices = getDevices || (() => ({ audioInputId: null }));
     this.onError = onError || ((m) => console.error('[ptt]', m));
+    // Radio-style cue: 'transmit' plays locally the moment we key up, 'incoming'
+    // plays when a peer starts talking at us. No-op if the host doesn't wire it.
+    this.onCue = onCue || (() => {});
 
     this.out = null; // { peerId, pc, stream, pending: [] }
     this.inbound = new Map(); // peerId -> { pc, stream, pending: [], talking }
@@ -126,6 +129,9 @@ export class PttManager {
         return;
       }
       if (!this.out) return;
+      // "Talk-permit" cue first, while the mic is still muted, so the beep is a
+      // local prompt and never rides out to the peer on the open track.
+      this.onCue('transmit');
       this.out.stream.getAudioTracks().forEach((t) => (t.enabled = true));
       this.transmitting = true;
       this.send(this.out.peerId, { kind: 'talk', talking: true });
@@ -209,7 +215,11 @@ export class PttManager {
     if (signal.kind === 'talk') {
       const entry = this.inbound.get(fromId);
       if (entry) {
+        const was = entry.talking;
         entry.talking = Boolean(signal.talking);
+        // Only on the silence->talking edge, so each transmission gets one
+        // "incoming" cue just before the audio becomes audible.
+        if (entry.talking && !was) this.onCue('incoming');
         this.emit();
       }
       return;

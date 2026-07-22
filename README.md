@@ -179,6 +179,10 @@ Linux — to transmit instantly. There is no ringing on either side; audio start
 channel is up, and stops the moment you release. You can also press and hold the 📻 button in
 the right-hand panel.
 
+Like a GMRS/ham handheld, keying up plays a short **"go ahead" cue** so you know to press first
+and then speak, and the person you're transmitting to hears a brief **"incoming" tone** just
+before your audio streams.
+
 Configure it under **Settings → Push to talk** (enable/disable, choose the key, or refuse
 incoming transmissions).
 
