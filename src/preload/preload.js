@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('lanchat', {
   linkStats: () => invoke('lanchat:linkStats'),
 
   setCallActive: (active) => invoke('lanchat:setCallActive', active),
+  setOpenAtLogin: (open) => invoke('lanchat:setOpenAtLogin', open),
   exitPip: () => invoke('lanchat:exitPip'),
   togglePip: () => invoke('lanchat:togglePip'),
 

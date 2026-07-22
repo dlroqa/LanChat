@@ -48,7 +48,7 @@ export default function UpdatePrompt({ info, onClose, onSkip }) {
   return (
     <ModalShell
       title={`LanChat ${info.latest} is available`}
-      desc={`You are running ${info.current}.`}
+      desc={`You\u2019re on ${info.current}. Updating to ${info.latest} keeps calls, group video, and file transfers working reliably \u2014 peers on newer versions can otherwise behave unexpectedly.`}
       onClose={dismissable ? onClose : null}
     >
       {info.notes && (

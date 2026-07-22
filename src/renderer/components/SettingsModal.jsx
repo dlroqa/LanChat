@@ -14,6 +14,9 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
   const [enableLan, setLan] = useState(config.enableLan);
   const [useStun, setUseStun] = useState((config.iceServers || []).length > 0);
   const [showAddresses, setShowAddresses] = useState(Boolean(config.showAddresses));
+  // Applied immediately via IPC (not batched into onSave), since the OS login
+  // item should reflect the toggle the moment it changes.
+  const [openAtLogin, setOpenAtLogin] = useState(Boolean(config.openAtLogin));
   const [sounds, setSounds] = useState({
     ringtone: config.ringtone,
     ringtoneVolume: config.ringtoneVolume,
@@ -128,6 +131,21 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
           on={showAddresses}
           set={setShowAddresses}
         />
+
+        {self?.platform === 'win32' && (
+          <>
+            <div className="section-head">Windows</div>
+            <Toggle
+              label="Start LanChat when Windows starts"
+              desc="Launches to the tray at login, so you're reachable without opening it each time."
+              on={openAtLogin}
+              set={(v) => {
+                setOpenAtLogin(v);
+                window.lanchat.setOpenAtLogin(v);
+              }}
+            />
+          </>
+        )}
 
         <div className="section-head">Updates</div>
         <UpdateSection />

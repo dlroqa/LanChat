@@ -12,7 +12,7 @@ const { LOCAL_ORIGIN: AGENT_LOCAL_ORIGIN } = require('./agents');
 //   - bus events -> webContents 'lanchat:event' : main -> renderer notifications
 // The renderer only ever sees the small, explicit surface exposed in preload.js.
 
-function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, updater, linkStats, pip, agentHub, outbox, downloadsDir, getWindow, onUnread }) {
+function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, updater, linkStats, pip, agentHub, outbox, downloadsDir, getWindow, revealWindow, applyLoginItem, onUnread }) {
   function emit(type, payload) {
     const win = getWindow();
     if (win && !win.isDestroyed()) win.webContents.send('lanchat:event', { type, payload });
@@ -88,9 +88,13 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       case 'typing':
         emit('typing', { peerId: from, isTyping: Boolean(msg.isTyping) });
         break;
-      case 'signal':
+      case 'signal': {
+        // If launched to the tray, surface the window for an incoming call/invite
+        // (but never for PTT or ICE/answer traffic).
+        if (isIncomingCallSignal(msg.signal) && revealWindow) revealWindow();
         emit('signal', { peerId: from, signal: msg.signal });
         break;
+      }
       case 'file-offer':
         emit('file-offer', { peerId: from, ...msg });
         break;
@@ -143,6 +147,7 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       'pttCustomCode',
       'skippedUpdateVersion',
       'pttAllowIncoming',
+      'openAtLogin',
     ];
     for (const k of keys) {
       if (k in patch) allowed[k] = patch[k];
@@ -330,6 +335,12 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   ipcMain.handle('lanchat:appVersion', () => require('electron').app.getVersion());
 
   // Renderer owns unread state; mirror it onto the status-menu item / badge.
+  // Toggle launch-at-login. Returns whether the OS accepted it (false on Linux).
+  ipcMain.handle('lanchat:setOpenAtLogin', (_e, open) => {
+    config.set({ openAtLogin: Boolean(open) });
+    return applyLoginItem ? applyLoginItem(Boolean(open)) : false;
+  });
+
   ipcMain.handle('lanchat:setUnread', (_e, count) => {
     if (onUnread) onUnread(count);
     return true;
@@ -395,6 +406,15 @@ function sanitizeAvatar(avatar) {
   return out;
 }
 
+// True only for a signal that should raise the window: a 1:1 call offer or a
+// group invite. PTT and mid-call ICE/answer frames must not pop the UI open.
+function isIncomingCallSignal(inner) {
+  if (!inner || typeof inner !== 'object') return false;
+  if (inner.channel === 'ptt') return false;
+  if (inner.channel === 'group') return inner.kind === 'invite';
+  return inner.kind === 'offer';
+}
+
 function publicConfig(config) {
   const {
     iceServers,
@@ -418,6 +438,7 @@ function publicConfig(config) {
     pttCustomCode,
     pttAllowIncoming,
     skippedUpdateVersion,
+    openAtLogin,
   } = config.data;
   return {
     iceServers,
@@ -441,7 +462,8 @@ function publicConfig(config) {
     pttCustomCode,
     pttAllowIncoming,
     skippedUpdateVersion,
+    openAtLogin,
   };
 }
 
-module.exports = { createIpc, sanitizeAvatar, MAX_AVATAR_BYTES };
+module.exports = { createIpc, sanitizeAvatar, MAX_AVATAR_BYTES, isIncomingCallSignal };

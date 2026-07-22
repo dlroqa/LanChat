@@ -26,6 +26,7 @@ const DEFAULTS = Object.freeze({
   pttKey: null, // null = platform default (Command on macOS, Control elsewhere)
   pttCustomCode: null, // KeyboardEvent.code when pttKey === 'custom'
   skippedUpdateVersion: null, // a release the user chose not to be reminded about
+  openAtLogin: false, // Windows/macOS: launch LanChat at login (hidden to tray)
   pttAllowIncoming: true,
   audioInputId: null, // preferred microphone (null = system default)
   videoInputId: null, // preferred camera (null = system default)

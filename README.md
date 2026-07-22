@@ -35,6 +35,8 @@ A simple, peer-to-peer **LAN & Tailscale chat** app — text, voice, video, and 
 | 🔒 **Addresses hidden** | IP addresses are hidden by default; peers are identified by name. |
 | 🤝 **Shared tailnets** | Devices shared in from another tailnet are discovered and marked. |
 | ⬆️ **Self-updating** | **Settings → Updates → Check for Updates** pulls the latest GitHub release and installs it. |
+| 🔔 **Update reminder** | On launch, if a newer release exists, LanChat encourages you to update so features stay compatible with peers. |
+| 🪟 **Windows convenience** | Installer adds a desktop shortcut; an optional setting starts LanChat in the tray at Windows login. |
 
 ---
 

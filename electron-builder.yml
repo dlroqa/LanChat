@@ -58,6 +58,11 @@ nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   perMachine: false
+  # Windows: place a shortcut on the Desktop and in the Start Menu on install.
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: LanChat
+  runAfterFinish: true
 
 linux:
   category: Network

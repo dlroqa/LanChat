@@ -40,7 +40,7 @@ function getWindow() {
   return mainWindow;
 }
 
-function createWindow() {
+function createWindow({ hidden = false } = {}) {
   mainWindow = new BrowserWindow({
     width: 1120,
     height: 740,
@@ -48,6 +48,9 @@ function createWindow() {
     minHeight: 560,
     backgroundColor: '#0f1115',
     title: 'LanChat',
+    // Launched at login: create the window but keep it hidden, so the renderer
+    // is alive (able to ring and answer calls) while LanChat sits in the tray.
+    show: !hidden,
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'preload.js'),
       contextIsolation: true,
@@ -83,6 +86,24 @@ function setupMediaPermissions() {
     const allowed = ['media', 'audioCapture', 'videoCapture', 'display-capture', 'notifications'];
     callback(allowed.includes(permission));
   });
+}
+
+// Windows/macOS: register (or clear) the OS login item. Linux desktops vary too
+// much for a single reliable mechanism, so it's a no-op there and the Settings
+// toggle is hidden.
+function applyLoginItem(open) {
+  if (process.platform === 'linux') return false;
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: open,
+      openAsHidden: true, // macOS
+      args: ['--hidden'], // Windows/macOS: start in the tray
+    });
+    return true;
+  } catch (err) {
+    console.warn('[login-item] failed:', err.message);
+    return false;
+  }
 }
 
 function showWindow() {
@@ -157,6 +178,8 @@ async function startServices() {
     outbox,
     downloadsDir,
     getWindow,
+    revealWindow: showWindow,
+    applyLoginItem,
     // `tray` is resolved lazily: the tray is created after services start.
     onUnread: (count) => tray && tray.setUnread(count),
   });
@@ -197,8 +220,14 @@ if (!gotLock && !process.env.LANCHAT_USERDATA) {
   app.whenReady().then(async () => {
     setupMediaPermissions();
     const ipcApi = await startServices();
-    createWindow();
+    // Started at login (we pass --hidden in the login-item args, and macOS also
+    // reports wasOpenedAtLogin): boot straight to the tray.
+    const launchedHidden =
+      process.argv.includes('--hidden') ||
+      (process.platform === 'darwin' && app.getLoginItemSettings().wasOpenedAtLogin);
+    createWindow({ hidden: launchedHidden });
     setupTray(ipcApi);
+    applyLoginItem(Boolean(services.config.get('openAtLogin')));
 
     app.on('activate', showWindow);
   });
