@@ -129,6 +129,30 @@ export function playNotification(name, { volume = 0.7, customUrl = null } = {}) 
   return null;
 }
 
+// Call-event chimes. A descending two-note "door close" says someone left; a
+// brighter ascending pair says someone joined. Distinct from message sounds so
+// call activity is recognizable without looking.
+const CALL_EVENTS = {
+  leave: [
+    [660, 0, 0.16, 'sine'],
+    [440, 0.15, 0.26, 'sine'],
+  ],
+  join: [
+    [520, 0, 0.14, 'sine'],
+    [784, 0.13, 0.22, 'sine'],
+  ],
+};
+
+export function playCallEvent(kind, { volume = 0.6 } = {}) {
+  const notes = CALL_EVENTS[kind];
+  if (!notes) return;
+  try {
+    playPattern(notes, volume);
+  } catch {
+    // Audio unavailable — never let a chime break a call.
+  }
+}
+
 function playFile(url, volume) {
   try {
     const el = new Audio(url);

@@ -8,7 +8,7 @@ import SettingsModal from './components/SettingsModal.jsx';
 import AddPeerModal from './components/AddPeerModal.jsx';
 import UpdatePrompt from './components/UpdatePrompt.jsx';
 import { CallManager } from './lib/rtc.js';
-import { Ringer, playNotification } from './lib/sounds.js';
+import { Ringer, playNotification, playCallEvent } from './lib/sounds.js';
 import ConnectionPanel from './components/ConnectionPanel.jsx';
 import PttBar from './components/PttBar.jsx';
 import { PttManager, attachPttKey, defaultPttKey } from './lib/ptt.js';
@@ -73,6 +73,7 @@ export default function App() {
       getIceServers: () => configRef.current.iceServers || [],
       getSelfName: () => selfRef.current?.name || null,
       onError: (msg) => toast(msg, 'error'),
+      onPeerLeft: (name) => announceLeft(name),
       getDevices: () => ({
         audioInputId: configRef.current.audioInputId || null,
         videoInputId: configRef.current.videoInputId || null,
@@ -92,6 +93,7 @@ export default function App() {
       getSelf: () => ({ id: selfRef.current?.id || null, name: selfRef.current?.name || null }),
       isBusy: () => inCallRef.current, // a 1:1 call is in progress
       onError: (msg) => toast(msg, 'error'),
+      onPeerLeft: (name) => announceLeft(name),
     });
   }
   if (!pttRef.current) {
@@ -142,6 +144,11 @@ export default function App() {
 
   useEffect(() => () => pttRef.current?.closeAll(), []);
   useEffect(() => () => groupRef.current?.leave(), []);
+
+  function announceLeft(name) {
+    playCallEvent('leave', { volume: configRef.current.notificationVolume ?? 0.6 });
+    if (name) toast(`${name} left the call`);
+  }
 
   function toast(text, level = 'info') {
     const id = Math.random().toString(36).slice(2);

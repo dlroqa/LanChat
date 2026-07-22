@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import Avatar from './Avatar.jsx';
+import Logo from './Logo.jsx';
 import MessageBubble from './MessageBubble.jsx';
 import Composer from './Composer.jsx';
 import AgentApproval from './AgentApproval.jsx';
@@ -38,7 +39,7 @@ export default function ChatPane({
     return (
       <div className="chat">
         <div className="center-pane">
-          <Avatar name="LanChat" id="lanchat" size="lg" />
+          <Logo size={84} />
           <h2>Welcome to LanChat</h2>
           <p>
             Select someone on the left to start chatting. People on your Tailscale mesh or local network who run

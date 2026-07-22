@@ -33,7 +33,7 @@ export function reconcileRoster(current, next, selfId) {
 }
 
 export class GroupCallManager {
-  constructor({ sendSignal, onState, getIceServers, getDevices, getSelf, isBusy, onError }) {
+  constructor({ sendSignal, onState, getIceServers, getDevices, getSelf, isBusy, onError, onPeerLeft }) {
     this.sendSignal = sendSignal;
     this.onState = onState;
     this.getIceServers = getIceServers || (() => []);
@@ -41,6 +41,7 @@ export class GroupCallManager {
     this.getSelf = getSelf || (() => ({ id: null, name: null }));
     this.isBusy = isBusy || (() => false); // a 1:1 call is in progress
     this.onError = onError || ((m) => console.error('[group]', m));
+    this.onPeerLeft = onPeerLeft || (() => {});
     this.reset();
   }
 
@@ -55,6 +56,7 @@ export class GroupCallManager {
     this.hostName = null;
     this.muted = false;
     this.cameraOff = false;
+    this.leaving = false; // set while WE tear the call down, to mute leave chimes
   }
 
   emit() {
@@ -223,7 +225,7 @@ export class GroupCallManager {
       this.emit();
     };
     pc.onconnectionstatechange = () => {
-      if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) this.dropPeer(peerId);
+      if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) this.dropPeer(peerId, { notify: true });
       this.emit();
     };
 
@@ -296,7 +298,7 @@ export class GroupCallManager {
         break;
       }
       case 'leave':
-        this.dropPeer(fromId);
+        this.dropPeer(fromId, { notify: true });
         this.roster.delete(fromId);
         this.emit();
         break;
@@ -305,13 +307,17 @@ export class GroupCallManager {
     }
   }
 
-  dropPeer(peerId) {
+  dropPeer(peerId, { notify = false } = {}) {
     const entry = this.peers.get(peerId);
     if (!entry) return;
+    const name = entry.name || this.roster.get(peerId)?.name || null;
     try {
       entry.pc.close();
     } catch {}
     this.peers.delete(peerId);
+    // Only chime when a remote peer drops while we remain in the call — not when
+    // we ourselves are leaving (which closes every connection at once).
+    if (notify && !this.leaving && this.status === 'in-call') this.onPeerLeft(name);
   }
 
   toggleMute() {
@@ -331,6 +337,7 @@ export class GroupCallManager {
   }
 
   leave() {
+    this.leaving = true;
     for (const id of this.peers.keys()) this.signal(id, { kind: 'leave' });
     for (const id of [...this.peers.keys()]) this.dropPeer(id);
     if (this.localStream) this.localStream.getTracks().forEach((t) => t.stop());

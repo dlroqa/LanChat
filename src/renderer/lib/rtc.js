@@ -5,13 +5,14 @@
 import { serializeCandidate, serializeDescription } from './signal.js';
 
 export class CallManager {
-  constructor({ sendSignal, onState, getIceServers, getSelfName, getDevices, onError }) {
+  constructor({ sendSignal, onState, getIceServers, getSelfName, getDevices, onError, onPeerLeft }) {
     this.sendSignal = sendSignal;
     this.onState = onState;
     this.getIceServers = getIceServers || (() => []);
     this.getSelfName = getSelfName || (() => null);
     this.getDevices = getDevices || (() => ({ audioInputId: null, videoInputId: null }));
     this.onError = onError || ((m) => console.error('[call]', m));
+    this.onPeerLeft = onPeerLeft || (() => {});
     this.reset();
   }
 
@@ -226,7 +227,14 @@ export class CallManager {
       case 'hangup':
       case 'decline':
       case 'busy': {
-        if (this.peerId === fromId) this.end(false);
+        if (this.peerId === fromId) {
+          // The remote ended it — chime, but only once we were actually in the
+          // call (a 'decline' of an outgoing ring is not a "left the call").
+          if (signal.kind === 'hangup' && this.status === 'in-call') {
+            this.onPeerLeft(this.peerName);
+          }
+          this.end(false);
+        }
         break;
       }
       default:
