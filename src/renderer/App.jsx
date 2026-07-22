@@ -596,7 +596,7 @@ export default function App() {
       {incoming && (
         <IncomingCall
           call={call}
-          onAccept={() => callRef.current.accept().catch((err) => toast(`Cannot answer: ${err.message}`, 'error'))}
+          onAccept={(prefs) => callRef.current.accept(prefs).catch((err) => toast(`Cannot answer: ${err.message}`, 'error'))}
           onDecline={() => callRef.current.decline()}
         />
       )}
@@ -604,7 +604,7 @@ export default function App() {
       {groupInvited && group.invite && (
         <GroupInvite
           invite={group.invite}
-          onAccept={() => groupRef.current.accept()}
+          onAccept={(prefs) => groupRef.current.accept(prefs)}
           onDecline={() => groupRef.current.decline()}
         />
       )}

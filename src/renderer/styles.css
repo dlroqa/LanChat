@@ -1880,11 +1880,13 @@ code.path {
   border-radius: 12px;
 }
 .gc-grid {
-  flex: 1;
+  flex: 1 1 auto;
   display: grid;
   gap: 10px;
   padding: 0 14px 8px;
-  align-content: center;
+  /* Equal-height rows that share the available space, so tiles always fit the
+     column and never overflow or overlap regardless of participant count. */
+  grid-auto-rows: 1fr;
   min-height: 0;
 }
 .gc-tile {
@@ -1892,7 +1894,10 @@ code.path {
   background: #000;
   border-radius: 12px;
   overflow: hidden;
-  aspect-ratio: 16 / 9;
+  /* Fill the grid cell rather than forcing 16:9, which previously made tiles
+     taller than their row and overlap. object-fit handles the video ratio. */
+  min-height: 0;
+  min-width: 0;
   border: 1px solid var(--border);
 }
 .gc-video {
@@ -1970,4 +1975,29 @@ code.path {
 .gc-pick .sub {
   font-size: 12px;
   color: var(--fg-faint);
+}
+
+/* pre-answer mute / camera toggles on incoming-call toasts */
+.pre-toggles {
+  display: flex;
+  gap: 6px;
+  margin-right: 4px;
+}
+.pre-toggle {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--fg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s ease;
+}
+.pre-toggle:hover {
+  background: var(--surface-hover);
+}
+.pre-toggle.off {
+  background: var(--danger);
+  color: #fff;
 }

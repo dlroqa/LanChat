@@ -244,7 +244,7 @@ export class CallManager {
   }
 
   // ---- accept an incoming call ----
-  async accept() {
+  async accept(prefs = {}) {
     if (this.status !== 'incoming') return;
     this.status = 'connecting';
     this.emit();
@@ -253,6 +253,16 @@ export class CallManager {
     } catch (err) {
       this.decline();
       throw err;
+    }
+    // Honour the mute / camera-off choices made on the incoming-call toast, so
+    // you join already muted or with the camera dark.
+    if (prefs.muted) {
+      this.muted = true;
+      this.localStream.getAudioTracks().forEach((t) => (t.enabled = false));
+    }
+    if (prefs.cameraOff && this.withVideo) {
+      this.cameraOff = true;
+      this.localStream.getVideoTracks().forEach((t) => (t.enabled = false));
     }
     this.pc = this.createPc();
     for (const track of this.localStream.getTracks()) this.pc.addTrack(track, this.localStream);

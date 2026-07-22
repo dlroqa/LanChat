@@ -160,7 +160,7 @@ export class GroupCallManager {
     this.emit();
   }
 
-  async accept() {
+  async accept(prefs = {}) {
     if (this.status !== 'invited' || !this.invite) return;
     const inv = this.invite;
     this.roomId = inv.roomId;
@@ -175,6 +175,16 @@ export class GroupCallManager {
     }
     this.status = 'in-call';
     this.invite = null;
+
+    // Apply pre-answer mute / camera-off choices before any track is published.
+    if (prefs.muted) {
+      this.muted = true;
+      this.localStream.getAudioTracks().forEach((t) => (t.enabled = false));
+    }
+    if (prefs.cameraOff && this.withVideo) {
+      this.cameraOff = true;
+      this.localStream.getVideoTracks().forEach((t) => (t.enabled = false));
+    }
 
     const self = this.getSelf();
     // Populate the roster from the invite (everyone except us).
