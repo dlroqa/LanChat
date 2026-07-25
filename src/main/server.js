@@ -150,8 +150,12 @@ function createServer({ config, getIdentity, hub, bus, downloadsDir }) {
         bus.emit('peer-hello', { peerId, identity: msg.identity, direction: 'in' });
         return;
       }
-      // Everything else is application traffic routed to the app bus.
-      bus.emit('peer-message', msg);
+      // Everything else is application traffic routed to the app bus. `from` is
+      // re-stamped from the socket's own handshake rather than trusted from the
+      // payload, so a peer cannot attribute traffic to somebody else. A frame
+      // arriving before `hello` has no established sender and is dropped.
+      if (!peerId) return;
+      bus.emit('peer-message', { ...msg, from: peerId });
     });
 
     ws.on('close', () => {

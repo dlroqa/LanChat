@@ -22,6 +22,42 @@ const { URL } = require('node:url');
 
 const DEFAULT_TIMEOUT_MS = 180000;
 
+// Socket-level failures arrive as bare Node errors ("connect ECONNREFUSED
+// 100.85.49.69:8642") which say what happened but not what to do about it. The
+// commonest cause by far is an address that resolves but has no listener: agent
+// servers bind loopback by default, and a host's own LAN or Tailscale address
+// does not reach a loopback socket even on that same machine. The raw code is
+// kept on the end so the underlying cause is still searchable.
+function describeSocketError(err, url) {
+  const where = url ? url.host : 'the agent';
+  const host = url ? url.hostname : 'the host';
+  const explain = (text) => Object.assign(new Error(`${text} (${err.code})`), { code: err.code, cause: err });
+  switch (err.code) {
+    case 'ECONNREFUSED':
+      return explain(
+        `Nothing is listening on ${where}. If the agent runs on this machine, use 127.0.0.1 — ` +
+          `a service bound to loopback is not reachable at the machine's LAN or Tailscale address.`
+      );
+    case 'ETIMEDOUT':
+    case 'EHOSTUNREACH':
+    case 'ENETUNREACH':
+      return explain(`No response from ${host}. Check the machine is up and the port is open.`);
+    case 'ENOTFOUND':
+    case 'EAI_AGAIN':
+      return explain(`Unknown host "${host}". Check the spelling of the base URL.`);
+    case 'ECONNRESET':
+    case 'EPIPE':
+      return explain(`The connection to ${host} closed unexpectedly.`);
+    case 'DEPTH_ZERO_SELF_SIGNED_CERT':
+    case 'ERR_TLS_CERT_ALTNAME_INVALID':
+    case 'UNABLE_TO_VERIFY_LEAF_SIGNATURE':
+      return explain(`The TLS certificate for ${host} could not be verified.`);
+    default:
+      // Includes the timeout path below, which destroys with a coded-less Error.
+      return err;
+  }
+}
+
 function createHttpTransport({ id, name, config, getSecret, timeoutMs }) {
   const baseUrl = String(config.baseUrl || 'http://127.0.0.1:8642').replace(/\/+$/, '');
   const budget = timeoutMs || DEFAULT_TIMEOUT_MS;
@@ -48,7 +84,7 @@ function createHttpTransport({ id, name, config, getSecret, timeoutMs }) {
         (res) => resolve({ res, req })
       );
       req.setTimeout(signalTimeout || budget, () => req.destroy(new Error('Request timed out.')));
-      req.on('error', reject);
+      req.on('error', (err) => reject(describeSocketError(err, url)));
       if (payload) req.write(payload);
       req.end();
     });
@@ -195,4 +231,4 @@ function createHttpTransport({ id, name, config, getSecret, timeoutMs }) {
   return { id, name, kind: 'http', start, send, stop, answerApproval };
 }
 
-module.exports = { createHttpTransport };
+module.exports = { createHttpTransport, describeSocketError };

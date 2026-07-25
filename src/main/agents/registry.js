@@ -14,6 +14,8 @@ const crypto = require('node:crypto');
 // materialised in main-process memory at call time and never sent to the renderer.
 
 const AGENT_ID_PREFIX = 'agent:';
+const REMOTE_AGENT_ID_PREFIX = 'remote-agent:';
+const DELEGATE_SEPARATOR = '#';
 const KINDS = Object.freeze(['http', 'command', 'acp', 'ssh']);
 
 function isAgentId(id) {
@@ -22,6 +24,49 @@ function isAgentId(id) {
 
 function newAgentId() {
   return `${AGENT_ID_PREFIX}${crypto.randomUUID()}`;
+}
+
+// A delegate thread is where one peer's conversation with a local agent lives,
+// so agent traffic never lands in the human chat with that peer. It stays inside
+// the `agent:` namespace on purpose: the impersonation guard in ipc.js drops any
+// wire frame claiming an `agent:` id, and a delegate thread is a purely local
+// construct that must never be addressable from the network.
+function delegateIdFor(agentId, peerId) {
+  return `${agentId}${DELEGATE_SEPARATOR}${peerId}`;
+}
+
+function isDelegateId(id) {
+  return isAgentId(id) && id.includes(DELEGATE_SEPARATOR);
+}
+
+// Splits a delegate thread id back into its parts. Returns null for a plain
+// agent id, so callers can use it as the "is this a delegate?" test as well.
+function parseDelegateId(id) {
+  if (!isDelegateId(id)) return null;
+  const at = id.indexOf(DELEGATE_SEPARATOR);
+  return { agentId: id.slice(0, at), peerId: id.slice(at + DELEGATE_SEPARATOR.length) };
+}
+
+// The mirror image: an agent owned by *another* peer, seen from this machine.
+// Deliberately outside the `agent:` namespace — a remote agent's traffic
+// legitimately arrives off the wire, and the guard that protects local agents
+// would otherwise drop every frame it sends.
+function remoteAgentIdFor(ownerPeerId, agentId) {
+  return `${REMOTE_AGENT_ID_PREFIX}${ownerPeerId}:${agentId}`;
+}
+
+function isRemoteAgentId(id) {
+  return typeof id === 'string' && id.startsWith(REMOTE_AGENT_ID_PREFIX);
+}
+
+function parseRemoteAgentId(id) {
+  if (!isRemoteAgentId(id)) return null;
+  const rest = id.slice(REMOTE_AGENT_ID_PREFIX.length);
+  const at = rest.indexOf(':');
+  if (at === -1) return null;
+  // The agent id keeps its own `agent:` prefix, which contains a colon — split
+  // on the first separator only.
+  return { ownerPeerId: rest.slice(0, at), agentId: rest.slice(at + 1) };
 }
 
 class AgentRegistry {
@@ -69,8 +114,16 @@ class AgentRegistry {
       config: a.config,
       enabled: a.enabled !== false,
       allowedPeers: a.allowedPeers || [],
+      // Who may reach it, and how discoverable it is. Both default off, so an
+      // agent added before these existed stays exactly as private as it was.
+      networkWide: a.networkWide === true,
+      directChat: a.directChat === true,
       hasSecret: Boolean(a.secret && a.secret.mode && a.secret.mode !== 'none'),
       secretMode: (a.secret && a.secret.mode) || 'none',
+      // The variable name is not itself sensitive — only the value it resolves
+      // to is, and that is never persisted — so it can be echoed back to
+      // prefill the edit form. Sealed ciphertext is still never exposed.
+      secretEnv: (a.secret && a.secret.mode === 'env' && a.secret.name) || null,
       createdAt: a.createdAt,
     }));
   }
@@ -128,6 +181,10 @@ class AgentRegistry {
       config: draft.config && typeof draft.config === 'object' ? draft.config : {},
       secret: this.sealSecret(draft.secret),
       allowedPeers: Array.isArray(draft.allowedPeers) ? draft.allowedPeers.filter(Boolean) : [],
+      // Sharing is never inherited from a draft by accident: both must be asked
+      // for explicitly, so a newly connected agent starts local-only.
+      networkWide: draft.networkWide === true,
+      directChat: draft.directChat === true,
       enabled: draft.enabled !== false,
       createdAt: Date.now(),
     };
@@ -140,8 +197,21 @@ class AgentRegistry {
     const agent = this.get(id);
     if (!agent) return null;
     if (patch.name !== undefined) agent.name = String(patch.name).trim() || agent.name;
-    if (patch.config !== undefined) agent.config = { ...agent.config, ...patch.config };
+    // Switching transport replaces the config rather than merging it, so a
+    // record never keeps settings belonging to a transport it no longer uses.
+    // Same-transport edits merge, which is what preserves fields the form does
+    // not show (timeoutMs) when only the base URL changes.
+    const switching = patch.kind !== undefined && patch.kind !== agent.kind;
+    if (switching) {
+      if (!KINDS.includes(patch.kind)) throw new Error(`Unknown agent transport: ${patch.kind}`);
+      agent.kind = patch.kind;
+    }
+    if (patch.config !== undefined) {
+      agent.config = switching ? { ...patch.config } : { ...agent.config, ...patch.config };
+    }
     if (patch.enabled !== undefined) agent.enabled = Boolean(patch.enabled);
+    if (patch.networkWide !== undefined) agent.networkWide = Boolean(patch.networkWide);
+    if (patch.directChat !== undefined) agent.directChat = Boolean(patch.directChat);
     if (patch.allowedPeers !== undefined) {
       agent.allowedPeers = Array.isArray(patch.allowedPeers) ? patch.allowedPeers.filter(Boolean) : [];
     }
@@ -161,4 +231,17 @@ class AgentRegistry {
   }
 }
 
-module.exports = { AgentRegistry, isAgentId, newAgentId, AGENT_ID_PREFIX, KINDS };
+module.exports = {
+  AgentRegistry,
+  isAgentId,
+  newAgentId,
+  delegateIdFor,
+  isDelegateId,
+  parseDelegateId,
+  remoteAgentIdFor,
+  isRemoteAgentId,
+  parseRemoteAgentId,
+  AGENT_ID_PREFIX,
+  REMOTE_AGENT_ID_PREFIX,
+  KINDS,
+};

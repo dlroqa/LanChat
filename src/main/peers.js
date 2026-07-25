@@ -66,6 +66,19 @@ class PeerHub {
     }
   }
 
+  // Fan out to every connected peer. Offline peers are skipped rather than
+  // queued: this carries state announcements, which are re-sent on reconnect,
+  // so a stale one is worse than a missed one. Returns the peer ids reached.
+  broadcast(obj, { except = [] } = {}) {
+    const skip = new Set(except);
+    const reached = [];
+    for (const peer of this.presenceList()) {
+      if (!peer.online || skip.has(peer.id)) continue;
+      if (this.send(peer.id, obj)) reached.push(peer.id);
+    }
+    return reached;
+  }
+
   // Dial a discovered peer at ip:port and keep the socket registered.
   connect(peerId, address) {
     if (!address) return;
@@ -106,7 +119,12 @@ class PeerHub {
         this.bus.emit('peer-hello', { peerId, identity: msg.identity, direction: 'out' });
         return;
       }
-      this.bus.emit('peer-message', msg);
+      // Attribution comes from the socket, never from the payload. `from` is
+      // sender-supplied, so without this any peer could put someone else's id in
+      // it and be stored and rendered as them. send() already stamps exactly
+      // this value, so nothing legitimate changes.
+      if (!peerId) return;
+      this.bus.emit('peer-message', { ...msg, from: peerId });
     });
     ws.on('close', () => {
       if (peerId) {

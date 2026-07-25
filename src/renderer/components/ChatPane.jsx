@@ -65,9 +65,16 @@ export default function ChatPane({
           </div>
           <div className="sub">
             {peer.kind === 'agent'
-              ? peer.online
-                ? `Agent · ${peer.agentKind}`
-                : 'Agent · off'
+              ? // A delegate thread is a transcript of somebody else's
+                // conversation with your agent, so it says whose it is rather
+                // than claiming to be off.
+                peer.delegate
+                ? `${peer.viaName}'s conversation with this agent`
+                : peer.remote
+                  ? `Agent · shared by ${peer.viaName}`
+                  : peer.online
+                    ? `Agent · ${peer.agentKind}`
+                    : 'Agent · off'
               : peer.online
                 ? `Online · ${platformLabel(peer.platform)}`
                 : 'Offline'}

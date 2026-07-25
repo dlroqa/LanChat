@@ -115,9 +115,14 @@ export default function Sidebar({
               </div>
               <div className="sub">
                 {p.kind === 'agent'
-                  ? p.online
-                    ? `Agent · ${p.agentKind}`
-                    : 'Agent · off'
+                  ? // A shared agent says whose it is, so it is never mistaken for
+                    // one of your own: `delegate` is a peer's conversation with
+                    // your agent, `remote` is an agent a peer shared with you.
+                    p.delegate || p.remote
+                    ? `Agent · via ${p.viaName}`
+                    : p.online
+                      ? `Agent · ${p.agentKind}`
+                      : 'Agent · off'
                   : p.online
                     ? platformLabel(p.platform) || 'Online'
                     : 'Offline'}

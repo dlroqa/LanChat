@@ -6,6 +6,7 @@ const path = require('node:path');
 const { ipcMain, dialog, shell } = require('electron');
 const { guessMime } = require('./fileTransfer');
 const { LOCAL_ORIGIN: AGENT_LOCAL_ORIGIN } = require('./agents');
+const { createRemoteAgents } = require('./agents/remote');
 
 // Bridges the main-process services to the renderer:
 //   - ipcMain.handle(...)  : renderer -> main commands (request/response)
@@ -17,6 +18,36 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     const win = getWindow();
     if (win && !win.isDestroyed()) win.webContents.send('lanchat:event', { type, payload });
   }
+
+  // Agents other peers have shared with us. Purely a receiver of adverts — it
+  // never assumes a grant that was not sent.
+  const remoteAgents = createRemoteAgents({ hub, store });
+
+  // A peer's request to one of our agents. Stored under that agent's own thread
+  // so the human chat with them stays clean, while still showing us in full what
+  // they asked — the transparency this replaces, not removes.
+  bus.on('agent-request', ({ threadId, peerId, text, ts }) => {
+    const message = {
+      id: crypto.randomUUID(),
+      peerId: threadId,
+      direction: 'in',
+      kind: 'text',
+      text,
+      ts: ts || Date.now(),
+      askedBy: peerId,
+    };
+    store.append(threadId, message);
+    emit('chat', message);
+  });
+
+  // An agent's owner going offline takes their agents with them, rather than
+  // leaving contacts behind that silently fail.
+  let onlinePeers = new Set();
+  bus.on('presence', (list) => {
+    const nowOnline = new Set(list.filter((p) => p.online && p.kind !== 'agent').map((p) => p.id));
+    for (const id of onlinePeers) if (!nowOnline.has(id)) remoteAgents.dropOwner(id);
+    onlinePeers = nowOnline;
+  });
 
   // ---- main -> renderer event forwarding ----
   bus.on('presence', (list) => emit('presence', list));
@@ -69,10 +100,11 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     switch (msg.type) {
       case 'chat': {
         // A message from a real peer may be addressed to a local agent, gated on
-        // that agent's allowlist and enabled state. It is deliberately still
-        // stored and shown afterwards: you should always be able to see what a
-        // peer asked your agent to do.
-        if (agentHub) agentHub.routeFromPeer(from, msg.text);
+        // that agent's reach and enabled state. When it is, the request belongs
+        // in that agent's own thread rather than in the human chat — otherwise
+        // asking an agent something graffitis a real conversation. You still see
+        // everything the peer asked; `agent-request` files it under "via <peer>".
+        if (agentHub && agentHub.routeFromPeer(from, msg.text)) break;
         const message = {
           id: msg.id || crypto.randomUUID(),
           peerId: from,
@@ -83,6 +115,26 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
         };
         store.append(from, message);
         emit('chat', message);
+        break;
+      }
+      // A peer typing into a shared agent's own thread rather than using @name.
+      // Every gate the @name path applies is re-applied inside routeDirect.
+      case 'agent-chat': {
+        if (agentHub) agentHub.routeDirect(from, msg.agentId, msg.text);
+        break;
+      }
+      // An agent owned by another peer is offering, or retracting, itself.
+      case 'agent-advert':
+        if (remoteAgents) remoteAgents.adopt(from, msg);
+        break;
+      case 'agent-withdraw':
+        if (remoteAgents) remoteAgents.drop(from, msg.agentId);
+        break;
+      // The answer to something we asked a remote agent. It is filed under that
+      // agent's thread, not under the chat with the peer who hosts it.
+      case 'agent-reply': {
+        const stored = remoteAgents.receive(from, msg);
+        if (stored) emit('chat', stored);
         break;
       }
       case 'typing':
@@ -161,9 +213,23 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   // `hasSecret` boolean — a key that has been entered never comes back out.
   ipcMain.handle('lanchat:listAgents', () => agentHub.list());
 
+  // `ok` reports whether the record was written; `probe` reports whether the
+  // agent actually answered. They are deliberately separate — a connector can
+  // save cleanly and still be unreachable, and the UI needs to tell them apart.
   ipcMain.handle('lanchat:addAgent', async (_e, draft) => {
     try {
-      return { ok: true, agent: await agentHub.add(draft) };
+      const { agent, probe } = await agentHub.add(draft);
+      return { ok: true, agent, probe };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('lanchat:updateAgent', async (_e, { id, patch }) => {
+    try {
+      const result = await agentHub.update(id, patch);
+      if (!result) return { ok: false, error: 'No such agent.' };
+      return { ok: true, agent: result.agent, probe: result.probe };
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -186,6 +252,19 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     agentHub.setAllowedPeers(id, allowedPeers)
   );
 
+  // Reach and discoverability. Deliberately separate from setAgentPeers so that
+  // switching network-wide off leaves the allowlist untouched and immediately
+  // governing again — the grant is narrowed, never discarded.
+  ipcMain.handle('lanchat:setAgentSharing', async (_e, { id, networkWide, directChat }) => {
+    try {
+      const agent = await agentHub.setSharing(id, { networkWide, directChat });
+      if (!agent) return { ok: false, error: 'No such agent.' };
+      return { ok: true, agent };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
   ipcMain.handle('lanchat:testAgent', (_e, { id }) => agentHub.test(id));
 
   ipcMain.handle('lanchat:answerAgentApproval', (_e, { agentId, runId, choice }) =>
@@ -204,6 +283,18 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   ipcMain.handle('lanchat:getHistory', (_e, peerId) => store.read(peerId));
 
   ipcMain.handle('lanchat:sendChat', (_e, { peerId, text }) => {
+    // Talking to an agent somebody else shared: the frame goes to its owner, and
+    // our copy is filed under the agent's thread rather than under the chat with
+    // them.
+    const remote = remoteAgents.resolveThread(peerId);
+    if (remote) return remoteAgents.send(remote.ownerPeerId, remote.entry, text);
+    // `@Hermes …` typed in the chat with the agent's owner is the same
+    // conversation reached a different way, so it goes to the same place. This
+    // is what makes the agent's thread appear without it having to be shared for
+    // direct chat.
+    const mention = remoteAgents.matchMention(peerId, text);
+    if (mention && mention.text) return remoteAgents.send(peerId, mention.entry, mention.text);
+
     const message = {
       id: crypto.randomUUID(),
       peerId,
@@ -365,7 +456,8 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   async function sendFiles(peerId, paths) {
     const sent = [];
     // Agents are text-only participants — there is no endpoint to upload to.
-    if (agentHub && agentHub.isAgent(peerId)) {
+    // True of a remotely-shared agent as much as a local one.
+    if ((agentHub && agentHub.isAgent(peerId)) || remoteAgents.isRemoteAgentId(peerId)) {
       emit('toast', { level: 'error', text: 'Agents cannot receive files.' });
       return { sent };
     }

@@ -15,9 +15,11 @@ contextBridge.exposeInMainWorld('lanchat', {
   // response redacts them to a `hasSecret` boolean.
   listAgents: () => invoke('lanchat:listAgents'),
   addAgent: (draft) => invoke('lanchat:addAgent', draft),
+  updateAgent: (id, patch) => invoke('lanchat:updateAgent', { id, patch }),
   removeAgent: (id) => invoke('lanchat:removeAgent', { id }),
   setAgentEnabled: (id, enabled) => invoke('lanchat:setAgentEnabled', { id, enabled }),
   setAgentPeers: (id, allowedPeers) => invoke('lanchat:setAgentPeers', { id, allowedPeers }),
+  setAgentSharing: (id, patch) => invoke('lanchat:setAgentSharing', { id, ...patch }),
   testAgent: (id) => invoke('lanchat:testAgent', { id }),
   answerAgentApproval: (agentId, runId, choice) =>
     invoke('lanchat:answerAgentApproval', { agentId, runId, choice }),

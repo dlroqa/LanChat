@@ -15,6 +15,9 @@ const KINDS = [
 ];
 
 const BLANK = {
+  id: null, // set once the record exists — the form doubles as the edit form
+  created: false, // this form session created the record, so Discard may undo it
+  hasSecret: false,
   name: '',
   kind: 'http',
   config: { baseUrl: 'http://127.0.0.1:8642', model: '', command: 'hermes', args: '', cwd: '', host: '', user: '', identityFile: '', port: '', remoteCommand: 'hermes' },
@@ -22,6 +25,27 @@ const BLANK = {
   secretValue: '',
   secretEnv: '',
 };
+
+// Inverse of buildPayload: turns a stored agent back into form state. The key
+// is deliberately absent — publicList never returns it — so the field starts
+// empty and an untouched field means "keep what is stored".
+function draftFrom(agent) {
+  const c = agent.config || {};
+  return {
+    ...BLANK,
+    id: agent.id,
+    hasSecret: agent.hasSecret,
+    name: agent.name,
+    kind: agent.kind,
+    config: {
+      ...BLANK.config,
+      ...c,
+      args: Array.isArray(c.args) ? c.args.join(' ') : c.args || '',
+    },
+    secretMode: agent.secretMode === 'env' ? 'env' : 'sealed',
+    secretEnv: agent.secretEnv || '',
+  };
+}
 
 export default function AgentSection({ peers = [] }) {
   const [agents, setAgents] = useState([]);
@@ -59,20 +83,53 @@ export default function AgentSection({ peers = [] }) {
           : d.secretValue
             ? { mode: 'sealed', value: d.secretValue }
             : { mode: 'none' };
-    return { name: d.name, kind: d.kind, config, secret };
+    const payload = { name: d.name, kind: d.kind, config, secret };
+    // Editing an HTTP agent that already has a sealed key, without typing a new
+    // one, must not wipe it. Omitting `secret` entirely is what tells the
+    // registry to leave the stored key alone.
+    if (d.id && d.kind === 'http' && d.secretMode === 'sealed' && !d.secretValue && d.hasSecret) {
+      delete payload.secret;
+    }
+    return payload;
   }
 
-  async function add() {
+  async function save() {
     setBusy(true);
     setResult(null);
-    const res = await window.lanchat.addAgent(buildPayload(draft));
+    const payload = buildPayload(draft);
+    const res = draft.id
+      ? await window.lanchat.updateAgent(draft.id, payload)
+      : await window.lanchat.addAgent(payload);
     setBusy(false);
     if (!res.ok) {
       setResult({ ok: false, text: res.error });
       return;
     }
     setAgents(await window.lanchat.listAgents());
+    // Saved is not the same as reachable. If it did not answer, stay open as an
+    // edit form for the record that now exists, so the address can be corrected
+    // in place without re-entering the key.
+    if (res.probe && res.probe.ok === false) {
+      setDraft((d) => ({
+        ...d,
+        id: res.agent.id,
+        created: d.created || !d.id,
+        hasSecret: res.agent.hasSecret,
+        secretValue: '',
+      }));
+      setResult({ ok: false, text: res.probe.detail });
+      return;
+    }
     setDraft(null);
+  }
+
+  // Only offered for a record this form session just created, so it can be
+  // undone cleanly. Editing an agent that already existed never deletes it.
+  async function discard() {
+    if (draft.id) await window.lanchat.removeAgent(draft.id);
+    setAgents(await window.lanchat.listAgents());
+    setDraft(null);
+    setResult(null);
   }
 
   async function toggle(agent) {
@@ -96,8 +153,11 @@ export default function AgentSection({ peers = [] }) {
     setResult({ id: agent.id, ok: res.ok, text: res.detail });
   }
 
-  async function savePeers(agent, allowed) {
+  async function savePeers(agent, allowed, sharing) {
+    // Reach and the allowlist are stored separately on purpose: switching
+    // network-wide off must leave the ticked list intact and governing again.
     await window.lanchat.setAgentPeers(agent.id, allowed);
+    await window.lanchat.setAgentSharing(agent.id, sharing);
     setAgents(await window.lanchat.listAgents());
     setEditingPeers(null);
   }
@@ -119,11 +179,19 @@ export default function AgentSection({ peers = [] }) {
               <div className="agent-name">
                 {agent.name} <span className="tag">{agent.kind}</span>
                 {!agent.enabled && <span className="tag">off</span>}
+                {/* The widest grant in the app must never be a silent state. */}
+                {agent.networkWide && (
+                  <span className="tag warn" title="Anyone on your network can message this agent">
+                    network
+                  </span>
+                )}
               </div>
               <div className="hint">
-                {agent.allowedPeers.length
-                  ? `${agent.allowedPeers.length} peer${agent.allowedPeers.length === 1 ? '' : 's'} may message it`
-                  : 'Only you can message it'}
+                {agent.networkWide
+                  ? 'Anyone on the network may message it'
+                  : agent.allowedPeers.length
+                    ? `${agent.allowedPeers.length} peer${agent.allowedPeers.length === 1 ? '' : 's'} may message it`
+                    : 'Only you can message it'}
               </div>
             </div>
           </div>
@@ -136,6 +204,9 @@ export default function AgentSection({ peers = [] }) {
             />
             <button className="btn" onClick={() => test(agent)}>
               Test
+            </button>
+            <button className="btn" onClick={() => { setResult(null); setDraft(draftFrom(agent)); }}>
+              Edit
             </button>
             <button className="btn" onClick={() => setEditingPeers(agent)}>
               Peers…
@@ -155,7 +226,7 @@ export default function AgentSection({ peers = [] }) {
           agent={editingPeers}
           peers={peers}
           onCancel={() => setEditingPeers(null)}
-          onSave={(allowed) => savePeers(editingPeers, allowed)}
+          onSave={(allowed, sharing) => savePeers(editingPeers, allowed, sharing)}
         />
       )}
 
@@ -214,12 +285,13 @@ export default function AgentSection({ peers = [] }) {
                       type="password"
                       value={draft.secretValue}
                       autoComplete="off"
-                      placeholder="Paste the key"
+                      placeholder={draft.hasSecret ? 'Leave blank to keep the stored key' : 'Paste the key'}
                       onChange={(e) => setDraft((d) => ({ ...d, secretValue: e.target.value }))}
                     />
                     <div className="hint">
-                      Encrypted with your operating system's keychain. It is never shown again and never
-                      leaves this device.
+                      {draft.hasSecret
+                        ? 'A key is already stored for this agent. Leave this blank to keep it, or paste a new one to replace it.'
+                        : "Encrypted with your operating system's keychain. It is never shown again and never leaves this device."}
                     </div>
                   </>
                 ) : (
@@ -275,12 +347,18 @@ export default function AgentSection({ peers = [] }) {
           {result && result.ok === false && !result.id && <div className="agent-result bad">{result.text}</div>}
 
           <div className="row" style={{ gap: 8, marginTop: 12 }}>
-            <button className="btn primary" disabled={!draft.name || busy} onClick={add}>
-              {busy ? 'Connecting…' : 'Connect'}
+            <button className="btn primary" disabled={!draft.name || busy} onClick={save}>
+              {busy ? 'Connecting…' : draft.id ? 'Save changes' : 'Connect'}
             </button>
-            <button className="btn ghost" onClick={() => { setDraft(null); setResult(null); }}>
-              Cancel
-            </button>
+            {draft.created ? (
+              <button className="btn ghost" onClick={discard}>
+                Discard
+              </button>
+            ) : (
+              <button className="btn ghost" onClick={() => { setDraft(null); setResult(null); }}>
+                {draft.id ? 'Close' : 'Cancel'}
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -302,32 +380,93 @@ function Field({ label, value, onChange, placeholder, hint }) {
 // default: an agent runs commands on this machine, so reach is opt-in per peer.
 function PeerPicker({ agent, peers, onSave, onCancel }) {
   const [allowed, setAllowed] = useState(agent.allowedPeers || []);
+  const [networkWide, setNetworkWide] = useState(agent.networkWide === true);
+  const [directChat, setDirectChat] = useState(agent.directChat === true);
   const humans = peers.filter((p) => p.kind !== 'agent');
+
+  // Widening reach to everyone is the broadest grant in the app, so it is the
+  // one thing here that asks before it takes effect. Narrowing never asks.
+  function toggleNetworkWide() {
+    if (networkWide) {
+      setNetworkWide(false);
+      return;
+    }
+    const ok = window.confirm(
+      `Let anyone on your network message “${agent.name}”?\n\n` +
+        'Every LanChat user who can reach this machine will be able to ask it to do things, ' +
+        'not just the people you have ticked. Your ticked list is kept and takes over again ' +
+        'the moment you switch this back off.\n\n' +
+        'You still approve every tool call it wants to run — that is never handed to a peer.'
+    );
+    if (ok) setNetworkWide(true);
+  }
 
   return (
     <div className="agent-form">
       <div className="field">
         <label>Who may message {agent.name}?</label>
         <div className="hint">
-          Anyone you tick can ask this agent to do things by writing <b>@{agent.name}</b> to you. Only you
-          can approve a tool call it wants to run — that is never delegated to a peer.
+          Anyone with access can ask this agent to do things. Only you can approve a tool call it wants
+          to run — that is never delegated to a peer. Their conversation with it stays in its own thread,
+          so your chat with them stays clean.
         </div>
       </div>
-      {humans.length === 0 && <div className="hint">No peers known yet.</div>}
-      {humans.map((p) => (
-        <label key={p.id} className="row" style={{ gap: 8, padding: '4px 0', cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={allowed.includes(p.id)}
-            onChange={(e) =>
-              setAllowed((list) => (e.target.checked ? [...list, p.id] : list.filter((id) => id !== p.id)))
-            }
-          />
-          <span>{p.name || p.hostname || p.id}</span>
-        </label>
-      ))}
+
+      <label className="agent-share-row" onClick={(e) => e.preventDefault()}>
+        <button
+          type="button"
+          className={`toggle ${networkWide ? 'on' : ''}`}
+          onClick={toggleNetworkWide}
+          aria-pressed={networkWide}
+          aria-label="Share with everyone on the network"
+        />
+        <div>
+          <div className="agent-share-title">Anyone on the network</div>
+          <div className="hint">
+            {networkWide
+              ? 'Shared with every peer on your network. The list below is ignored until you switch this off.'
+              : 'Off — only the people you tick below can reach it.'}
+          </div>
+        </div>
+      </label>
+
+      <label className="agent-share-row" onClick={(e) => e.preventDefault()}>
+        <button
+          type="button"
+          className={`toggle ${directChat ? 'on' : ''}`}
+          onClick={() => setDirectChat((v) => !v)}
+          aria-pressed={directChat}
+          aria-label="Show in their contact list"
+        />
+        <div>
+          <div className="agent-share-title">Show in their contact list</div>
+          <div className="hint">
+            {directChat
+              ? 'It appears as a contact for anyone who can reach it.'
+              : `Off — it appears for them only after they first write @${agent.name}.`}
+          </div>
+        </div>
+      </label>
+
+      <div className={`agent-peer-list ${networkWide ? 'muted' : ''}`}>
+        {humans.length === 0 && <div className="hint">No peers known yet.</div>}
+        {humans.map((p) => (
+          <label key={p.id} className="row" style={{ gap: 8, padding: '4px 0', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={allowed.includes(p.id)}
+              disabled={networkWide}
+              onChange={(e) =>
+                setAllowed((list) => (e.target.checked ? [...list, p.id] : list.filter((id) => id !== p.id)))
+              }
+            />
+            <span>{p.name || p.hostname || p.id}</span>
+          </label>
+        ))}
+      </div>
+
       <div className="row" style={{ gap: 8, marginTop: 12 }}>
-        <button className="btn primary" onClick={() => onSave(allowed)}>
+        <button className="btn primary" onClick={() => onSave(allowed, { networkWide, directChat })}>
           Save
         </button>
         <button className="btn ghost" onClick={onCancel}>

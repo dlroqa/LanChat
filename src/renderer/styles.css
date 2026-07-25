@@ -296,6 +296,13 @@ input:focus-visible {
   vertical-align: middle;
 }
 
+/* For a state the user should notice at a glance without it reading as an
+   error — currently "this agent is shared with the whole network". */
+.tag.warn {
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
+}
+
 .unread-dot {
   min-width: 18px;
   height: 18px;
@@ -1562,6 +1569,8 @@ kbd {
 .agent-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
@@ -1576,6 +1585,38 @@ kbd {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-2);
+}
+
+/* Sharing controls. A toggle and its explanation read as one unit, so the copy
+   under each one carries the current state rather than a static description. */
+.agent-share-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.agent-share-row .toggle {
+  margin-top: 2px;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+
+.agent-share-title {
+  font-weight: 500;
+  font-size: 13px;
+}
+
+/* Dimmed rather than hidden while network-wide is on: the list still governs
+   the moment it is switched back off, so it must stay legible. */
+.agent-peer-list {
+  padding-top: 8px;
+}
+
+.agent-peer-list.muted {
+  opacity: 0.45;
 }
 
 .agent-result {
