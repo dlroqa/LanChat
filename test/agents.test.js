@@ -942,7 +942,7 @@ test('a remote asker is told when the agent starts and stops working', async () 
   );
 });
 
-test('two idle peers do not hand the turn back and forth forever', async () => {
+test('two idle peers keep their places and stop being told about a turn neither is using', async () => {
   const realNow = Date.now;
   let t = realNow();
   Date.now = () => t;
@@ -955,6 +955,7 @@ test('two idle peers do not hand the turn back and forth forever', async () => {
       frames.push({ peerId, obj });
       return true;
     };
+    const said = () => frames.filter((f) => f.obj.type === 'agent-reply');
     joinPeer(hub, 'alice');
     joinPeer(hub, 'bob');
 
@@ -967,32 +968,50 @@ test('two idle peers do not hand the turn back and forth forever', async () => {
     t += 61000;
     agentHub.releaseIdleTurns();
     assert.equal(agentHub.standingFor(agent.id, 'bob').state, 'active');
-    // She used a query this turn, so she keeps her place.
-    assert.equal(agentHub.standingFor(agent.id, 'alice').state, 'waiting');
+    assert.equal(agentHub.standingFor(agent.id, 'alice').state, 'waiting', 'she goes to the back');
 
-    // Bob then sits out his entire turn without asking anything at all.
+    // Bob then sits out his entire turn without asking anything at all. The turn
+    // he never wanted must not cost him the place he queued for.
     t += 61000;
     agentHub.releaseIdleTurns();
     assert.equal(agentHub.standingFor(agent.id, 'alice').state, 'active', 'the turn moves on');
     assert.equal(
       agentHub.standingFor(agent.id, 'bob').state,
-      'idle',
-      'somebody who never used their turn drops out rather than queueing again'
+      'waiting',
+      'and he keeps his place rather than dropping out of the queue'
     );
 
-    // With the queue empty there is nobody to be fair to, so the bouncing stops
-    // instead of running forever and messaging both peers on every bounce.
+    // From here neither is using the agent, so neither is told about it again —
+    // the turn goes on circulating, in silence.
     frames.length = 0;
     for (let i = 0; i < 5; i += 1) {
       t += 61000;
       agentHub.releaseIdleTurns();
+      assert.equal(
+        agentHub.standingFor(agent.id, i % 2 === 0 ? 'bob' : 'alice').state,
+        'active',
+        'the turn is still genuinely rotating between them'
+      );
     }
-    assert.deepEqual(frames, [], 'no further handovers, and no messages to anyone');
+    assert.deepEqual(said(), [], 'and neither peer is messaged on any of those handovers');
+    assert.ok(
+      frames.some((f) => f.obj.type === 'agent-queue'),
+      'their standing is still published, so the roster stays accurate'
+    );
 
-    // Asking again rejoins the queue — dropping out costs nothing.
+    // Coming back makes them audible again: Bob asks, sits out one more turn,
+    // and is told when it comes round to him.
     t += 4000;
     await ask(agentHub, 'bob', 1, log);
-    assert.notEqual(agentHub.standingFor(agent.id, 'bob').state, 'idle');
+    frames.length = 0;
+    t += 61000;
+    agentHub.releaseIdleTurns(); // Bob's turn passes to Alice
+    t += 61000;
+    agentHub.releaseIdleTurns(); // and back to Bob, who used it last time round
+    assert.ok(
+      said().some((f) => f.peerId === 'bob' && /Your turn/.test(f.obj.text)),
+      'a peer who has used the agent is told when the turn reaches them'
+    );
   } finally {
     Date.now = realNow;
   }

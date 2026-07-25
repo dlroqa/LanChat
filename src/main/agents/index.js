@@ -60,6 +60,13 @@ const PEER_THROTTLE_TTL_MS = 60000;
 // A holder who stops mid-turn must not block everyone, so an idle turn is
 // released once someone else is waiting. With nobody waiting there is nothing to
 // be fair about, so a lone peer is simply granted a fresh turn.
+//
+// A turn is passed on, never taken away: whoever had it rejoins the back of the
+// queue whether or not they used it, so nobody loses a place they waited for.
+// What that costs is chatter — two peers who are both away would otherwise be
+// told about a turn neither wants, once a minute, forever — so a peer who lets a
+// whole turn lapse stops being *told* about the next one. They keep the place;
+// asking anything makes them audible again.
 const TURN_QUOTA = 5;
 const TURN_IDLE_MS = 60000;
 // Losing a turn should never be a surprise, so the holder is told before it
@@ -93,12 +100,16 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
 
   // ---- fair-share turns ----
 
-  // agentId -> { holder, used, queue: [peerId], last, warned }
+  // agentId -> { holder, used, queue: [peerId], last, warned, quiet }
+  //
+  // `quiet` holds peers who were handed a turn and let it lapse without asking
+  // anything. It decides only whether to *speak* to them, never whether they get
+  // a turn — their place in the queue is untouched.
   const turns = new Map();
 
   function turnState(agentId) {
     if (!turns.has(agentId)) {
-      turns.set(agentId, { holder: null, used: 0, queue: [], last: 0, warned: false });
+      turns.set(agentId, { holder: null, used: 0, queue: [], last: 0, warned: false, quiet: new Set() });
     }
     return turns.get(agentId);
   }
@@ -142,6 +153,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
       state.used += 1;
       state.last = now;
       state.warned = false; // they are active again, so the countdown resets
+      state.quiet.delete(peerId); // and worth talking to again
       return { ok: true, rotated: false };
     }
 
@@ -206,7 +218,10 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     passTurn(state);
     if (requeue && previous && !state.queue.includes(previous)) state.queue.push(previous);
     publishStanding(record);
-    if (state.holder) {
+    // Their standing has already gone out either way — the roster card, the
+    // position and the countdown are all still accurate for a silenced peer. Only
+    // the chat line is withheld, because they have shown they are not reading it.
+    if (state.holder && !state.quiet.has(state.holder)) {
       reply(record.id, `Your turn — you have ${TURN_QUOTA} queries.`, state.holder);
     }
   }
@@ -236,6 +251,9 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
 
       const before = state.queue.length;
       state.queue = state.queue.filter((id) => hub.isConnected(id));
+      // Nothing left to stay quiet about once they are gone, and the set must not
+      // grow without bound over a long session.
+      for (const id of state.quiet) if (!hub.isConnected(id)) state.quiet.delete(id);
       if (state.holder && !hub.isConnected(state.holder)) {
         // Gone for good as far as this turn is concerned, so not requeued.
         handOver(record, { requeue: false });
@@ -249,12 +267,12 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
       const idle = now - state.last;
 
       if (idle > TURN_IDLE_MS) {
-        // Only somebody who actually used their turn keeps a place in line. A
-        // peer who sat out a whole turn drops out instead — otherwise two idle
-        // peers hand the turn back and forth forever, and every bounce sends
-        // both of them a "your turn" and an idle warning they never asked for.
-        // Dropping out costs nothing: asking anything rejoins the queue.
-        handOver(record, { requeue: state.used > 0 });
+        // Everybody keeps their place — losing a turn you were handed while away
+        // must never cost you the one you queued for. A peer who sat out a whole
+        // turn simply stops being told about the next one, so two idle peers
+        // circulate it in silence rather than messaging each other every minute.
+        if (state.used === 0 && state.holder) state.quiet.add(state.holder);
+        handOver(record, { requeue: true });
         continue;
       }
 
@@ -266,14 +284,19 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
         // dropped or their app started mid-countdown.
         if (!state.warned) {
           state.warned = true;
-          const seconds = Math.max(1, Math.round((TURN_IDLE_MS - idle) / 1000));
-          const waiting = state.queue.length;
-          reply(
-            agentId,
-            `You have been idle — your turn passes to the next person in about ${seconds}s ` +
-              `(${waiting} waiting). Ask something to keep it.`,
-            state.holder
-          );
+          // Warning somebody who already let a turn go by is telling them a
+          // second time what they did not act on the first. The countdown below
+          // still goes out, so it is visible if they do come back.
+          if (!state.quiet.has(state.holder)) {
+            const seconds = Math.max(1, Math.round((TURN_IDLE_MS - idle) / 1000));
+            const waiting = state.queue.length;
+            reply(
+              agentId,
+              `You have been idle — your turn passes to the next person in about ${seconds}s ` +
+                `(${waiting} waiting). Ask something to keep it.`,
+              state.holder
+            );
+          }
         }
         publishStanding(record);
       }

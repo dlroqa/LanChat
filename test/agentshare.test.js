@@ -437,6 +437,72 @@ test('a pending handover counts down on both machines at once', async (t) => {
   await waitFor(() => C.hub.identities.get(cRemote)?.queueExpiring === false, 5000, 'the waiter to stop');
 });
 
+// The turn is passed on, never taken away. A peer who is handed a turn while
+// away from the keyboard and lets it lapse must still hold the place they
+// queued for — losing it is what made turn taking feel arbitrary. Proven over
+// real sockets because the standing has to survive the wire to be believed.
+test('a peer who lets an inherited turn lapse keeps their place in the queue', async (t) => {
+  const A = makeNode('owner9', await freePort());
+  const B = makeNode('user9', await freePort());
+  const C = makeNode('away9', await freePort());
+  await A.server.start();
+  await B.server.start();
+  await C.server.start();
+  t.after(() => {
+    for (const n of [A, B, C]) {
+      n.hub.close();
+      n.server.stop();
+    }
+  });
+
+  const idA = A.getIdentity().id;
+  const { agent } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  await A.agentHub.setSharing(agent.id, { networkWide: true, directChat: true });
+  await connect(A, B);
+  await connect(A, C);
+
+  const bRemote = await waitFor(() => remoteIdOn(B, idA, agent.id), 5000, 'B to see the agent');
+  const cRemote = await waitFor(() => remoteIdOn(C, idA, agent.id), 5000, 'C to see the agent');
+
+  B.call('lanchat:sendChat', { peerId: bRemote, text: 'mine' }); // B takes the turn
+  await waitFor(() => A.log.length === 1, 5000, 'B to be served');
+  C.call('lanchat:sendChat', { peerId: cRemote, text: 'me next' }); // C queues behind
+  await waitFor(() => C.hub.identities.get(cRemote)?.queueState === 'waiting', 5000, 'C to be queued');
+
+  // Sweeps past the idle timeout, with real time restored each time so the
+  // sockets and their timers are untouched.
+  const realNow = Date.now;
+  const sweepAfter = (ms) => {
+    Date.now = () => realNow() + ms;
+    try {
+      A.agentHub.releaseIdleTurns();
+    } finally {
+      Date.now = realNow;
+    }
+  };
+
+  // B walks away, so C inherits a turn it never asked for.
+  sweepAfter(61000);
+  await waitFor(() => C.hub.identities.get(cRemote)?.queueState === 'active', 5000, 'C to inherit');
+
+  // C is away too and lets the whole turn go by unused.
+  sweepAfter(122000);
+  await waitFor(() => B.hub.identities.get(bRemote)?.queueState === 'active', 5000, 'the turn to move on');
+
+  const cCard = C.hub.identities.get(cRemote);
+  assert.equal(cCard.queueState, 'waiting', 'C did not lose the place it queued for');
+  assert.equal(cCard.queuePosition, 1, 'and is still next in line');
+
+  // Nor is C nagged about the turn it is plainly not using: one "your turn" when
+  // it first came round, and nothing on the handovers after that.
+  const told = () =>
+    C.store.read(cRemote).filter((m) => typeof m.text === 'string' && /Your turn/.test(m.text));
+  const beforeSweeps = told().length;
+  for (let i = 3; i < 8; i += 1) sweepAfter(61000 * i);
+  await new Promise((r) => setTimeout(r, 300)); // let anything sent cross the wire
+  assert.equal(told().length, beforeSweeps, 'no repeated turn notices while nobody is asking');
+});
+
 test('deleting a chat history removes it from disk, agent threads included', async (t) => {
   const A = makeNode('owner5', await freePort());
   const B = makeNode('peer5', await freePort());
