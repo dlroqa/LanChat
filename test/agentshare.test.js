@@ -357,6 +357,70 @@ test('a remote agent reports what it is doing, and is never pinged for latency',
   assert.equal(roster.online, true, 'it is reachable');
 });
 
+test('a pending handover counts down on both machines at once', async (t) => {
+  const A = makeNode('owner8', 47447);
+  const B = makeNode('holder', 47448);
+  const C = makeNode('nextup', 47449);
+  await A.server.start();
+  await B.server.start();
+  await C.server.start();
+  t.after(() => {
+    for (const n of [A, B, C]) {
+      n.hub.close();
+      n.server.stop();
+    }
+  });
+
+  const idA = A.getIdentity().id;
+  const { agent } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  await A.agentHub.setSharing(agent.id, { networkWide: true, directChat: true });
+  await connect(A, B);
+  await connect(A, C);
+
+  const bRemote = await waitFor(() => remoteIdOn(B, idA, agent.id), 5000, 'B to see the agent');
+  const cRemote = await waitFor(() => remoteIdOn(C, idA, agent.id), 5000, 'C to see the agent');
+
+  B.call('lanchat:sendChat', { peerId: bRemote, text: 'mine' }); // B takes the turn
+  await waitFor(() => A.log.length === 1, 5000, 'B to be served');
+  C.call('lanchat:sendChat', { peerId: cRemote, text: 'me next' }); // C queues behind
+  await waitFor(() => C.hub.identities.get(cRemote)?.queueState === 'waiting', 5000, 'C to be queued');
+
+  // Jump into the warning window and run one sweep. Real time is restored
+  // immediately, so the sockets and their timers are untouched.
+  const realNow = Date.now;
+  Date.now = () => realNow() + 45000;
+  try {
+    A.agentHub.releaseIdleTurns();
+  } finally {
+    Date.now = realNow;
+  }
+
+  await waitFor(() => B.hub.identities.get(bRemote)?.queueExpiring, 5000, 'the holder to start counting');
+  await waitFor(() => C.hub.identities.get(cRemote)?.queueExpiring, 5000, 'the next peer to start counting');
+
+  const holder = B.hub.identities.get(bRemote);
+  const next = C.hub.identities.get(cRemote);
+
+  // Both machines are counting, to the same deadline — the point of sending a
+  // duration rather than a timestamp is that neither depends on the other's
+  // clock being right.
+  assert.equal(holder.queueState, 'active');
+  assert.equal(next.queueState, 'waiting');
+  assert.equal(next.queuePosition, 1);
+  assert.equal(
+    next.queueExpiresInSec,
+    holder.queueExpiresInSec,
+    'the same number of seconds on both sides'
+  );
+  assert.ok(holder.queueExpiresInSec > 0 && holder.queueExpiresInSec <= 20);
+
+  // Using the turn calls the whole thing off, for both of them.
+  await new Promise((r) => setTimeout(r, 3100)); // clear the anti-flood window
+  B.call('lanchat:sendChat', { peerId: bRemote, text: 'still here' });
+  await waitFor(() => B.hub.identities.get(bRemote)?.queueExpiring === false, 5000, 'the holder to stop');
+  await waitFor(() => C.hub.identities.get(cRemote)?.queueExpiring === false, 5000, 'the waiter to stop');
+});
+
 test('deleting a chat history removes it from disk, agent threads included', async (t) => {
   const A = makeNode('owner5', 47441);
   const B = makeNode('peer5', 47442);

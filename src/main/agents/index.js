@@ -249,17 +249,23 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
         continue;
       }
 
-      // One warning per turn, so a long pause does not become a stream of nags.
-      if (idle > TURN_WARN_MS && !state.warned) {
-        state.warned = true;
-        const seconds = Math.max(1, Math.round((TURN_IDLE_MS - idle) / 1000));
-        const waiting = state.queue.length;
-        reply(
-          agentId,
-          `You have been idle — your turn passes to the next person in about ${seconds}s ` +
-            `(${waiting} waiting). Ask something to keep it.`,
-          state.holder
-        );
+      if (idle > TURN_WARN_MS) {
+        // One *message* per turn, so a long pause does not become a stream of
+        // nags — but the standing is re-sent on every sweep while the clock is
+        // running. That keeps the holder losing the turn and the peer gaining it
+        // ticking to the same deadline, and lets either recover if a frame was
+        // dropped or their app started mid-countdown.
+        if (!state.warned) {
+          state.warned = true;
+          const seconds = Math.max(1, Math.round((TURN_IDLE_MS - idle) / 1000));
+          const waiting = state.queue.length;
+          reply(
+            agentId,
+            `You have been idle — your turn passes to the next person in about ${seconds}s ` +
+              `(${waiting} waiting). Ask something to keep it.`,
+            state.holder
+          );
+        }
         publishStanding(record);
       }
     }

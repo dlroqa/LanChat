@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import Avatar from './Avatar.jsx';
 import { useCountdown } from '../lib/useCountdown.js';
+import { useAgentPhrase } from '../lib/agentPhrase.js';
 
 // Live connection quality for the selected peer, drawn from real round-trip
 // measurements taken over the peer WebSocket (see src/main/linkStats.js) — the
@@ -19,7 +20,7 @@ const QUALITY = {
   offline: { label: 'Offline', color: 'var(--fg-faint)', bars: 0 },
 };
 
-export default function ConnectionPanel({ peer, stats, agentStatus }) {
+export default function ConnectionPanel({ peer, stats, agentStatus, awaiting }) {
   if (!peer) {
     return (
       <div className="panel-empty">
@@ -34,7 +35,7 @@ export default function ConnectionPanel({ peer, stats, agentStatus }) {
     );
   }
 
-  if (peer.kind === 'agent') return <AgentPanel peer={peer} status={agentStatus} />;
+  if (peer.kind === 'agent') return <AgentPanel peer={peer} status={agentStatus} awaiting={awaiting} />;
 
   const q = QUALITY[stats?.quality || (peer.online ? 'good' : 'offline')];
   const samples = stats?.samples || [];
@@ -69,30 +70,18 @@ export default function ConnectionPanel({ peer, stats, agentStatus }) {
   );
 }
 
-// Phrases cycled only while the agent is genuinely working. They are flavour on
-// top of a real state, never a substitute for one: if the transport reports what
-// it is actually doing ("Running bash…"), that is shown instead.
-const THINKING = ['Thinking', 'Reasoning', 'Working it out', 'Considering', 'Piecing it together', 'Figuring it out'];
-
-function AgentPanel({ peer, status }) {
-  // A local agent's state arrives on the bus; a shared one's is relayed by its
-  // owner onto the roster card. Either way it is the agent's real state.
-  const busy = status?.status === 'working' || peer.agentBusy === true;
+function AgentPanel({ peer, status, awaiting }) {
+  // Three sources, all of them real: the bus for an agent hosted here, the
+  // owner's relay for a shared one, and simply having asked and not yet heard
+  // back. The last is what keeps the panel honest when a relay frame is slow or
+  // the agent belongs to somebody else.
+  const busy = status?.status === 'working' || peer.agentBusy === true || awaiting === true;
   const detail = status?.detail || peer.agentDetail || null;
   const errored = status?.status === 'error';
 
-  const [phrase, setPhrase] = useState(THINKING[0]);
-  useEffect(() => {
-    if (!busy || detail) return undefined;
-    setPhrase(THINKING[Math.floor(Math.random() * THINKING.length)]);
-    const t = setInterval(() => {
-      setPhrase((p) => {
-        const next = THINKING.filter((w) => w !== p);
-        return next[Math.floor(Math.random() * next.length)];
-      });
-    }, 2600);
-    return () => clearInterval(t);
-  }, [busy, detail]);
+  // Shared with the chat indicator, and derived from the clock, so both show the
+  // same word at the same moment rather than drifting apart.
+  const phrase = useAgentPhrase(busy && !detail);
 
   const counting = peer.queueExpiring === true && peer.queueExpiresInSec > 0;
   const secondsLeft = useCountdown(peer.queueExpiresInSec, counting);

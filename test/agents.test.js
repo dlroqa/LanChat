@@ -801,11 +801,19 @@ test('the holder is warned before losing the turn, and asking again keeps it', a
     assert.equal(agentHub.standingFor(agent.id, 'alice').state, 'active', 'but still holds it');
     assert.equal(agentHub.standingFor(agent.id, 'alice').expiring, true);
 
-    // Warned once per turn, not on every sweep.
+    // The nag is once per turn, but the countdown keeps being re-sent so both
+    // sides stay locked to the same deadline and can recover a dropped frame.
     frames.length = 0;
     t += 5000;
     agentHub.releaseIdleTurns();
-    assert.equal(frames.length, 0, 'the warning does not repeat');
+    assert.equal(
+      frames.filter((f) => f.obj.type === 'agent-reply').length,
+      0,
+      'the warning message does not repeat'
+    );
+    const refresh = frames.filter((f) => f.peerId === 'alice' && f.obj.type === 'agent-queue');
+    assert.equal(refresh.length, 1, 'but the standing is refreshed');
+    assert.ok(refresh[0].obj.expiresInSec < 20, 'and the clock has moved on');
 
     // Acting on the warning keeps the turn and resets the countdown.
     t += 4000;

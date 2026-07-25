@@ -17,6 +17,7 @@ import GroupCallView from './components/GroupCallView.jsx';
 import GroupInvite from './components/GroupInvite.jsx';
 import NewGroupCallModal from './components/NewGroupCallModal.jsx';
 import { GroupCallManager } from './lib/groupCall.js';
+import { isAgentThread } from './lib/agentPhrase.js';
 
 const api = window.lanchat;
 
@@ -44,6 +45,7 @@ export default function App() {
   const [group, setGroup] = useState({ status: 'idle', participants: [], count: 0 });
   const [agentStatus, setAgentStatus] = useState({}); // agentId -> {status, detail, streaming}
   const [approvals, setApprovals] = useState({}); // agentId -> pending approval request
+  const [awaiting, setAwaiting] = useState({}); // agent thread -> we asked and have not heard back
   const [update, setUpdate] = useState(null); // full modal: download/install flow
   const [updateBanner, setUpdateBanner] = useState(null); // subtle top-centre notice
   const [queued, setQueued] = useState({}); // peerId -> messages waiting to send
@@ -243,6 +245,10 @@ export default function App() {
             setAgentStatus((s) => ({ ...s, [payload.peerId]: { ...s[payload.peerId], streaming: '' } }));
             setApprovals((a) => (a[payload.peerId] ? { ...a, [payload.peerId]: null } : a));
           }
+          // An answer — or a refusal explaining the queue — ends the wait.
+          if (payload.direction === 'in' && isAgentThread(payload.peerId)) {
+            setAwaiting((a) => (a[payload.peerId] ? { ...a, [payload.peerId]: false } : a));
+          }
           if (payload.direction === 'in') {
             const cfg = configRef.current;
             if (!cfg.muteNotifications) {
@@ -259,7 +265,11 @@ export default function App() {
         case 'typing':
           setTyping((t) => ({ ...t, [payload.peerId]: payload.isTyping }));
           clearTimeout(typingTimers.current[payload.peerId]);
-          if (payload.isTyping) {
+          // A person types in bursts and keeps re-sending, so their indicator is
+          // expired if the frames stop. An agent says "working" once and may
+          // then think for a minute, and says "done" explicitly — expiring that
+          // made the indicator vanish seconds into every reply.
+          if (payload.isTyping && !isAgentThread(payload.peerId)) {
             typingTimers.current[payload.peerId] = setTimeout(
               () => setTyping((t) => ({ ...t, [payload.peerId]: false })),
               4000
@@ -425,6 +435,10 @@ export default function App() {
 
   async function sendText(text) {
     if (!selectedId) return;
+    // Asking an agent means waiting on it, and that is knowable here without a
+    // round trip. Relying only on the owner's relay left the far side reading
+    // "Ready" while it was plainly working.
+    if (isAgentThread(selectedId)) setAwaiting((a) => ({ ...a, [selectedId]: true }));
     const msg = await api.sendChat(selectedId, text);
     appendMessage(selectedId, msg);
     // Held locally and retried on reconnect. This machine has to still be
@@ -557,6 +571,7 @@ export default function App() {
           peer={selectedPeer}
           messages={messages[selectedId] || []}
           typing={typing[selectedId]}
+          awaiting={Boolean(awaiting[selectedId])}
           progress={progress}
           approval={approvals[selectedId]}
           agentStream={agentStatus[selectedId]?.streaming}
@@ -615,6 +630,7 @@ export default function App() {
               peer={selectedPeer}
               stats={linkStats[selectedId]}
               agentStatus={agentStatus[selectedId]}
+              awaiting={Boolean(awaiting[selectedId])}
             />
           </>
         )}

@@ -6,6 +6,7 @@ import Composer from './Composer.jsx';
 import AgentApproval from './AgentApproval.jsx';
 import { Phone, Video, Trash, Download } from '../lib/icons.jsx';
 import { useQueueLabel } from './QueueBadge.jsx';
+import { useAgentPhrase } from '../lib/agentPhrase.js';
 import { formatDay, platformLabel } from '../lib/util.js';
 
 const GROUP_WINDOW = 4 * 60 * 1000; // group consecutive messages within 4 min
@@ -14,6 +15,7 @@ export default function ChatPane({
   peer,
   messages,
   typing,
+  awaiting,
   progress,
   previewUrl,
   showAddresses,
@@ -34,11 +36,16 @@ export default function ChatPane({
   const scrollRef = useRef(null);
   // Live while a handover is counting down, so both sides see the same number.
   const queueLabel = useQueueLabel(peer);
+  // An agent thinks rather than types, and it does not send keepalives — so its
+  // indicator is driven by whether we are actually waiting on it.
+  const isAgent = peer?.kind === 'agent';
+  const working = isAgent ? Boolean(typing || awaiting) : Boolean(typing);
+  const phrase = useAgentPhrase(isAgent && working);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, typing]);
+  }, [messages, typing, awaiting]);
 
   if (!peer) {
     return (
@@ -137,9 +144,9 @@ export default function ChatPane({
       </div>
 
       <div className="typing">
-        {typing && (
+        {working && (
           <>
-            {peer.name || 'Peer'} is typing
+            {isAgent ? `${peer.name || 'The agent'} is ${phrase.toLowerCase()}` : `${peer.name || 'Peer'} is typing`}
             {/* Three staggered dots. The container keeps its height whether or
                 not this is showing, so the message list never jumps. */}
             <span className="typing-dots" aria-hidden="true">
