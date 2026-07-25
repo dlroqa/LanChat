@@ -130,6 +130,10 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       case 'agent-withdraw':
         if (remoteAgents) remoteAgents.drop(from, msg.agentId);
         break;
+      // Where we stand in the queue for a shared agent.
+      case 'agent-queue':
+        remoteAgents.setStanding(from, msg);
+        break;
       // The answer to something we asked a remote agent. It is filed under that
       // agent's thread, not under the chat with the peer who hosts it.
       case 'agent-reply': {
@@ -281,6 +285,65 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   }));
 
   ipcMain.handle('lanchat:getHistory', (_e, peerId) => store.read(peerId));
+
+  // Saves a conversation as plain text. Deliberately not JSON: this is for
+  // keeping or sharing a readable record, and the on-disk history is already
+  // JSON for anyone who wants the raw form.
+  ipcMain.handle('lanchat:exportHistory', async (_e, { peerId, name }) => {
+    if (!peerId) return { ok: false };
+    const messages = store.read(peerId);
+    if (!messages.length) return { ok: false, error: 'There is nothing in this conversation yet.' };
+
+    const who = String(name || peerId).replace(/[^\w.\- ]+/g, '_').trim() || 'chat';
+    const stamp = new Date().toISOString().slice(0, 10);
+    const result = await dialog.showSaveDialog(getWindow(), {
+      title: 'Save chat history',
+      defaultPath: path.join(downloadsDir, `LanChat ${who} ${stamp}.txt`),
+      filters: [{ name: 'Text file', extensions: ['txt'] }],
+    });
+    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+
+    const me = getIdentity().name || 'Me';
+    const lines = [
+      `Chat history with ${name || peerId}`,
+      `Exported ${new Date().toLocaleString()} from LanChat`,
+      '',
+    ];
+    let lastDay = '';
+    for (const m of messages) {
+      const when = new Date(m.ts || Date.now());
+      const day = when.toDateString();
+      if (day !== lastDay) {
+        lines.push(`--- ${day} ---`);
+        lastDay = day;
+      }
+      const time = when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      // `askedBy` marks a request a peer made to one of our agents, which would
+      // otherwise be indistinguishable from something we asked ourselves.
+      const speaker = m.direction === 'out' ? me : m.askedBy ? `${name || peerId} (via peer)` : name || peerId;
+      const body =
+        m.kind === 'text' || !m.kind ? m.text : `[${m.kind}]${m.fileName ? ` ${m.fileName}` : ''}`;
+      lines.push(`[${time}] ${speaker}: ${body ?? ''}`);
+    }
+    lines.push('');
+
+    try {
+      fs.writeFileSync(result.filePath, lines.join('\n'), 'utf8');
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+    return { ok: true, path: result.filePath, count: messages.length };
+  });
+
+  // Clears one conversation. Anything still queued for that peer is dropped
+  // too — leaving pending messages behind would resurrect bubbles from a chat
+  // the user just deleted.
+  ipcMain.handle('lanchat:clearHistory', (_e, { peerId }) => {
+    if (!peerId) return { ok: false };
+    const cleared = store.clear(peerId);
+    if (outbox && typeof outbox.clear === 'function') outbox.clear(peerId);
+    return { ok: cleared };
+  });
 
   ipcMain.handle('lanchat:sendChat', (_e, { peerId, text }) => {
     // Talking to an agent somebody else shared: the frame goes to its owner, and

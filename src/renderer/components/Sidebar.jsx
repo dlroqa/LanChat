@@ -112,6 +112,26 @@ export default function Sidebar({
                     agent
                   </span>
                 )}
+                {/* Where this thread stands in the queue for a shared agent, so
+                    waiting your turn is visible rather than looking like the
+                    agent is ignoring you. */}
+                {p.queueState === 'active' && (
+                  <span
+                    className={`tag ${p.queueExpiring ? 'warn' : 'good'}`}
+                    title={
+                      p.queueExpiring
+                        ? `Idle — the turn passes in about ${p.queueExpiresInSec}s unless you ask something`
+                        : `${p.queueRemaining} of ${p.queueQuota} queries left this turn`
+                    }
+                  >
+                    {p.queueExpiring ? `${p.queueExpiresInSec}s left` : `${p.queueRemaining}/${p.queueQuota} left`}
+                  </span>
+                )}
+                {p.queueState === 'waiting' && (
+                  <span className="tag warn" title={`Waiting for a turn — position ${p.queuePosition}`}>
+                    #{p.queuePosition} in line
+                  </span>
+                )}
               </div>
               <div className="sub">
                 {p.kind === 'agent'

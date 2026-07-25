@@ -54,6 +54,19 @@ class MessageStore {
     }
     return list[idx];
   }
+
+  // Deletes a conversation outright. Used by "clear chat history", which is
+  // meant to be exactly as final as it sounds — the file goes, rather than the
+  // messages being hidden while staying on disk.
+  clear(peerId) {
+    try {
+      fs.rmSync(this.fileFor(peerId), { force: true });
+      return true;
+    } catch (err) {
+      console.error('[store] clear failed:', err.message);
+      return false;
+    }
+  }
 }
 
 module.exports = { MessageStore };

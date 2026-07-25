@@ -4,7 +4,7 @@ import Logo from './Logo.jsx';
 import MessageBubble from './MessageBubble.jsx';
 import Composer from './Composer.jsx';
 import AgentApproval from './AgentApproval.jsx';
-import { Phone, Video } from '../lib/icons.jsx';
+import { Phone, Video, Trash, Download } from '../lib/icons.jsx';
 import { formatDay, platformLabel } from '../lib/util.js';
 
 const GROUP_WINDOW = 4 * 60 * 1000; // group consecutive messages within 4 min
@@ -24,6 +24,8 @@ export default function ChatPane({
   onRevealFile,
   onVoiceCall,
   onVideoCall,
+  onClearHistory,
+  onExportHistory,
   approval,
   agentStream,
   onApprove,
@@ -78,20 +80,34 @@ export default function ChatPane({
               : peer.online
                 ? `Online · ${platformLabel(peer.platform)}`
                 : 'Offline'}
+            {peer.queueState === 'active' &&
+              (peer.queueExpiring
+                ? ` · idle — turn passes in ~${peer.queueExpiresInSec}s unless you ask something`
+                : ` · your turn, ${peer.queueRemaining} of ${peer.queueQuota} queries left`)}
+            {peer.queueState === 'waiting' && ` · waiting for a turn, #${peer.queuePosition} in line`}
             {showAddresses && peer.address ? ` · ${peer.address}` : ''}
           </div>
         </div>
-        {/* Agents are text-only participants; there is nothing to call. */}
-        {peer.kind !== 'agent' && (
-          <div className="chat-actions">
-            <button className="icon-btn" onClick={onVoiceCall} disabled={!peer.online} title="Voice call">
-              <Phone size={19} />
-            </button>
-            <button className="icon-btn" onClick={onVideoCall} disabled={!peer.online} title="Video call">
-              <Video size={19} />
-            </button>
-          </div>
-        )}
+        <div className="chat-actions">
+          {/* Agents are text-only participants; there is nothing to call. */}
+          {peer.kind !== 'agent' && (
+            <>
+              <button className="icon-btn" onClick={onVoiceCall} disabled={!peer.online} title="Voice call">
+                <Phone size={19} />
+              </button>
+              <button className="icon-btn" onClick={onVideoCall} disabled={!peer.online} title="Video call">
+                <Video size={19} />
+              </button>
+            </>
+          )}
+          {/* Available for every kind of thread, agents and transcripts too. */}
+          <button className="icon-btn" onClick={onExportHistory} title="Save chat history as a text file">
+            <Download size={19} />
+          </button>
+          <button className="icon-btn danger" onClick={onClearHistory} title="Delete chat history">
+            <Trash size={19} />
+          </button>
+        </div>
       </div>
 
       <div className="messages" ref={scrollRef}>

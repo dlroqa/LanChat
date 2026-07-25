@@ -25,6 +25,11 @@
   --danger-hover: #f36464;
   --warn: #f59e0b;
 
+  /* The sidebar's profile block and the chat header sit side by side, so their
+     bottom borders have to land on the same line. Pinning both to one height
+     keeps them aligned no matter how the text inside either one changes. */
+  --header-h: 67px;
+
   --radius: 12px;
   --radius-sm: 8px;
   --radius-lg: 18px;
@@ -136,7 +141,9 @@ textarea {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 14px 14px;
+  height: var(--header-h);
+  box-sizing: border-box;
+  padding: 0 14px;
   border-bottom: 1px solid var(--border-soft);
 }
 .me .meta {
@@ -169,6 +176,12 @@ textarea {
 .icon-btn:hover {
   background: var(--surface-hover);
   color: var(--fg);
+}
+/* Destructive actions stay quiet until pointed at, so the header does not read
+   as a row of warnings. */
+.icon-btn.danger:hover {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
 }
 .icon-btn:focus-visible,
 button:focus-visible,
@@ -303,6 +316,13 @@ input:focus-visible {
   color: var(--warn);
 }
 
+/* Currently holding a turn on a shared agent — reads as "go", where .warn
+   reads as "wait". */
+.tag.good {
+  background: color-mix(in srgb, var(--online) 18%, transparent);
+  color: var(--online);
+}
+
 .unread-dot {
   min-width: 18px;
   height: 18px;
@@ -384,7 +404,9 @@ input:focus-visible {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 18px;
+  height: var(--header-h);
+  box-sizing: border-box;
+  padding: 0 18px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-2);
 }
@@ -395,9 +417,15 @@ input:focus-visible {
 .chat-header .name {
   font-weight: 600;
 }
+/* The subtitle carries variable text — a peer's platform, whose agent this is,
+   a queue position — so it is kept to one line rather than being allowed to
+   wrap and push the header out of line with the sidebar. */
 .chat-header .sub {
   font-size: 12px;
   color: var(--fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .chat-actions {
   display: flex;

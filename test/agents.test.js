@@ -291,8 +291,11 @@ test('an allowlisted peer can reach the agent and the reply goes back only to th
   await new Promise((r) => setImmediate(r));
 
   assert.deepEqual(log, ['what is the time'], 'the mention prefix is stripped');
-  assert.equal(relayed.length, 1, 'the reply goes to exactly one peer');
-  assert.equal(relayed[0].peerId, 'friend', 'and only to the peer that asked');
+  const replies = relayed.filter((r) => r.obj.type === 'agent-reply');
+  assert.equal(replies.length, 1, 'exactly one answer is sent');
+  assert.equal(replies[0].peerId, 'friend', 'and only to the peer that asked');
+  // Nothing about this exchange reaches anyone else — queue status included.
+  assert.deepEqual([...new Set(relayed.map((r) => r.peerId))], ['friend']);
 });
 
 test('removing an agent leaves nothing behind', async () => {
@@ -616,7 +619,15 @@ test('a flooding peer is throttled and silenced, while the local user never is',
   for (let i = 0; i < 5; i += 1) agentHub.routeFromPeer('flooder', `@Hermes ${i}`);
   await new Promise((r) => setImmediate(r));
   assert.equal(log.length, 1, 'only the first request reaches the transport');
-  assert.equal(relayed.length, 1, 'and exactly one frame goes back out');
+  assert.equal(relayed.filter((f) => f.type === 'agent-reply').length, 1, 'exactly one answer goes out');
+
+  // The point is that outbound traffic does not scale with the flood: the four
+  // dropped messages produce nothing at all.
+  const afterFive = relayed.length;
+  for (let i = 0; i < 20; i += 1) agentHub.routeFromPeer('flooder', `@Hermes more ${i}`);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(relayed.length, afterFive, 'twenty more messages produce no further frames');
+  assert.equal(log.length, 1, 'and never reach the transport');
 
   // The owner is on the same agent at the same moment and is unaffected.
   log.length = 0;
@@ -625,6 +636,263 @@ test('a flooding peer is throttled and silenced, while the local user never is',
     await new Promise((r) => setImmediate(r));
   }
   assert.equal(log.length, 5, 'the local user is never throttled');
+});
+
+// ---- fair-share turns on a shared agent ----
+
+// Registers a peer as connected. The queue drops peers who have gone offline,
+// so a test peer needs a socket to keep its place in it.
+function joinPeer(hub, id) {
+  hub.register(id, { readyState: 1, send() {}, close() {} });
+}
+
+// Drives N requests from a peer, letting each run settle, and reports what the
+// transport actually saw.
+async function ask(agentHub, peerId, n, log) {
+  const before = log.length;
+  for (let i = 0; i < n; i += 1) {
+    agentHub.routeFromPeer(peerId, `@Hermes q${i}`);
+    await new Promise((r) => setImmediate(r));
+  }
+  return log.length - before;
+}
+
+// The throttle's minimum interval would swallow a rapid burst, which is a
+// different mechanism; step the clock so only the quota is under test.
+function withFakeClock(fn) {
+  const realNow = Date.now;
+  let t = realNow();
+  Date.now = () => (t += 4000);
+  return Promise.resolve(fn()).finally(() => {
+    Date.now = realNow;
+  });
+}
+
+test('a remote peer gets five queries, then the turn passes to whoever is waiting', async () => {
+  await withFakeClock(async () => {
+    const { hub, agentHub, log } = makeHub();
+    const { agent } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+    await agentHub.setSharing(agent.id, { networkWide: true });
+    hub.send = () => true;
+
+    // Alice arrives first and gets the turn.
+    assert.equal(await ask(agentHub, 'alice', 5, log), 5, 'the holder gets a full quota');
+    const alice = agentHub.standingFor(agent.id, 'alice');
+    assert.equal(alice.state, 'active');
+    assert.equal(alice.remaining, 0, 'the quota is spent');
+    assert.equal(alice.quota, 5);
+    assert.equal(alice.expiring, false, 'and nothing is expiring while she is active');
+
+    // Bob asks while Alice holds the turn: queued, not served.
+    assert.equal(await ask(agentHub, 'bob', 1, log), 0, 'a waiting peer is not served');
+    assert.equal(agentHub.standingFor(agent.id, 'bob').state, 'waiting');
+    assert.equal(agentHub.standingFor(agent.id, 'bob').position, 1);
+
+    // Alice is out of quota with Bob waiting, so she hands over.
+    assert.equal(await ask(agentHub, 'alice', 1, log), 0, 'a spent turn is not extended');
+    assert.equal(agentHub.standingFor(agent.id, 'bob').state, 'active', 'the turn passed to Bob');
+    assert.equal(agentHub.standingFor(agent.id, 'alice').state, 'waiting');
+
+    // And Bob gets his own full quota — the same limit, not the remainder.
+    assert.equal(await ask(agentHub, 'bob', 5, log), 5);
+  });
+});
+
+test('with nobody waiting a lone peer keeps going rather than being blocked', async () => {
+  await withFakeClock(async () => {
+    const { hub, agentHub, log } = makeHub();
+    const { agent } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+    await agentHub.setSharing(agent.id, { networkWide: true });
+    hub.send = () => true;
+
+    // Twice the quota, no queue: there is nothing to be fair about.
+    assert.equal(await ask(agentHub, 'alice', 12, log), 12);
+    assert.equal(agentHub.standingFor(agent.id, 'alice').state, 'active');
+  });
+});
+
+test('the owner never queues for their own agent', async () => {
+  await withFakeClock(async () => {
+    const { hub, agentHub, log } = makeHub();
+    const { agent } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+    await agentHub.setSharing(agent.id, { networkWide: true });
+
+    const realSend = hub.send.bind(hub);
+    hub.send = (peerId, obj) => (String(peerId).startsWith('agent:') ? realSend(peerId, obj) : true);
+
+    // A peer takes and holds the turn.
+    await ask(agentHub, 'alice', 5, log);
+    log.length = 0;
+
+    // The owner is unaffected by somebody else's turn, and by any quota.
+    for (let i = 0; i < 8; i += 1) {
+      realSend(agent.id, { type: 'chat', text: `mine ${i}` });
+      await new Promise((r) => setImmediate(r));
+    }
+    assert.equal(log.length, 8, 'the local user is never queued or capped');
+    assert.equal(agentHub.standingFor(agent.id, 'alice').state, 'active', "and does not steal a peer's turn");
+  });
+});
+
+test('a peer waiting their turn is told where they stand', async () => {
+  await withFakeClock(async () => {
+    const { hub, agentHub, log } = makeHub();
+    const { agent } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+    await agentHub.setSharing(agent.id, { networkWide: true });
+
+    const frames = [];
+    hub.send = (peerId, obj) => {
+      frames.push({ peerId, obj });
+      return true;
+    };
+
+    await ask(agentHub, 'alice', 5, log);
+    frames.length = 0;
+    await ask(agentHub, 'bob', 1, log);
+
+    // Silence would look like the agent ignoring them, so standing is pushed.
+    const queued = frames.filter((f) => f.obj.type === 'agent-queue');
+    assert.ok(queued.length >= 2, 'both the holder and the waiter are updated');
+    const forBob = queued.filter((f) => f.peerId === 'bob').at(-1).obj;
+    assert.equal(forBob.state, 'waiting');
+    assert.equal(forBob.position, 1);
+    assert.equal(forBob.quota, 5);
+
+    const told = frames.filter((f) => f.peerId === 'bob' && f.obj.type === 'agent-reply');
+    assert.match(told.at(-1).obj.text, /#1 in line/, 'and told in the thread too');
+  });
+});
+
+test('the holder is warned before losing the turn, and asking again keeps it', async () => {
+  const realNow = Date.now;
+  let t = realNow();
+  Date.now = () => t;
+  try {
+    const { hub, agentHub, log } = makeHub();
+    const { agent } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+    await agentHub.setSharing(agent.id, { networkWide: true });
+
+    const frames = [];
+    hub.send = (peerId, obj) => {
+      frames.push({ peerId, obj });
+      return true;
+    };
+    joinPeer(hub, 'alice');
+    joinPeer(hub, 'bob');
+
+    t += 4000;
+    await ask(agentHub, 'alice', 1, log);
+    t += 4000;
+    await ask(agentHub, 'bob', 1, log); // waiting, so a handover is possible
+
+    // Nothing is said while she is still within her time.
+    frames.length = 0;
+    t += 20000;
+    agentHub.releaseIdleTurns();
+    assert.equal(frames.length, 0, 'no nagging before the warning point');
+
+    // Past the warning point she is told, with time left to act on it.
+    t += 25000; // 45s idle, warn at 40s, handover at 60s
+    agentHub.releaseIdleTurns();
+    const warned = frames.filter((f) => f.peerId === 'alice' && f.obj.type === 'agent-reply');
+    assert.equal(warned.length, 1, 'the holder is warned exactly once');
+    assert.match(warned[0].obj.text, /turn passes/i);
+    assert.match(warned[0].obj.text, /\d+s/, 'and told how long is left');
+    assert.equal(agentHub.standingFor(agent.id, 'alice').state, 'active', 'but still holds it');
+    assert.equal(agentHub.standingFor(agent.id, 'alice').expiring, true);
+
+    // Warned once per turn, not on every sweep.
+    frames.length = 0;
+    t += 5000;
+    agentHub.releaseIdleTurns();
+    assert.equal(frames.length, 0, 'the warning does not repeat');
+
+    // Acting on the warning keeps the turn and resets the countdown.
+    t += 4000;
+    assert.equal(await ask(agentHub, 'alice', 1, log), 1, 'she can still use it');
+    assert.equal(agentHub.standingFor(agent.id, 'alice').expiring, false, 'the countdown resets');
+    assert.equal(agentHub.standingFor(agent.id, 'bob').state, 'waiting', 'and Bob keeps waiting');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('an idle holder is moved aside even with queries left, and the next peer is told', async () => {
+  const realNow = Date.now;
+  let t = realNow();
+  Date.now = () => t;
+  try {
+    const { hub, agentHub, log } = makeHub();
+    const { agent } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+    await agentHub.setSharing(agent.id, { networkWide: true });
+
+    const frames = [];
+    hub.send = (peerId, obj) => {
+      frames.push({ peerId, obj });
+      return true;
+    };
+
+    joinPeer(hub, 'alice');
+    joinPeer(hub, 'bob');
+
+    // Two queries, spaced past the anti-flood interval, leaving her three.
+    t += 4000;
+    await ask(agentHub, 'alice', 1, log);
+    t += 4000;
+    await ask(agentHub, 'alice', 1, log);
+    t += 4000;
+    await ask(agentHub, 'bob', 1, log); // queued behind her
+    assert.equal(agentHub.standingFor(agent.id, 'alice').remaining, 3, 'she has quota to spare');
+    assert.equal(agentHub.standingFor(agent.id, 'bob').state, 'waiting');
+
+    // She stops using it. Unused quota must not hold the queue hostage.
+    frames.length = 0;
+    t += 61000;
+    agentHub.releaseIdleTurns();
+
+    assert.equal(agentHub.standingFor(agent.id, 'bob').state, 'active', 'the turn moved on its own');
+    assert.equal(agentHub.standingFor(agent.id, 'bob').remaining, 5, 'with a full quota, not her leftovers');
+    assert.equal(agentHub.standingFor(agent.id, 'alice').state, 'waiting', 'and she goes to the back');
+
+    // Being told is the point: without this Bob would have to keep trying to
+    // discover his turn had come.
+    const told = frames.filter((f) => f.peerId === 'bob' && f.obj.type === 'agent-reply');
+    assert.match(told.at(-1).obj.text, /Your turn/, 'the waiting peer is notified');
+    assert.ok(
+      frames.some((f) => f.peerId === 'bob' && f.obj.type === 'agent-queue' && f.obj.state === 'active'),
+      'and their roster card is updated'
+    );
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('an idle holder yields so one peer cannot block the queue forever', async () => {
+  const realNow = Date.now;
+  let t = realNow();
+  Date.now = () => t;
+  try {
+    const { hub, agentHub, log } = makeHub();
+    const { agent } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+    await agentHub.setSharing(agent.id, { networkWide: true });
+    hub.send = () => true;
+
+    joinPeer(hub, 'alice');
+    joinPeer(hub, 'bob');
+
+    t += 4000;
+    await ask(agentHub, 'alice', 1, log);
+    t += 4000;
+    await ask(agentHub, 'bob', 1, log); // queued behind Alice
+    assert.equal(agentHub.standingFor(agent.id, 'bob').state, 'waiting');
+
+    // Alice walks away mid-turn with quota to spare.
+    t += 61000;
+    assert.equal(await ask(agentHub, 'bob', 1, log), 1, 'the abandoned turn is released');
+    assert.equal(agentHub.standingFor(agent.id, 'bob').state, 'active');
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test('a forged sender id is replaced by the socket it actually arrived on', () => {

@@ -59,6 +59,17 @@ class Outbox {
     return out;
   }
 
+  // Drops everything waiting for one peer. Called when their chat is deleted:
+  // otherwise the queue would later deliver messages from a conversation the
+  // user has already cleared, and re-create bubbles for it.
+  clear(peerId) {
+    if (!this.queues.has(peerId)) return false;
+    this.queues.delete(peerId);
+    this.save();
+    this.emitCounts();
+    return true;
+  }
+
   enqueue(peerId, message) {
     const list = this.queues.get(peerId) || [];
     list.push({ id: message.id, text: message.text, ts: message.ts });

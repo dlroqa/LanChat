@@ -361,6 +361,42 @@ export default function App() {
     });
   }, [selectedId]);
 
+  // Deleting a conversation is irreversible and there is no undo, so it asks
+  // first and names what goes. The in-memory copy is dropped alongside the file,
+  // and the peer is un-marked as loaded so a later visit re-reads from disk
+  // rather than resurrecting the cleared thread from state.
+  async function clearHistory() {
+    if (!selectedId) return;
+    const who = selectedPeer?.name || 'this conversation';
+    const ok = window.confirm(
+      `Delete your chat history with ${who}?\n\n` +
+        'Every message in this conversation is removed from this device, along with anything still ' +
+        'waiting to send. This cannot be undone, and it does not delete their copy.'
+    );
+    if (!ok) return;
+    const res = await api.clearHistory(selectedId);
+    if (!res?.ok) {
+      toast('Could not delete the chat history.', 'error');
+      return;
+    }
+    loadedPeers.current.delete(selectedId);
+    setMessages((prev) => ({ ...prev, [selectedId]: [] }));
+    toast('Chat history deleted.');
+  }
+
+  // Saves the conversation as readable text. The main process owns the file
+  // dialog and the writing; the renderer only reports how it went.
+  async function exportHistory() {
+    if (!selectedId) return;
+    const res = await api.exportHistory(selectedId, selectedPeer?.name || '');
+    if (res?.canceled) return;
+    if (!res?.ok) {
+      toast(res?.error || 'Could not save the chat history.', 'error');
+      return;
+    }
+    toast(`Saved ${res.count} message${res.count === 1 ? '' : 's'}.`);
+  }
+
   const selectedPeer = useMemo(() => {
     if (!selectedId) return null;
     const live = peers.find((p) => p.id === selectedId);
@@ -536,6 +572,8 @@ export default function App() {
           onAttach={attach}
           onVoice={sendVoice}
           onTyping={onTyping}
+          onClearHistory={clearHistory}
+          onExportHistory={exportHistory}
           onOpenFile={(p) => p && api.openFile(p)}
           onRevealFile={(p) => p && api.revealFile(p)}
           onVoiceCall={() => startCall(false)}

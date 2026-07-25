@@ -49,6 +49,23 @@ const PEER_MIN_INTERVAL_MS = 3000;
 const PEER_MAX_BUSY_REFUSALS = 3;
 const PEER_THROTTLE_TTL_MS = 60000;
 
+// Fair-share turn taking for a shared agent. One peer holds the turn and gets a
+// fixed number of queries; when they run out and somebody is waiting, the turn
+// passes and they rejoin the back of the queue.
+//
+// This distributes whatever capacity the agent has — it does not create more of
+// it. An upstream provider's own rate limit still surfaces as a failed run.
+//
+// A holder who stops mid-turn must not block everyone, so an idle turn is
+// released once someone else is waiting. With nobody waiting there is nothing to
+// be fair about, so a lone peer is simply granted a fresh turn.
+const TURN_QUOTA = 5;
+const TURN_IDLE_MS = 60000;
+// Losing a turn should never be a surprise, so the holder is told before it
+// happens and given time to act on the warning.
+const TURN_WARN_MS = 40000;
+const TURN_SWEEP_MS = 5000;
+
 // `transports` is injectable so tests can drive the lifecycle with a stub that
 // never touches the network; production always uses the real table above.
 function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports = TRANSPORTS }) {
@@ -71,6 +88,197 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
       .presenceList()
       .filter((p) => p.online && p.kind !== 'agent' && peerMayReach(record, p.id))
       .map((p) => p.id);
+  }
+
+  // ---- fair-share turns ----
+
+  // agentId -> { holder, used, queue: [peerId], last, warned }
+  const turns = new Map();
+
+  function turnState(agentId) {
+    if (!turns.has(agentId)) {
+      turns.set(agentId, { holder: null, used: 0, queue: [], last: 0, warned: false });
+    }
+    return turns.get(agentId);
+  }
+
+  function passTurn(state) {
+    state.holder = state.queue.shift() || null;
+    state.used = 0;
+    state.last = Date.now();
+    state.warned = false;
+  }
+
+  // Decides whether `peerId` may spend a query now. Never called for the local
+  // user — the machine's owner does not queue for their own agent.
+  function claimTurn(agentId, peerId) {
+    const state = turnState(agentId);
+    const now = Date.now();
+
+    // A holder who has gone quiet yields, so one peer asking a single question
+    // and wandering off cannot freeze the queue. Whoever asks next takes over:
+    // passTurn promotes the head of the queue, or clears the holder so the
+    // caller claims it below.
+    if (state.holder && state.holder !== peerId && now - state.last > TURN_IDLE_MS) {
+      passTurn(state);
+    }
+
+    if (!state.holder) {
+      state.holder = peerId;
+      state.used = 0;
+    }
+
+    if (state.holder === peerId) {
+      if (state.used >= TURN_QUOTA) {
+        if (state.queue.length) {
+          // Out of turn with others waiting: hand over and rejoin the back.
+          passTurn(state);
+          if (!state.queue.includes(peerId)) state.queue.push(peerId);
+          return { ok: false, rotated: true };
+        }
+        state.used = 0; // nobody waiting, so nothing to be fair about
+      }
+      state.used += 1;
+      state.last = now;
+      state.warned = false; // they are active again, so the countdown resets
+      return { ok: true, rotated: false };
+    }
+
+    if (!state.queue.includes(peerId)) state.queue.push(peerId);
+    return { ok: false, rotated: false };
+  }
+
+  // Where a peer stands, in the shape the roster renders.
+  function standingFor(agentId, peerId) {
+    const state = turnState(agentId);
+    if (state.holder === peerId) {
+      // `expiring` is only meaningful when somebody is actually waiting — with
+      // an empty queue the turn is not going anywhere.
+      const idle = Date.now() - state.last;
+      const expiring = state.queue.length > 0 && idle > TURN_WARN_MS;
+      return {
+        state: 'active',
+        position: 0,
+        remaining: Math.max(0, TURN_QUOTA - state.used),
+        quota: TURN_QUOTA,
+        expiring,
+        expiresInSec: expiring ? Math.max(1, Math.round((TURN_IDLE_MS - idle) / 1000)) : 0,
+      };
+    }
+    // Same shape either way, so every consumer can read the fields without
+    // guarding on which branch produced them.
+    const at = state.queue.indexOf(peerId);
+    return {
+      state: at === -1 ? 'idle' : 'waiting',
+      position: at === -1 ? 0 : at + 1,
+      remaining: TURN_QUOTA,
+      quota: TURN_QUOTA,
+      expiring: false,
+      expiresInSec: 0,
+    };
+  }
+
+  // Everyone with a stake in this agent's queue right now.
+  function participants(agentId) {
+    const state = turnState(agentId);
+    return [...(state.holder ? [state.holder] : []), ...state.queue];
+  }
+
+  // Hands the turn to the next peer waiting and tells them so. `requeue` puts the
+  // outgoing holder at the back rather than dropping them from the queue.
+  function handOver(record, { requeue }) {
+    const state = turnState(record.id);
+    const previous = state.holder;
+    passTurn(state);
+    if (requeue && previous && !state.queue.includes(previous)) state.queue.push(previous);
+    publishStanding(record);
+    if (state.holder) {
+      reply(record.id, `Your turn — you have ${TURN_QUOTA} queries.`, state.holder);
+    }
+  }
+
+  // Called when a run finishes: if the holder has spent their turn and somebody
+  // is waiting, pass it on now rather than making the next peer discover it by
+  // asking again.
+  function releaseIfSpent(agentId) {
+    const state = turnState(agentId);
+    const record = registry.get(agentId);
+    if (!record || !state.holder || state.used < TURN_QUOTA || !state.queue.length) return;
+    handOver(record, { requeue: true });
+  }
+
+  // A holder who stops using the agent should not keep the queue waiting just
+  // because they have queries left. Sweeping for this rather than only checking
+  // when the next peer happens to ask is what lets the person next in line be
+  // *told* their turn has come, instead of having to keep trying.
+  function releaseIdleTurns() {
+    const now = Date.now();
+    for (const [agentId, state] of turns) {
+      // A peer who has gone offline should not hold a place in the queue, and
+      // certainly not the turn — otherwise everyone else waits out the idle
+      // timeout for somebody who has closed the app.
+      const record = registry.get(agentId);
+      if (!record) continue;
+
+      const before = state.queue.length;
+      state.queue = state.queue.filter((id) => hub.isConnected(id));
+      if (state.holder && !hub.isConnected(state.holder)) {
+        // Gone for good as far as this turn is concerned, so not requeued.
+        handOver(record, { requeue: false });
+        continue;
+      }
+      if (state.queue.length !== before) publishStanding(record);
+
+      // With nobody waiting there is no one to be fair to, so an idle holder is
+      // left alone rather than warned about a handover that will not happen.
+      if (!state.holder || !state.queue.length) continue;
+      const idle = now - state.last;
+
+      if (idle > TURN_IDLE_MS) {
+        // The idle holder goes to the back: they did not use their turn, so they
+        // wait behind everyone who was waiting on them.
+        handOver(record, { requeue: true });
+        continue;
+      }
+
+      // One warning per turn, so a long pause does not become a stream of nags.
+      if (idle > TURN_WARN_MS && !state.warned) {
+        state.warned = true;
+        const seconds = Math.max(1, Math.round((TURN_IDLE_MS - idle) / 1000));
+        const waiting = state.queue.length;
+        reply(
+          agentId,
+          `You have been idle — your turn passes to the next person in about ${seconds}s ` +
+            `(${waiting} waiting). Ask something to keep it.`,
+          state.holder
+        );
+        publishStanding(record);
+      }
+    }
+  }
+
+  // Unref'd so a background sweep never keeps the process alive on its own.
+  const idleSweep = setInterval(releaseIdleTurns, TURN_SWEEP_MS);
+  if (idleSweep.unref) idleSweep.unref();
+
+  // Standing is pushed, not polled: a waiting peer needs to be told the moment
+  // their turn arrives, and presence never crosses the wire.
+  function publishStanding(record) {
+    for (const peerId of participants(record.id)) {
+      const standing = standingFor(record.id, peerId);
+      hub.send(peerId, { type: 'agent-queue', agentId: record.id, ...standing });
+      const threadId = delegateIdFor(record.id, peerId);
+      if (hub.identities.has(threadId)) {
+        hub.setIdentity(threadId, {
+          queueState: standing.state,
+          queuePosition: standing.position,
+          queueRemaining: standing.remaining,
+          queueQuota: standing.quota,
+          queueExpiring: standing.expiring === true,
+          queueExpiresInSec: standing.expiresInSec || 0,
+        });
+      }
+    }
   }
 
   // Returns 'ok' | 'silent' — 'silent' means drop without replying, which is
@@ -149,10 +357,6 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     const record = registry.get(agentId);
     if (!record || !entry) return;
 
-    // Remote traffic is throttled; the local user never is.
-    if (origin) {
-      if (checkThrottle(agentId, origin, entry.busy) === 'silent') return;
-    }
     if (entry.busy) {
       reply(agentId, 'I am still working on the previous message — one at a time, please.', origin);
       return;
@@ -180,6 +384,9 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
           entry.pendingApproval = null;
           bus.emit('agent-typing', { agentId, isTyping: false });
           reply(agentId, output || streamed || '(no output)', origin);
+          // Hand over as soon as the last query of a turn finishes, so whoever
+          // is next is told immediately rather than on their next attempt.
+          if (origin) releaseIfSpent(agentId);
         },
         onError: (err) => {
           entry.busy = false;
@@ -394,6 +601,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     for (const key of [...throttle.keys()]) {
       if (key.startsWith(`${agentId}|`)) throttle.delete(key);
     }
+    turns.delete(agentId);
     registry.remove(agentId); // drops the sealed secret with the record
     hub.emitPresence();
     return true;
@@ -462,10 +670,38 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   }
 
   // Common tail: the request is stored in its own thread rather than in the
-  // human chat, then handed to the transport.
+  // human chat, then handed to the transport — if it is this peer's turn.
   function accept(record, peerId, text) {
     const threadId = ensureDelegateIdentity(record, peerId);
     bus.emit('agent-request', { threadId, agentId: record.id, peerId, text, ts: Date.now() });
+
+    // Anti-flood runs before anything is spent. Checking it later would let a
+    // looping peer burn their own quota on messages that never reach the agent,
+    // and turn each one into an outbound status frame — the exact amplification
+    // the throttle exists to prevent. The request is still recorded above, so
+    // the owner sees what was sent either way.
+    const entry = live.get(record.id);
+    if (checkThrottle(record.id, peerId, Boolean(entry && entry.busy)) === 'silent') return true;
+
+    const claim = claimTurn(record.id, peerId);
+    if (!claim.ok) {
+      // Held back rather than dropped: the request is already visible to the
+      // owner above, and the peer is told where they stand instead of getting
+      // silence. Their message is not queued for later — asking again when
+      // their turn comes is clearer than a delayed answer to a stale question.
+      const standing = standingFor(record.id, peerId);
+      reply(
+        record.id,
+        claim.rotated
+          ? `That is ${TURN_QUOTA} queries — passing to the next person waiting. You are #${standing.position} in line; ask again when your turn comes round.`
+          : `${nameOf(record.id)} is busy with someone else. You are #${standing.position} in line — ask again when it is your turn.`,
+        peerId
+      );
+      publishStanding(record);
+      return true;
+    }
+
+    publishStanding(record);
     deliver(record.id, text, peerId);
     return true;
   }
@@ -484,6 +720,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   }
 
   async function stopAll() {
+    clearInterval(idleSweep);
     // Peers should not be left holding a card for an agent that just went away
     // with the app; they will get a fresh advert on the next handshake.
     for (const record of registry.list()) withdraw(record);
@@ -517,6 +754,10 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     isAgent: isAgentId,
     isDelegate: isDelegateId,
     parseDelegate: parseDelegateId,
+    standingFor,
+    releaseIdleTurns,
+    TURN_QUOTA,
+    TURN_IDLE_MS,
     KINDS,
   };
 }

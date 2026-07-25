@@ -168,6 +168,26 @@ function createRemoteAgents({ hub, store }) {
     return message;
   }
 
+  // Where we stand in the queue for a shared agent, pushed by its owner. Stored
+  // on the identity card so it reaches the roster through the ordinary presence
+  // path, with no new renderer plumbing.
+  function setStanding(ownerPeerId, msg) {
+    if (!msg || !msg.agentId) return null;
+    const entry = get(ownerPeerId, msg.agentId);
+    if (!entry) return null;
+    entry.standing = { state: msg.state, position: msg.position, remaining: msg.remaining };
+    if (!hub.identities.has(entry.id)) return entry;
+    hub.setIdentity(entry.id, {
+      queueState: msg.state,
+      queuePosition: msg.position,
+      queueRemaining: msg.remaining,
+      queueQuota: msg.quota,
+      queueExpiring: msg.expiring === true,
+      queueExpiresInSec: msg.expiresInSec || 0,
+    });
+    return entry;
+  }
+
   function resolveThread(threadId) {
     if (!isRemoteAgentId(threadId)) return null;
     const parts = parseRemoteAgentId(threadId);
@@ -176,7 +196,18 @@ function createRemoteAgents({ hub, store }) {
     return entry ? { entry, ownerPeerId: parts.ownerPeerId } : null;
   }
 
-  return { adopt, drop, dropOwner, get, matchMention, send, receive, resolveThread, isRemoteAgentId };
+  return {
+    adopt,
+    drop,
+    dropOwner,
+    get,
+    matchMention,
+    send,
+    receive,
+    setStanding,
+    resolveThread,
+    isRemoteAgentId,
+  };
 }
 
 module.exports = { createRemoteAgents };

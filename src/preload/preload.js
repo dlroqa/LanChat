@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld('lanchat', {
 
   getPaths: () => invoke('lanchat:getPaths'),
   getHistory: (peerId) => invoke('lanchat:getHistory', peerId),
+  clearHistory: (peerId) => invoke('lanchat:clearHistory', { peerId }),
+  exportHistory: (peerId, name) => invoke('lanchat:exportHistory', { peerId, name }),
   sendChat: (peerId, text) => invoke('lanchat:sendChat', { peerId, text }),
   sendTyping: (peerId, isTyping) => invoke('lanchat:sendTyping', { peerId, isTyping }),
   sendSignal: (peerId, signal) => invoke('lanchat:sendSignal', { peerId, signal }),
