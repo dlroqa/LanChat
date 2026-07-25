@@ -817,6 +817,96 @@ test('the holder is warned before losing the turn, and asking again keeps it', a
   }
 });
 
+test('the holder and whoever is next count down to the same handover', async () => {
+  const realNow = Date.now;
+  let t = realNow();
+  Date.now = () => t;
+  try {
+    const { hub, agentHub, log } = makeHub();
+    const { agent } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+    await agentHub.setSharing(agent.id, { networkWide: true });
+    const frames = [];
+    hub.send = (peerId, obj) => {
+      frames.push({ peerId, obj });
+      return true;
+    };
+    joinPeer(hub, 'alice');
+    joinPeer(hub, 'bob');
+    joinPeer(hub, 'carol');
+
+    t += 4000;
+    await ask(agentHub, 'alice', 1, log);
+    t += 4000;
+    await ask(agentHub, 'bob', 1, log);
+    t += 4000;
+    await ask(agentHub, 'carol', 1, log);
+
+    // Nothing is counting down yet — the holder is still within her time.
+    assert.equal(agentHub.standingFor(agent.id, 'alice').expiring, false);
+    assert.equal(agentHub.standingFor(agent.id, 'bob').expiring, false);
+
+    t += 45000; // past the warning point, before the handover
+    frames.length = 0;
+    agentHub.releaseIdleTurns();
+
+    const alice = agentHub.standingFor(agent.id, 'alice');
+    const bob = agentHub.standingFor(agent.id, 'bob');
+    const carol = agentHub.standingFor(agent.id, 'carol');
+
+    // Both sides of the handover are told the same number of seconds, so their
+    // countdowns agree without their clocks having to.
+    assert.equal(alice.expiring, true, 'the holder is losing it');
+    assert.equal(bob.expiring, true, 'and the person next in line is gaining it');
+    assert.equal(bob.expiresInSec, alice.expiresInSec, 'the same countdown on both sides');
+    assert.ok(alice.expiresInSec > 0 && alice.expiresInSec <= 20);
+
+    // Only whoever is actually next inherits the turn, so nobody else counts.
+    assert.equal(carol.state, 'waiting');
+    assert.equal(carol.position, 2);
+    assert.equal(carol.expiring, false, 'second in line has nothing to count down to');
+
+    // Both are told over the wire, not left to poll.
+    for (const who of ['alice', 'bob']) {
+      const q = frames.filter((f) => f.peerId === who && f.obj.type === 'agent-queue').at(-1);
+      assert.ok(q, `${who} is sent their standing`);
+      assert.equal(q.obj.expiring, true);
+      assert.equal(q.obj.expiresInSec, alice.expiresInSec);
+    }
+
+    // Acting on the warning cancels it for everyone.
+    t += 4000;
+    await ask(agentHub, 'alice', 1, log);
+    assert.equal(agentHub.standingFor(agent.id, 'alice').expiring, false);
+    assert.equal(agentHub.standingFor(agent.id, 'bob').expiring, false, 'the waiter stops counting too');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('a remote asker is told when the agent starts and stops working', async () => {
+  const { hub, agentHub } = makeHub();
+  const { agent } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  await agentHub.setSharing(agent.id, { networkWide: true });
+  const frames = [];
+  hub.send = (peerId, obj) => {
+    frames.push({ peerId, obj });
+    return true;
+  };
+  joinPeer(hub, 'friend');
+
+  agentHub.routeFromPeer('friend', '@Hermes do something');
+  await new Promise((r) => setImmediate(r));
+
+  // Without this a peer sees only "online" and silence, with no way to tell
+  // thinking from stuck.
+  const activity = frames.filter((f) => f.obj.type === 'agent-activity').map((f) => f.obj.busy);
+  assert.deepEqual(activity, [true, false], 'busy on the way in, idle again on the way out');
+  assert.ok(
+    frames.every((f) => f.peerId === 'friend'),
+    'activity goes only to the peer who asked'
+  );
+});
+
 test('an idle holder is moved aside even with queries left, and the next peer is told', async () => {
   const realNow = Date.now;
   let t = realNow();

@@ -79,6 +79,11 @@ function createLinkStats({ hub, bus }) {
     const now = Date.now();
     for (const peer of hub.presenceList()) {
       if (!peer.online) continue;
+      // Agents ride a virtual socket that only carries chat, so a ping to one is
+      // never answered and every sample counts as loss — which then renders as
+      // "Offline, 100% loss" for an agent that is working perfectly. There is no
+      // network path to measure here, so there is nothing to measure.
+      if (peer.kind === 'agent') continue;
       const e = entry(peer.id);
 
       // Anything still outstanding past the timeout counts as loss.

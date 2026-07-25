@@ -5,6 +5,7 @@ import MessageBubble from './MessageBubble.jsx';
 import Composer from './Composer.jsx';
 import AgentApproval from './AgentApproval.jsx';
 import { Phone, Video, Trash, Download } from '../lib/icons.jsx';
+import { useQueueLabel } from './QueueBadge.jsx';
 import { formatDay, platformLabel } from '../lib/util.js';
 
 const GROUP_WINDOW = 4 * 60 * 1000; // group consecutive messages within 4 min
@@ -31,6 +32,8 @@ export default function ChatPane({
   onApprove,
 }) {
   const scrollRef = useRef(null);
+  // Live while a handover is counting down, so both sides see the same number.
+  const queueLabel = useQueueLabel(peer);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -80,11 +83,7 @@ export default function ChatPane({
               : peer.online
                 ? `Online · ${platformLabel(peer.platform)}`
                 : 'Offline'}
-            {peer.queueState === 'active' &&
-              (peer.queueExpiring
-                ? ` · idle — turn passes in ~${peer.queueExpiresInSec}s unless you ask something`
-                : ` · your turn, ${peer.queueRemaining} of ${peer.queueQuota} queries left`)}
-            {peer.queueState === 'waiting' && ` · waiting for a turn, #${peer.queuePosition} in line`}
+            {queueLabel}
             {showAddresses && peer.address ? ` · ${peer.address}` : ''}
           </div>
         </div>

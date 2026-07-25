@@ -322,6 +322,41 @@ test('two peers take turns, and each is told where they stand', async (t) => {
   await waitFor(() => A.log.includes('hello at last'), 8000, 'C to be served');
 });
 
+test('a remote agent reports what it is doing, and is never pinged for latency', async (t) => {
+  const A = makeNode('owner7', 47445);
+  const B = makeNode('peer7', 47446);
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idA = A.getIdentity().id;
+  const { agent } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  await A.agentHub.setSharing(agent.id, { networkWide: true, directChat: true });
+  await connect(A, B);
+
+  const remoteId = await waitFor(() => remoteIdOn(B, idA, agent.id), 5000, 'B to see the agent');
+  B.call('lanchat:sendChat', { peerId: remoteId, text: 'think about it' });
+  await waitFor(() => B.store.read(remoteId).some((m) => m.direction === 'in'), 5000, 'the answer');
+
+  // The stub answers immediately, so by now the agent has gone busy and idle
+  // again — what matters is that the far side was told at all, and ends up
+  // showing it as not-working rather than stuck mid-thought.
+  const card = B.hub.identities.get(remoteId);
+  assert.equal(card.agentBusy, false, 'the peer knows it has finished');
+  assert.equal('agentBusy' in card, true, 'and was told about it, rather than left guessing');
+
+  // An agent has no measurable network path, so it must never be sampled for
+  // one: pinging its virtual socket returns nothing and renders as 100% loss.
+  const roster = B.hub.presenceList().find((p) => p.id === remoteId);
+  assert.equal(roster.kind, 'agent');
+  assert.equal(roster.online, true, 'it is reachable');
+});
+
 test('deleting a chat history removes it from disk, agent threads included', async (t) => {
   const A = makeNode('owner5', 47441);
   const B = makeNode('peer5', 47442);

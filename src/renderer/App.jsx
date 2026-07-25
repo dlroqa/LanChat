@@ -611,7 +611,11 @@ export default function App() {
                 onHoldEnd={() => pttRef.current.setTransmitting(false)}
               />
             )}
-            <ConnectionPanel peer={selectedPeer} stats={linkStats[selectedId]} />
+            <ConnectionPanel
+              peer={selectedPeer}
+              stats={linkStats[selectedId]}
+              agentStatus={agentStatus[selectedId]}
+            />
           </>
         )}
       </aside>

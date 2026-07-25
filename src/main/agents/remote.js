@@ -188,6 +188,19 @@ function createRemoteAgents({ hub, store }) {
     return entry;
   }
 
+  // What the agent is doing right now, relayed by its owner. Kept on the card
+  // like the queue standing, so the roster and panel read it the ordinary way.
+  function setActivity(ownerPeerId, msg) {
+    if (!msg || !msg.agentId) return null;
+    const entry = get(ownerPeerId, msg.agentId);
+    if (!entry || !hub.identities.has(entry.id)) return null;
+    hub.setIdentity(entry.id, {
+      agentBusy: msg.busy === true,
+      agentDetail: msg.detail || null,
+    });
+    return entry;
+  }
+
   function resolveThread(threadId) {
     if (!isRemoteAgentId(threadId)) return null;
     const parts = parseRemoteAgentId(threadId);
@@ -205,6 +218,7 @@ function createRemoteAgents({ hub, store }) {
     send,
     receive,
     setStanding,
+    setActivity,
     resolveThread,
     isRemoteAgentId,
   };

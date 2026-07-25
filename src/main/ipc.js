@@ -134,6 +134,13 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       case 'agent-queue':
         remoteAgents.setStanding(from, msg);
         break;
+      // What a shared agent is doing right now, so the far side can show
+      // "thinking" rather than an unexplained silence.
+      case 'agent-activity': {
+        const entry = remoteAgents.setActivity(from, msg);
+        if (entry) emit('typing', { peerId: entry.id, isTyping: msg.busy === true });
+        break;
+      }
       // The answer to something we asked a remote agent. It is filed under that
       // agent's thread, not under the chat with the peer who hosts it.
       case 'agent-reply': {

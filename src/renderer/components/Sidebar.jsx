@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import Avatar from './Avatar.jsx';
+import QueueBadge from './QueueBadge.jsx';
 import { Settings, Plus, Search, Refresh, Users, GroupCall } from '../lib/icons.jsx';
 import { platformLabel } from '../lib/util.js';
 
@@ -115,23 +116,7 @@ export default function Sidebar({
                 {/* Where this thread stands in the queue for a shared agent, so
                     waiting your turn is visible rather than looking like the
                     agent is ignoring you. */}
-                {p.queueState === 'active' && (
-                  <span
-                    className={`tag ${p.queueExpiring ? 'warn' : 'good'}`}
-                    title={
-                      p.queueExpiring
-                        ? `Idle — the turn passes in about ${p.queueExpiresInSec}s unless you ask something`
-                        : `${p.queueRemaining} of ${p.queueQuota} queries left this turn`
-                    }
-                  >
-                    {p.queueExpiring ? `${p.queueExpiresInSec}s left` : `${p.queueRemaining}/${p.queueQuota} left`}
-                  </span>
-                )}
-                {p.queueState === 'waiting' && (
-                  <span className="tag warn" title={`Waiting for a turn — position ${p.queuePosition}`}>
-                    #{p.queuePosition} in line
-                  </span>
-                )}
+                <QueueBadge peer={p} />
               </div>
               <div className="sub">
                 {p.kind === 'agent'

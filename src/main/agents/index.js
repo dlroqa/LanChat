@@ -151,18 +151,23 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   // Where a peer stands, in the shape the roster renders.
   function standingFor(agentId, peerId) {
     const state = turnState(agentId);
+    // Seconds until an idle turn is handed on, or 0 when it is not going
+    // anywhere. Sent as a duration rather than a deadline so the two machines
+    // count down together without their clocks having to agree.
+    const idle = Date.now() - state.last;
+    const handoverIn =
+      state.holder && state.queue.length > 0 && idle > TURN_WARN_MS
+        ? Math.max(1, Math.round((TURN_IDLE_MS - idle) / 1000))
+        : 0;
+
     if (state.holder === peerId) {
-      // `expiring` is only meaningful when somebody is actually waiting — with
-      // an empty queue the turn is not going anywhere.
-      const idle = Date.now() - state.last;
-      const expiring = state.queue.length > 0 && idle > TURN_WARN_MS;
       return {
         state: 'active',
         position: 0,
         remaining: Math.max(0, TURN_QUOTA - state.used),
         quota: TURN_QUOTA,
-        expiring,
-        expiresInSec: expiring ? Math.max(1, Math.round((TURN_IDLE_MS - idle) / 1000)) : 0,
+        expiring: handoverIn > 0,
+        expiresInSec: handoverIn,
       };
     }
     // Same shape either way, so every consumer can read the fields without
@@ -173,8 +178,11 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
       position: at === -1 ? 0 : at + 1,
       remaining: TURN_QUOTA,
       quota: TURN_QUOTA,
-      expiring: false,
-      expiresInSec: 0,
+      // Only whoever is actually next inherits the turn, so only they get the
+      // same countdown — and it is the same number the holder sees, so the two
+      // sides agree on when the handover happens.
+      expiring: at === 0 && handoverIn > 0,
+      expiresInSec: at === 0 ? handoverIn : 0,
     };
   }
 
@@ -349,6 +357,13 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     });
   }
 
+  // Tells a remote asker what the agent is doing right now. Local-only work
+  // needs no relay — the renderer already sees the bus events directly.
+  function relayActivity(agentId, origin, busy, detail) {
+    if (!origin) return;
+    hub.send(origin, { type: 'agent-activity', agentId, busy, detail: detail || null });
+  }
+
   // ---- inbound: a message addressed to the agent ----
 
   // `origin` is null for the local user, or the peer id when relayed from the LAN.
@@ -363,6 +378,10 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     }
     entry.busy = true;
     bus.emit('agent-typing', { agentId, isTyping: true });
+    // A peer asking from another machine has no view of the agent at all, so
+    // working state is relayed to them. Without it their end can only show
+    // "online" and a silence, with no way to tell thinking from stuck.
+    relayActivity(agentId, origin, true, null);
 
     let streamed = '';
     await entry.transport.send(
@@ -372,7 +391,10 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
           streamed += delta;
           bus.emit('agent-delta', { agentId, delta });
         },
-        onStatus: (status) => emitStatus(agentId, status ? 'working' : 'ready', status),
+        onStatus: (status) => {
+          emitStatus(agentId, status ? 'working' : 'ready', status);
+          relayActivity(agentId, origin, true, status || null);
+        },
         onApproval: (req) => {
           // Surfaced to the local user only. A remote peer may have asked the
           // question, but only the machine's owner can authorise the answer.
@@ -383,6 +405,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
           entry.busy = false;
           entry.pendingApproval = null;
           bus.emit('agent-typing', { agentId, isTyping: false });
+          relayActivity(agentId, origin, false, null);
           reply(agentId, output || streamed || '(no output)', origin);
           // Hand over as soon as the last query of a turn finishes, so whoever
           // is next is told immediately rather than on their next attempt.
@@ -392,6 +415,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
           entry.busy = false;
           entry.pendingApproval = null;
           bus.emit('agent-typing', { agentId, isTyping: false });
+          relayActivity(agentId, origin, false, null);
           emitStatus(agentId, 'error', err.message);
           reply(agentId, `⚠️ ${err.message}`, origin);
         },
