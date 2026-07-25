@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const { AgentRegistry, isAgentId, delegateIdFor, isDelegateId, parseDelegateId, KINDS } = require('./registry');
 const { createVirtualSocket } = require('./virtualSocket');
 const { createHttpTransport } = require('./transports/http');
+const { discoverProfiles } = require('./profiles');
 const { createCommandTransport } = require('./transports/command');
 const { createAcpTransport } = require('./transports/acp');
 const { createSshTransport } = require('./transports/ssh');
@@ -166,6 +167,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
         position: 0,
         remaining: Math.max(0, TURN_QUOTA - state.used),
         quota: TURN_QUOTA,
+        ahead: 0,
         expiring: handoverIn > 0,
         expiresInSec: handoverIn,
       };
@@ -178,6 +180,10 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
       position: at === -1 ? 0 : at + 1,
       remaining: TURN_QUOTA,
       quota: TURN_QUOTA,
+      // How much stands between them and the agent. An exact countdown only
+      // exists once the holder goes idle, but this moves in real time as the
+      // holder spends queries, so waiting is never an unmeasured silence.
+      ahead: at === -1 ? 0 : Math.max(0, TURN_QUOTA - state.used) + at * TURN_QUOTA,
       // Only whoever is actually next inherits the turn, so only they get the
       // same countdown — and it is the same number the holder sees, so the two
       // sides agree on when the handover happens.
@@ -243,9 +249,12 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
       const idle = now - state.last;
 
       if (idle > TURN_IDLE_MS) {
-        // The idle holder goes to the back: they did not use their turn, so they
-        // wait behind everyone who was waiting on them.
-        handOver(record, { requeue: true });
+        // Only somebody who actually used their turn keeps a place in line. A
+        // peer who sat out a whole turn drops out instead — otherwise two idle
+        // peers hand the turn back and forth forever, and every bounce sends
+        // both of them a "your turn" and an idle warning they never asked for.
+        // Dropping out costs nothing: asking anything rejoins the queue.
+        handOver(record, { requeue: state.used > 0 });
         continue;
       }
 
@@ -288,6 +297,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
           queuePosition: standing.position,
           queueRemaining: standing.remaining,
           queueQuota: standing.quota,
+          queueAhead: standing.ahead || 0,
           queueExpiring: standing.expiring === true,
           queueExpiresInSec: standing.expiresInSec || 0,
         });
@@ -637,6 +647,16 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     return true;
   }
 
+  // Hermes profiles offered for this agent. Read from the Hermes install on
+  // this machine, so only meaningful when the agent's server is here too; the
+  // API has no way to list or confirm them. See profiles.js.
+  function profilesFor(agentId, draft) {
+    const record = registry.get(agentId);
+    const kind = record ? record.kind : draft && draft.kind;
+    const baseUrl = (record ? record.config : (draft && draft.config) || {}).baseUrl;
+    return discoverProfiles({ kind, baseUrl });
+  }
+
   async function test(agentId) {
     const record = registry.get(agentId);
     if (!record) return { ok: false, detail: 'No such agent.' };
@@ -763,6 +783,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     update,
     remove,
     test,
+    profilesFor,
     setEnabled,
     setSharing,
     setAllowedPeers: (agentId, peers) => {

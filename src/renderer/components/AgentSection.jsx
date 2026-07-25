@@ -20,7 +20,7 @@ const BLANK = {
   hasSecret: false,
   name: '',
   kind: 'http',
-  config: { baseUrl: 'http://127.0.0.1:8642', model: '', command: 'hermes', args: '', cwd: '', host: '', user: '', identityFile: '', port: '', remoteCommand: 'hermes' },
+  config: { baseUrl: 'http://127.0.0.1:8642', model: '', profile: '', command: 'hermes', args: '', cwd: '', host: '', user: '', identityFile: '', port: '', remoteCommand: 'hermes' },
   secretMode: 'sealed',
   secretValue: '',
   secretEnv: '',
@@ -69,7 +69,7 @@ export default function AgentSection({ peers = [] }) {
     const args = c.args ? c.args.split(/\s+/).filter(Boolean) : undefined;
     const config =
       d.kind === 'http'
-        ? { baseUrl: c.baseUrl, model: c.model || undefined }
+        ? { baseUrl: c.baseUrl, model: c.model || undefined, profile: c.profile || undefined }
         : d.kind === 'command'
           ? { command: c.command, args, cwd: c.cwd || undefined }
           : d.kind === 'acp'
@@ -268,6 +268,7 @@ export default function AgentSection({ peers = [] }) {
           {draft.kind === 'http' && (
             <>
               <Field label="Base URL" value={draft.config.baseUrl} onChange={(v) => setCfg({ baseUrl: v })} />
+              <ProfileField draft={draft} setCfg={setCfg} />
               <Field label="Model (optional)" value={draft.config.model} onChange={(v) => setCfg({ model: v })} />
               <div className="field">
                 <label htmlFor="agent-secret-mode">API key</label>
@@ -362,6 +363,66 @@ export default function AgentSection({ peers = [] }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// Which Hermes profile on the agent's server to talk to. One server can host
+// several behind a `/p/<name>/` prefix. The server cannot list them and does not
+// reject an unknown one — it quietly serves its default instead — so the names
+// come from the Hermes install on this machine, and the copy says plainly that
+// an unrecognised name falls back rather than pretending it was checked.
+function ProfileField({ draft, setCfg }) {
+  const [profiles, setProfiles] = useState(null); // null = not looked yet
+  const [busy, setBusy] = useState(false);
+
+  async function look() {
+    setBusy(true);
+    const res = await window.lanchat.listAgentProfiles(draft.id, {
+      kind: draft.kind,
+      config: draft.config,
+      secret: draft.secretValue || undefined,
+    });
+    setBusy(false);
+    setProfiles(res?.profiles || []);
+  }
+
+  return (
+    <div className="field">
+      <label htmlFor="agent-profile">Hermes profile (optional)</label>
+      {profiles && profiles.length > 0 ? (
+        <select
+          id="agent-profile"
+          value={draft.config.profile || ''}
+          onChange={(e) => setCfg({ profile: e.target.value })}
+        >
+          <option value="">Server default</option>
+          {profiles.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <input
+          id="agent-profile"
+          value={draft.config.profile || ''}
+          placeholder="Leave blank for the server default"
+          onChange={(e) => setCfg({ profile: e.target.value })}
+        />
+      )}
+      <div className="row" style={{ gap: 8, marginTop: 6, alignItems: 'center' }}>
+        <button type="button" className="btn" onClick={look} disabled={busy}>
+          {busy ? 'Looking…' : 'Find profiles'}
+        </button>
+        <span className="hint" style={{ margin: 0 }}>
+          {profiles === null
+            ? 'One server can host several profiles. Leave blank for its default.'
+            : profiles.length
+              ? 'Found on this machine. A name the server does not know falls back to its default.'
+              : 'None found here — type a name, or leave blank for the default.'}
+        </span>
+      </div>
     </div>
   );
 }

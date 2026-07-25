@@ -278,6 +278,16 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
 
   ipcMain.handle('lanchat:testAgent', (_e, { id }) => agentHub.test(id));
 
+  // Which Hermes profiles this agent's server will answer to. Returns an empty
+  // list when none can be discovered, and the form falls back to a typed name.
+  ipcMain.handle('lanchat:listAgentProfiles', async (_e, { id, draft } = {}) => {
+    try {
+      return { ok: true, profiles: await agentHub.profilesFor(id, draft) };
+    } catch (err) {
+      return { ok: false, error: err.message, profiles: [] };
+    }
+  });
+
   ipcMain.handle('lanchat:answerAgentApproval', (_e, { agentId, runId, choice }) =>
     agentHub.answerApproval(agentId, runId, choice)
   );

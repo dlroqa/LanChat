@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('lanchat', {
   setAgentPeers: (id, allowedPeers) => invoke('lanchat:setAgentPeers', { id, allowedPeers }),
   setAgentSharing: (id, patch) => invoke('lanchat:setAgentSharing', { id, ...patch }),
   testAgent: (id) => invoke('lanchat:testAgent', { id }),
+  listAgentProfiles: (id, draft) => invoke('lanchat:listAgentProfiles', { id, draft }),
   answerAgentApproval: (agentId, runId, choice) =>
     invoke('lanchat:answerAgentApproval', { agentId, runId, choice }),
   stopAgentRun: (agentId) => invoke('lanchat:stopAgentRun', { agentId }),

@@ -5,6 +5,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const net = require('node:net');
 const Module = require('node:module');
 const { EventEmitter } = require('node:events');
 
@@ -69,6 +70,21 @@ function echoTransports(log) {
       stop: async () => {},
     }),
   };
+}
+
+// Ports are asked for rather than hardcoded. `node --test` runs files
+// concurrently and a just-closed listener can linger in TIME_WAIT, so fixed
+// numbers collide with EADDRINUSE — which looks like a product failure and is
+// not one.
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.on('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address();
+      probe.close(() => resolve(port));
+    });
+  });
 }
 
 function makeNode(name, port) {
@@ -154,9 +170,9 @@ const remoteIdOn = (peer, ownerId, agentId) =>
   [...peer.hub.identities.keys()].find((k) => k.startsWith(`remote-agent:${ownerId}:${agentId}`));
 
 test('a shared agent reaches a peer over the wire and its chat stays out of the human thread', async (t) => {
-  const A = makeNode('owner', 47431);
+  const A = makeNode('owner', await freePort());
   const aCall = A.call;
-  const B = makeNode('peer', 47432);
+  const B = makeNode('peer', await freePort());
   await A.server.start();
   await B.server.start();
   t.after(() => {
@@ -215,8 +231,8 @@ test('a shared agent reaches a peer over the wire and its chat stays out of the 
 });
 
 test('a peer reaching the agent by @name lands in the same thread, not the human chat', async (t) => {
-  const A = makeNode('owner2', 47433);
-  const B = makeNode('peer2', 47434);
+  const A = makeNode('owner2', await freePort());
+  const B = makeNode('peer2', await freePort());
   await A.server.start();
   await B.server.start();
   t.after(() => {
@@ -257,9 +273,9 @@ test('a peer reaching the agent by @name lands in the same thread, not the human
 });
 
 test('two peers take turns, and each is told where they stand', async (t) => {
-  const A = makeNode('owner3', 47435);
-  const B = makeNode('first', 47436);
-  const C = makeNode('second', 47437);
+  const A = makeNode('owner3', await freePort());
+  const B = makeNode('first', await freePort());
+  const C = makeNode('second', await freePort());
   await A.server.start();
   await B.server.start();
   await C.server.start();
@@ -323,8 +339,8 @@ test('two peers take turns, and each is told where they stand', async (t) => {
 });
 
 test('a remote agent reports what it is doing, and is never pinged for latency', async (t) => {
-  const A = makeNode('owner7', 47445);
-  const B = makeNode('peer7', 47446);
+  const A = makeNode('owner7', await freePort());
+  const B = makeNode('peer7', await freePort());
   await A.server.start();
   await B.server.start();
   t.after(() => {
@@ -358,9 +374,9 @@ test('a remote agent reports what it is doing, and is never pinged for latency',
 });
 
 test('a pending handover counts down on both machines at once', async (t) => {
-  const A = makeNode('owner8', 47447);
-  const B = makeNode('holder', 47448);
-  const C = makeNode('nextup', 47449);
+  const A = makeNode('owner8', await freePort());
+  const B = makeNode('holder', await freePort());
+  const C = makeNode('nextup', await freePort());
   await A.server.start();
   await B.server.start();
   await C.server.start();
@@ -422,8 +438,8 @@ test('a pending handover counts down on both machines at once', async (t) => {
 });
 
 test('deleting a chat history removes it from disk, agent threads included', async (t) => {
-  const A = makeNode('owner5', 47441);
-  const B = makeNode('peer5', 47442);
+  const A = makeNode('owner5', await freePort());
+  const B = makeNode('peer5', await freePort());
   await A.server.start();
   await B.server.start();
   t.after(() => {
@@ -466,8 +482,8 @@ test('deleting a chat history removes it from disk, agent threads included', asy
 });
 
 test('a chat history saves as readable text, naming who said what', async (t) => {
-  const A = makeNode('owner6', 47443);
-  const B = makeNode('peer6', 47444);
+  const A = makeNode('owner6', await freePort());
+  const B = makeNode('peer6', await freePort());
   await A.server.start();
   await B.server.start();
   t.after(() => {
@@ -514,8 +530,8 @@ test('a chat history saves as readable text, naming who said what', async (t) =>
 });
 
 test('withdrawing a shared agent removes it from the peer roster', async (t) => {
-  const A = makeNode('owner4', 47438);
-  const B = makeNode('peer4', 47439);
+  const A = makeNode('owner4', await freePort());
+  const B = makeNode('peer4', await freePort());
   await A.server.start();
   await B.server.start();
   t.after(() => {

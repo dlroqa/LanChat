@@ -5,6 +5,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const net = require('node:net');
 const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 
@@ -15,6 +16,21 @@ const { createServer } = require('../src/main/server.js');
 const { createFileSender } = require('../src/main/fileTransfer.js');
 const { Outbox } = require('../src/main/outbox.js');
 const { MessageStore } = require('../src/main/store.js');
+
+// Ports are asked for rather than hardcoded. `node --test` runs files
+// concurrently and a just-closed listener can linger in TIME_WAIT, so fixed
+// numbers collide with EADDRINUSE — which looks like a product failure and is
+// not one.
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.on('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address();
+      probe.close(() => resolve(port));
+    });
+  });
+}
 
 function makeNode(name, port) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `lanchat-${name}-`));
@@ -45,8 +61,8 @@ function waitFor(fn, timeout = 4000) {
 }
 
 test('two nodes connect, exchange a chat message, and transfer a file', async (t) => {
-  const A = makeNode('alice', 47411);
-  const B = makeNode('bob', 47412);
+  const A = makeNode('alice', await freePort());
+  const B = makeNode('bob', await freePort());
   await A.server.start();
   await B.server.start();
 
@@ -99,8 +115,8 @@ test('two nodes connect, exchange a chat message, and transfer a file', async (t
 // us never went through hub.connect(), so before the inbound-address fix in
 // server.js it had no address and sending it a file failed outright.
 test('the peer who accepted the connection can send a file back', async (t) => {
-  const A = makeNode('carol', 47413);
-  const B = makeNode('dave', 47414);
+  const A = makeNode('carol', await freePort());
+  const B = makeNode('dave', await freePort());
   await A.server.start();
   await B.server.start();
 
@@ -139,8 +155,8 @@ test('the peer who accepted the connection can send a file back', async (t) => {
 // unreachable must actually arrive over a real socket once they return, rather
 // than merely claiming to have been queued.
 test('a message typed while a peer is offline is delivered when they reconnect', async (t) => {
-  const A = makeNode('erin', 47415);
-  const B = makeNode('frank', 47416);
+  const A = makeNode('erin', await freePort());
+  const B = makeNode('frank', await freePort());
   await A.server.start();
   await B.server.start();
 

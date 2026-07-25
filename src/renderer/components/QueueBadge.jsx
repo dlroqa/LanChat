@@ -27,17 +27,26 @@ export default function QueueBadge({ peer }) {
   }
 
   if (peer.queueState === 'waiting') {
-    // Only whoever is next inherits the turn, so only they get a countdown.
+    // Only whoever is next inherits the turn, so only they get a countdown —
+    // and it is the same clock the current holder is watching run out.
     if (counting) {
       return (
         <span className="tag good counting" title={`You are next — the turn passes to you in ${left}s`}>
-          up in {left}s
+          your turn in {left}s
         </span>
       );
     }
+    // No exact countdown until the holder goes idle, but the number of queries
+    // still ahead moves in real time as they are spent — so the wait is always
+    // measurable rather than an open-ended silence.
     return (
-      <span className="tag warn" title={`Waiting for a turn — position ${peer.queuePosition}`}>
-        #{peer.queuePosition} in line
+      <span
+        className="tag warn"
+        title={`Waiting for a turn — position ${peer.queuePosition}, ${peer.queueAhead} ${
+          peer.queueAhead === 1 ? 'query' : 'queries'
+        } ahead of you`}
+      >
+        #{peer.queuePosition} in line{peer.queueAhead > 0 ? ` · ${peer.queueAhead} ahead` : ''}
       </span>
     );
   }
@@ -57,8 +66,8 @@ export function useQueueLabel(peer) {
   }
   if (peer.queueState === 'waiting') {
     return counting
-      ? ` · you are next — turn passes to you in ${left}s`
-      : ` · waiting for a turn, #${peer.queuePosition} in line`;
+      ? ` · your turn in ${left}s`
+      : ` · waiting for a turn, #${peer.queuePosition} in line${peer.queueAhead ? `, ${peer.queueAhead} queries ahead of you` : ''}`;
   }
   return '';
 }

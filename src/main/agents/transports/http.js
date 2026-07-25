@@ -58,13 +58,22 @@ function describeSocketError(err, url) {
   }
 }
 
+// A Hermes API server can host several profiles behind one port, selected by a
+// `/p/<profile>/` prefix on every route. No prefix means the server's default
+// profile, which is what an agent configured before this existed keeps using.
+function profilePrefix(profile) {
+  const name = String(profile || '').trim().replace(/^\/+|\/+$/g, '');
+  return name ? `/p/${encodeURIComponent(name)}` : '';
+}
+
 function createHttpTransport({ id, name, config, getSecret, timeoutMs }) {
   const baseUrl = String(config.baseUrl || 'http://127.0.0.1:8642').replace(/\/+$/, '');
+  const prefix = profilePrefix(config.profile);
   const budget = timeoutMs || DEFAULT_TIMEOUT_MS;
   let active = null; // { runId, req, res, abort }
 
   function request(method, urlPath, { body, stream, signalTimeout } = {}) {
-    const url = new URL(baseUrl + urlPath);
+    const url = new URL(baseUrl + prefix + urlPath);
     const mod = url.protocol === 'https:' ? https : http;
     const secret = getSecret();
     const headers = { Accept: stream ? 'text/event-stream' : 'application/json' };
@@ -120,7 +129,8 @@ function createHttpTransport({ id, name, config, getSecret, timeoutMs }) {
       throw new Error(`Agent API returned HTTP ${res.statusCode}.`);
     }
     const model = (body.data && body.data[0] && body.data[0].id) || 'unknown';
-    return { detail: `Connected to ${baseUrl} (${model})` };
+    const via = config.profile ? ` · profile ${config.profile}` : '';
+    return { detail: `Connected to ${baseUrl}${via} (${model})` };
   }
 
   async function send({ text }, handlers = {}) {
@@ -231,4 +241,4 @@ function createHttpTransport({ id, name, config, getSecret, timeoutMs }) {
   return { id, name, kind: 'http', start, send, stop, answerApproval };
 }
 
-module.exports = { createHttpTransport, describeSocketError };
+module.exports = { createHttpTransport, describeSocketError, profilePrefix };

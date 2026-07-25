@@ -182,6 +182,7 @@ function createRemoteAgents({ hub, store }) {
       queuePosition: msg.position,
       queueRemaining: msg.remaining,
       queueQuota: msg.quota,
+      queueAhead: msg.ahead || 0,
       queueExpiring: msg.expiring === true,
       queueExpiresInSec: msg.expiresInSec || 0,
     });

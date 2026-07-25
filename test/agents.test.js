@@ -29,7 +29,8 @@ const {
   parseRemoteAgentId,
 } = require('../src/main/agents/registry.js');
 const { createRemoteAgents } = require('../src/main/agents/remote.js');
-const { describeSocketError } = require('../src/main/agents/transports/http.js');
+const { describeSocketError, profilePrefix } = require('../src/main/agents/transports/http.js');
+const { discoverProfiles, isLocalHost } = require('../src/main/agents/profiles.js');
 const { createVirtualSocket, OPEN, CLOSED } = require('../src/main/agents/virtualSocket.js');
 const { createAgentHub, LOCAL_ORIGIN } = require('../src/main/agents/index.js');
 const { buildArgs } = require('../src/main/agents/transports/spawn.js');
@@ -133,6 +134,32 @@ test('other socket failures are named too, and unknown ones pass through untouch
   // The timeout path destroys with a code-less Error; its wording must survive.
   const timeout = new Error('Request timed out.');
   assert.equal(describeSocketError(timeout, url), timeout, 'unrecognised errors are not rewritten');
+});
+
+// ---- Hermes profiles ----
+
+test('a profile becomes a URL prefix, and no profile leaves the path alone', () => {
+  assert.equal(profilePrefix(''), '', 'the server default is the bare path');
+  assert.equal(profilePrefix(undefined), '');
+  assert.equal(profilePrefix('lanchat'), '/p/lanchat');
+  assert.equal(profilePrefix('  lanchat  '), '/p/lanchat', 'stray spacing is not part of the name');
+  assert.equal(profilePrefix('/lanchat/'), '/p/lanchat', 'nor stray slashes');
+  // A name is not a path: it must not be able to climb out of the prefix.
+  assert.equal(profilePrefix('../v1/admin'), '/p/..%2Fv1%2Fadmin');
+});
+
+test('profiles are only offered when the agent server is on this machine', () => {
+  // The names come from this machine's Hermes install, so they say nothing about
+  // a server anywhere else — offering them there would be a guess.
+  assert.deepEqual(discoverProfiles({ kind: 'http', baseUrl: 'http://100.85.49.69:8642' }), []);
+  assert.deepEqual(discoverProfiles({ kind: 'http', baseUrl: 'http://agent-box:8642' }), []);
+  assert.deepEqual(discoverProfiles({ kind: 'command', baseUrl: 'http://127.0.0.1:8642' }), []);
+  assert.deepEqual(discoverProfiles({}), []);
+
+  assert.equal(isLocalHost('http://127.0.0.1:8642'), true);
+  assert.equal(isLocalHost('http://localhost:8642'), true);
+  assert.equal(isLocalHost('http://10.0.0.5:8642'), false);
+  assert.equal(isLocalHost('not a url'), false);
 });
 
 // ---- virtual socket ----
@@ -913,6 +940,62 @@ test('a remote asker is told when the agent starts and stops working', async () 
     frames.every((f) => f.peerId === 'friend'),
     'activity goes only to the peer who asked'
   );
+});
+
+test('two idle peers do not hand the turn back and forth forever', async () => {
+  const realNow = Date.now;
+  let t = realNow();
+  Date.now = () => t;
+  try {
+    const { hub, agentHub, log } = makeHub();
+    const { agent } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+    await agentHub.setSharing(agent.id, { networkWide: true });
+    const frames = [];
+    hub.send = (peerId, obj) => {
+      frames.push({ peerId, obj });
+      return true;
+    };
+    joinPeer(hub, 'alice');
+    joinPeer(hub, 'bob');
+
+    t += 4000;
+    await ask(agentHub, 'alice', 1, log);
+    t += 4000;
+    await ask(agentHub, 'bob', 1, log); // queued behind her
+
+    // Alice sits out her whole turn. Bob inherits it.
+    t += 61000;
+    agentHub.releaseIdleTurns();
+    assert.equal(agentHub.standingFor(agent.id, 'bob').state, 'active');
+    // She used a query this turn, so she keeps her place.
+    assert.equal(agentHub.standingFor(agent.id, 'alice').state, 'waiting');
+
+    // Bob then sits out his entire turn without asking anything at all.
+    t += 61000;
+    agentHub.releaseIdleTurns();
+    assert.equal(agentHub.standingFor(agent.id, 'alice').state, 'active', 'the turn moves on');
+    assert.equal(
+      agentHub.standingFor(agent.id, 'bob').state,
+      'idle',
+      'somebody who never used their turn drops out rather than queueing again'
+    );
+
+    // With the queue empty there is nobody to be fair to, so the bouncing stops
+    // instead of running forever and messaging both peers on every bounce.
+    frames.length = 0;
+    for (let i = 0; i < 5; i += 1) {
+      t += 61000;
+      agentHub.releaseIdleTurns();
+    }
+    assert.deepEqual(frames, [], 'no further handovers, and no messages to anyone');
+
+    // Asking again rejoins the queue — dropping out costs nothing.
+    t += 4000;
+    await ask(agentHub, 'bob', 1, log);
+    assert.notEqual(agentHub.standingFor(agent.id, 'bob').state, 'idle');
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test('an idle holder is moved aside even with queries left, and the next peer is told', async () => {

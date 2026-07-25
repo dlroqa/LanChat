@@ -97,7 +97,7 @@ function AgentPanel({ peer, status, awaiting }) {
       : `${peer.queueRemaining}/${peer.queueQuota} left`
     : peer.queueState === 'waiting'
       ? counting
-        ? `up in ${secondsLeft}s`
+        ? `your turn in ${secondsLeft}s`
         : `#${peer.queuePosition} in line`
       : '—';
 
