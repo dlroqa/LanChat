@@ -156,6 +156,10 @@ function createRemoteAgents({ hub, store }) {
     const entry = get(ownerPeerId, msg.agentId) || adopt(ownerPeerId, { ...msg, name: msg.name });
     if (!entry) return null;
     show(ownerPeerId, entry);
+    // The owner marks their turn-queue housekeeping as a notice: shown once, then
+    // dropped rather than kept. This is the copy the asking peer actually reads,
+    // so it is where the queue chatter would otherwise pile up.
+    const notice = msg.notice === true;
     const message = {
       id: crypto.randomUUID(),
       peerId: entry.id,
@@ -163,8 +167,9 @@ function createRemoteAgents({ hub, store }) {
       kind: 'text',
       text: msg.text,
       ts: msg.ts || Date.now(),
+      ...(notice && { notice: true }),
     };
-    store.append(entry.id, message);
+    if (!notice) store.append(entry.id, message);
     return message;
   }
 

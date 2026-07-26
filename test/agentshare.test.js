@@ -521,12 +521,83 @@ test('a peer who lets an inherited turn lapse keeps their place in the queue', a
 
   // Nor is C nagged about the turn it is plainly not using: one "your turn" when
   // it first came round, and nothing on the handovers after that.
+  // Counted off the renderer event stream rather than the store: a turn notice
+  // is shown and then dropped, so it never reaches disk to be counted there.
   const told = () =>
-    C.store.read(cRemote).filter((m) => typeof m.text === 'string' && /Your turn/.test(m.text));
+    C.events.filter(
+      (e) => e.type === 'chat' && e.payload?.peerId === cRemote && /Your turn/.test(e.payload?.text || '')
+    );
   const beforeSweeps = told().length;
+  assert.ok(beforeSweeps >= 1, 'C was told once when the turn first reached it');
   for (let i = 3; i < 8; i += 1) sweepAfter(61000 * i);
   await new Promise((r) => setTimeout(r, 300)); // let anything sent cross the wire
   assert.equal(told().length, beforeSweeps, 'no repeated turn notices while nobody is asking');
+});
+
+test('turn-queue notices are shown once and saved by neither side', async (t) => {
+  const A = makeNode('owner6', await freePort());
+  const B = makeNode('holder', await freePort());
+  const C = makeNode('waiter', await freePort());
+  await A.server.start();
+  await B.server.start();
+  await C.server.start();
+  t.after(() => {
+    for (const n of [A, B, C]) {
+      n.hub.close();
+      n.server.stop();
+    }
+  });
+
+  const idA = A.getIdentity().id;
+  const idB = B.getIdentity().id;
+  const idC = C.getIdentity().id;
+  const { agent } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  await A.agentHub.setSharing(agent.id, { networkWide: true, directChat: true });
+
+  await connect(A, B);
+  await connect(A, C);
+  const bRemote = await waitFor(() => remoteIdOn(B, idA, agent.id), 5000, 'B to see the agent');
+  const cRemote = await waitFor(() => remoteIdOn(C, idA, agent.id), 5000, 'C to see the agent');
+
+  // B takes the turn with a real question and gets a real answer.
+  B.call('lanchat:sendChat', { peerId: bRemote, text: 'what is the time' });
+  await waitFor(() => B.store.read(bRemote).some((m) => m.direction === 'in'), 5000, 'the answer');
+
+  // C asks while B holds the turn, so the queue tells C where it stands.
+  C.call('lanchat:sendChat', { peerId: cRemote, text: 'my turn?' });
+  const shown = await waitFor(
+    () => C.events.find((e) => e.type === 'chat' && /in line/.test(e.payload?.text || '')),
+    5000,
+    'C to be told where it stands'
+  );
+  assert.equal(shown.payload.peerId, cRemote, 'in the agent thread, as before');
+  assert.equal(shown.payload.notice, true, 'marked as something to take away again');
+
+  // Shown and then dropped: the thread C keeps holds what C said, not the
+  // scheduling around it.
+  assert.deepEqual(
+    C.store.read(cRemote).map((m) => `${m.direction}:${m.text}`),
+    ['out:my turn?'],
+    "the notice is not in the waiting peer's history"
+  );
+  assert.deepEqual(
+    A.store.read(`${agent.id}#${idC}`).map((m) => `${m.direction}:${m.text}`),
+    ['in:my turn?'],
+    "nor in the owner's copy of the same thread"
+  );
+
+  // Only the housekeeping goes. A real exchange is kept exactly as it was.
+  assert.deepEqual(
+    B.store.read(bRemote).map((m) => `${m.direction}:${m.text}`),
+    ['out:what is the time', 'in:echo:what is the time'],
+    'a genuine question and answer still survive'
+  );
+
+  // The flag is honoured only for a locally produced agent message. A peer must
+  // not be able to send us something that renders and then leaves no trace.
+  B.hub.send(idA, { type: 'chat', text: 'keep this', notice: true });
+  await waitFor(() => A.store.read(idB).length === 1, 5000, "B's message to be stored");
+  assert.equal(A.store.read(idB)[0].text, 'keep this', 'a peer cannot flag their own message away');
 });
 
 test('deleting a chat history removes it from disk, agent threads included', async (t) => {

@@ -105,6 +105,13 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
         // asking an agent something graffitis a real conversation. You still see
         // everything the peer asked; `agent-request` files it under "via <peer>".
         if (agentHub && agentHub.routeFromPeer(from, msg.text)) break;
+        // A turn-queue notice is true only for the moment it arrives, so it is
+        // shown and then dropped — a saved conversation should hold what was
+        // said, not the scheduling around it. Honoured only behind the Symbol
+        // marker: the guard above drops wire frames claiming an agent id, but
+        // without this a peer could flag their own chat message and have it
+        // leave no trace on our disk.
+        const notice = msg.notice === true && msg[AGENT_LOCAL_ORIGIN] === true;
         const message = {
           id: msg.id || crypto.randomUUID(),
           peerId: from,
@@ -112,8 +119,9 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
           kind: 'text',
           text: msg.text,
           ts: msg.ts || Date.now(),
+          ...(notice && { notice: true }),
         };
-        store.append(from, message);
+        if (!notice) store.append(from, message);
         emit('chat', message);
         break;
       }

@@ -222,7 +222,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     // position and the countdown are all still accurate for a silenced peer. Only
     // the chat line is withheld, because they have shown they are not reading it.
     if (state.holder && !state.quiet.has(state.holder)) {
-      reply(record.id, `Your turn — you have ${TURN_QUOTA} queries.`, state.holder);
+      reply(record.id, `Your turn — you have ${TURN_QUOTA} queries.`, state.holder, { notice: true });
     }
   }
 
@@ -294,7 +294,8 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
               agentId,
               `You have been idle — your turn passes to the next person in about ${seconds}s ` +
                 `(${waiting} waiting). Ask something to keep it.`,
-              state.holder
+              state.holder,
+              { notice: true }
             );
           }
         }
@@ -412,7 +413,9 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     if (!record || !entry) return;
 
     if (entry.busy) {
-      reply(agentId, 'I am still working on the previous message — one at a time, please.', origin);
+      reply(agentId, 'I am still working on the previous message — one at a time, please.', origin, {
+        notice: true,
+      });
       return;
     }
     entry.busy = true;
@@ -464,20 +467,34 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
 
   // Agent output re-enters the app through the same bus event as peer traffic, so
   // it is stored and rendered by the existing ipc.js router with no special case.
-  function reply(agentId, text, origin) {
+  //
+  // `notice: true` marks the turn system talking about itself rather than the
+  // agent answering. Those lines are true for the moment they arrive and worthless
+  // a minute later, so they are shown and then dropped — never written to history.
+  // Keeping them would bury a two-line conversation under the scheduling around it,
+  // and put that noise in every saved transcript.
+  function reply(agentId, text, origin, { notice = false } = {}) {
     // A peer's conversation with the agent belongs in its own thread, not in the
     // human chat with that peer — otherwise asking an agent something graffitis
     // two real conversations. The owner still sees everything, just filed under
     // "Agent · via <peer>" instead of smeared through their chat with them.
     const threadId = origin ? delegateIdFor(agentId, origin) : agentId;
     const message = { from: threadId, type: 'chat', id: crypto.randomUUID(), text, ts: Date.now() };
+    if (notice) message.notice = true;
     message[LOCAL_ORIGIN] = true;
     bus.emit('peer-message', message);
     // If a remote peer asked, relay the answer back to that peer alone — never
     // to everyone, and never to a peer that did not ask. `agent-reply` rather
     // than `chat` so their copy lands in its own thread too.
     if (origin) {
-      hub.send(origin, { type: 'agent-reply', agentId, name: nameOf(agentId), text, ts: Date.now() });
+      hub.send(origin, {
+        type: 'agent-reply',
+        agentId,
+        name: nameOf(agentId),
+        text,
+        ts: Date.now(),
+        ...(notice && { notice: true }),
+      });
     }
   }
 
@@ -768,7 +785,8 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
         claim.rotated
           ? `That is ${TURN_QUOTA} queries — passing to the next person waiting. You are #${standing.position} in line; ask again when your turn comes round.`
           : `${nameOf(record.id)} is busy with someone else. You are #${standing.position} in line — ask again when it is your turn.`,
-        peerId
+        peerId,
+        { notice: true }
       );
       publishStanding(record);
       return true;

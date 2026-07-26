@@ -21,6 +21,11 @@ import { isAgentThread } from './lib/agentPhrase.js';
 
 const api = window.lanchat;
 
+// How long a turn-queue notice stays on screen. It is never written to history,
+// so this is only about when the bubble goes — a saved conversation is clean
+// either way, even if the app is closed while one is still showing.
+const NOTICE_TTL_MS = 60000;
+
 export default function App() {
   const [self, setSelf] = useState(null);
   const [configured, setConfigured] = useState(true);
@@ -56,6 +61,7 @@ export default function App() {
   const knownPeers = useRef({});
   const peersRef = useRef([]);
   const typingTimers = useRef({});
+  const noticeTimers = useRef({}); // message id -> removal timer for a transient notice
   const callRef = useRef(null);
   const ringerRef = useRef(null);
   const pttRef = useRef(null);
@@ -172,6 +178,19 @@ export default function App() {
       else list.push(msg);
       return { ...prev, [peerId]: list };
     });
+    // The turn system's own messages — "your turn", "you are #2 in line" — are
+    // worth reading once and nothing afterwards. They are shown like any other
+    // message and then taken away, so the thread keeps only what was really
+    // said. Nothing to undo on disk: main never stored them.
+    if (msg.notice && !noticeTimers.current[msg.id]) {
+      noticeTimers.current[msg.id] = setTimeout(() => {
+        delete noticeTimers.current[msg.id];
+        setMessages((prev) => ({
+          ...prev,
+          [peerId]: (prev[peerId] || []).filter((m) => m.id !== msg.id),
+        }));
+      }, NOTICE_TTL_MS);
+    }
   }
 
   // --- Initial load ---
@@ -257,7 +276,11 @@ export default function App() {
                 customUrl: soundUrl(cfg.customNotificationPath),
               });
             }
-            if (payload.peerId !== selectedRef.current) {
+            // A notice still pings — being told your turn came round is the
+            // whole point — but it does not raise the unread count, which
+            // would otherwise end up pointing at a message that has since
+            // taken itself away.
+            if (payload.peerId !== selectedRef.current && !payload.notice) {
               setUnread((u) => ({ ...u, [payload.peerId]: (u[payload.peerId] || 0) + 1 }));
             }
           }
@@ -351,7 +374,11 @@ export default function App() {
           break;
       }
     });
-    return off;
+    return () => {
+      off();
+      for (const timer of Object.values(noticeTimers.current)) clearTimeout(timer);
+      noticeTimers.current = {};
+    };
   }, []);
 
   // Mirror total unread onto the status-menu item and app badge.
