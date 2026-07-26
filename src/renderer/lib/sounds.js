@@ -179,6 +179,26 @@ export function playPttCue(kind, { volume = 0.6 } = {}) {
   }
 }
 
+// A message that was refused rather than sent.
+//
+// Deliberately the ugliest thing this file makes. Every other sound here is
+// something arriving; this one is something being taken away, and it has to be
+// impossible to mistake for a notification you can ignore. Low square waves in
+// pairs a few Hz apart so they beat against each other into a buzz, descending —
+// the shape of a buzzer, not a chime.
+const REJECT_CUE = [
+  [196, 0, 0.16, 'square'], [185, 0.01, 0.16, 'square'],
+  [131, 0.17, 0.3, 'square'], [124, 0.18, 0.3, 'square'],
+];
+
+export function playRejectCue({ volume = 0.9 } = {}) {
+  try {
+    playPattern(REJECT_CUE, volume);
+  } catch {
+    // Audio unavailable — a refusal is still shown, so this can go quiet.
+  }
+}
+
 function playFile(url, volume) {
   try {
     const el = new Audio(url);

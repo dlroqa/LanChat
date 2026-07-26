@@ -10,6 +10,7 @@ const { discoverProfiles } = require('./profiles');
 const { createCommandTransport } = require('./transports/command');
 const { createAcpTransport } = require('./transports/acp');
 const { createSshTransport } = require('./transports/ssh');
+const { heldLine, rotatedLine, busyLine } = require('./turnCopy');
 
 // AgentHub owns the lifecycle of connected agents.
 //
@@ -67,6 +68,12 @@ const PEER_THROTTLE_TTL_MS = 60000;
 // told about a turn neither wants, once a minute, forever — so a peer who lets a
 // whole turn lapse stops being *told* about the next one. They keep the place;
 // asking anything makes them audible again.
+//
+// Standing in line should not mean watching it. The first question asked out of
+// turn is kept and read the moment the turn arrives, and it does not spend a
+// query — the waiting is what it cost. Only one is kept per peer: a second
+// question while the first is still held is the same question asked twice into a
+// queue that has not moved, and it is refused.
 const TURN_QUOTA = 5;
 const TURN_IDLE_MS = 60000;
 // Losing a turn should never be a surprise, so the holder is told before it
@@ -100,16 +107,28 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
 
   // ---- fair-share turns ----
 
-  // agentId -> { holder, used, queue: [peerId], last, warned, quiet }
+  // agentId -> { holder, used, queue: [peerId], last, warned, quiet, held }
   //
   // `quiet` holds peers who were handed a turn and let it lapse without asking
   // anything. It decides only whether to *speak* to them, never whether they get
   // a turn — their place in the queue is untouched.
+  //
+  // `held` is peerId -> { text, ts }: the one question each waiting peer asked
+  // before their turn came, kept to be read when it does. A Map keyed by peer is
+  // what makes "only the first one" true by construction rather than by counting.
   const turns = new Map();
 
   function turnState(agentId) {
     if (!turns.has(agentId)) {
-      turns.set(agentId, { holder: null, used: 0, queue: [], last: 0, warned: false, quiet: new Set() });
+      turns.set(agentId, {
+        holder: null,
+        used: 0,
+        queue: [],
+        last: 0,
+        warned: false,
+        quiet: new Set(),
+        held: new Map(),
+      });
     }
     return turns.get(agentId);
   }
@@ -189,6 +208,11 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
         ? Math.max(1, Math.round((TURN_IDLE_MS - idle) / 1000))
         : 0;
 
+    // Whether a question of theirs is waiting to be read. Carried on the standing
+    // rather than announced separately so the asking machine learns it through
+    // the frame it already handles, and can refuse a second attempt itself.
+    const held = state.held.has(peerId);
+
     if (state.holder === peerId) {
       return {
         state: 'active',
@@ -198,6 +222,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
         ahead: 0,
         expiring: handoverIn > 0,
         expiresInSec: handoverIn,
+        held,
       };
     }
     // Same shape either way, so every consumer can read the fields without
@@ -217,6 +242,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
       // sides agree on when the handover happens.
       expiring: at === 0 && handoverIn > 0,
       expiresInSec: at === 0 ? handoverIn : 0,
+      held,
     };
   }
 
@@ -240,6 +266,39 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     if (state.holder && !state.quiet.has(state.holder)) {
       reply(record.id, `Your turn — you have ${TURN_QUOTA} queries.`, state.holder);
     }
+    flushHeld(record);
+  }
+
+  // Reads the question the new holder asked while they were still in line.
+  //
+  // It costs them nothing: the waiting is what it cost, and charging for it would
+  // mean the person who queued with a question ready is worse off than the person
+  // who queued with nothing. `used` is deliberately untouched, so their turn still
+  // reads 5/5 afterwards.
+  //
+  // Held rather than consumed when the agent is mid-run: a turn can pass while the
+  // previous holder's last query is still going, and dropping the question there
+  // would lose it for the one case it was kept for. The idle sweep comes back
+  // every few seconds and tries again.
+  function flushHeld(record) {
+    if (!record) return;
+    const state = turnState(record.id);
+    const holder = state.holder;
+    if (!holder) return;
+    const pending = state.held.get(holder);
+    if (!pending) return;
+    const entry = live.get(record.id);
+    if (!entry || entry.busy) return;
+
+    state.held.delete(holder);
+    // Their turn starts being used now rather than at the handover, so the idle
+    // countdown does not run against them while the agent answers.
+    state.last = Date.now();
+    // They did ask for this, so they are worth talking to again.
+    state.quiet.delete(holder);
+    // The card says a question is held; it no longer is.
+    publishStanding(record);
+    deliver(record.id, pending.text, holder);
   }
 
   // Called when a run finishes: if the holder has spent their turn and somebody
@@ -270,6 +329,13 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
       // Nothing left to stay quiet about once they are gone, and the set must not
       // grow without bound over a long session.
       for (const id of state.quiet) if (!hub.isConnected(id)) state.quiet.delete(id);
+      // A question is held against a place in line, and the filter above has just
+      // taken that place away. Keeping it would mean answering, out of nowhere,
+      // something asked in a session that has since ended.
+      for (const id of state.held.keys()) if (!hub.isConnected(id)) state.held.delete(id);
+      // The turn may have arrived while the agent was still answering somebody
+      // else, in which case the held question is still sitting there.
+      flushHeld(record);
       if (state.holder && !hub.isConnected(state.holder)) {
         // Gone for good as far as this turn is concerned, so not requeued.
         handOver(record, { requeue: false });
@@ -339,6 +405,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
           queueAhead: standing.ahead || 0,
           queueExpiring: standing.expiring === true,
           queueExpiresInSec: standing.expiresInSec || 0,
+          queueHeld: standing.held === true,
         });
       }
     }
@@ -795,20 +862,35 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     const entry = live.get(record.id);
     if (checkThrottle(record.id, peerId, Boolean(entry && entry.busy)) === 'silent') return true;
 
+    const state = turnState(record.id);
     const claim = claimTurn(record.id, peerId);
     if (!claim.ok) {
-      // Held back rather than dropped: the request is already visible to the
-      // owner above, and the peer is told where they stand instead of getting
-      // silence. Their message is not queued for later — asking again when
-      // their turn comes is clearer than a delayed answer to a stale question.
+      // Kept rather than dropped: they framed the question, and making them
+      // notice their turn and type it again is the watching that standing in a
+      // queue is supposed to spare them. One is kept — a second while the first
+      // is still waiting is the same question asked twice, and it is refused.
+      //
+      // The asking machine normally refuses that second one itself, off its own
+      // standing; this branch is what catches it when that standing is a beat
+      // stale, or when the peer is running a build that does not know to.
       const standing = standingFor(record.id, peerId);
-      reply(
-        record.id,
-        claim.rotated
-          ? `That is ${TURN_QUOTA} queries — passing to the next person waiting. You are #${standing.position} in line; ask again when your turn comes round.`
-          : `${nameOf(record.id)} is busy with someone else. You are #${standing.position} in line — ask again when it is your turn.`,
-        peerId
-      );
+      if (state.held.has(peerId)) {
+        reply(record.id, busyLine(nameOf(record.id), standing.position), peerId);
+      } else {
+        state.held.set(peerId, { text, ts: Date.now() });
+        reply(
+          record.id,
+          claim.rotated
+            ? rotatedLine(TURN_QUOTA, standing.position)
+            : heldLine(nameOf(record.id), standing.position),
+          peerId
+        );
+      }
+    } else {
+      // They hold the turn and are asking now, so anything kept from before is
+      // superseded by what they just said. Only reachable when a handover landed
+      // while the agent was mid-run and they typed before the sweep read it.
+      state.held.delete(peerId);
     }
 
     // Published once for either outcome: the queue can move on a refusal just as
@@ -830,6 +912,10 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     }
 
     if (claim.ok) deliver(record.id, text, peerId);
+    // A refused claim can still have moved the turn — the rotate and yield paths
+    // inside claimTurn promote a new holder without going through handOver — and
+    // whoever it landed on may have been waiting with a question.
+    else flushHeld(record);
     return true;
   }
 

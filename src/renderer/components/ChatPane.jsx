@@ -21,6 +21,8 @@ export default function ChatPane({
   // Windows only: fall back to the file row when a thumbnail cannot be fetched.
   previewFallback,
   showAddresses,
+  // Text handed back after a refused send, for the composer to pick up again.
+  draft,
   onSend,
   onAttach,
   onTyping,
@@ -164,6 +166,7 @@ export default function ChatPane({
       {/* Text can be composed while a peer is offline and is queued until they
           return. Files and voice need a live connection, so those stay gated. */}
       <Composer
+        draft={draft}
         onSend={onSend}
         onAttach={onAttach}
         onTyping={onTyping}

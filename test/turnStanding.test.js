@@ -109,6 +109,15 @@ test('every state says the same thing in words', () => {
   assert.equal(turnStandingLabel({ online: true }, 0), '');
 });
 
+test('a waiting peer is told when a question of theirs is already held', () => {
+  // The one thing that changes what you do next: there is nothing to come back
+  // and retype, so the label has to say so rather than leaving it to be guessed.
+  const held = turnStandingLabel(shared({ queueState: 'waiting', queueHeld: true }), 0);
+  assert.match(held, /question is held/);
+  const plain = turnStandingLabel(shared({ queueState: 'waiting' }), 0);
+  assert.doesNotMatch(plain, /question is held/);
+});
+
 test('one query ahead is not "1 queries ahead"', () => {
   const label = turnStandingLabel(shared({ queueState: 'waiting', queueAhead: 1 }), 0);
   assert.match(label, /1 query ahead/);

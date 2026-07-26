@@ -710,18 +710,30 @@ test('a remote peer gets five queries, then the turn passes to whoever is waitin
     assert.equal(alice.quota, 5);
     assert.equal(alice.expiring, false, 'and nothing is expiring while she is active');
 
-    // Bob asks while Alice holds the turn: queued, not served.
+    // Bob asks while Alice holds the turn: queued, not served — but kept.
     assert.equal(await ask(agentHub, 'bob', 1, log), 0, 'a waiting peer is not served');
     assert.equal(agentHub.standingFor(agent.id, 'bob').state, 'waiting');
     assert.equal(agentHub.standingFor(agent.id, 'bob').position, 1);
+    assert.equal(agentHub.standingFor(agent.id, 'bob').held, true, 'his question is kept');
 
-    // Alice is out of quota with Bob waiting, so she hands over.
-    assert.equal(await ask(agentHub, 'alice', 1, log), 0, 'a spent turn is not extended');
+    // Alice is out of quota with Bob waiting, so she hands over. Nothing of hers
+    // runs; the one thing that reaches the agent is the question Bob asked while
+    // he was still in line.
+    assert.equal(await ask(agentHub, 'alice', 1, log), 1, 'a spent turn is not extended');
+    assert.equal(log[log.length - 1], 'q0', "and Bob's held question was read instead");
     assert.equal(agentHub.standingFor(agent.id, 'bob').state, 'active', 'the turn passed to Bob');
+    assert.equal(agentHub.standingFor(agent.id, 'bob').held, false, 'nothing is held any more');
     assert.equal(agentHub.standingFor(agent.id, 'alice').state, 'waiting');
 
-    // And Bob gets his own full quota — the same limit, not the remainder.
-    assert.equal(await ask(agentHub, 'bob', 5, log), 5);
+    // Reading it cost him nothing: the wait was what it cost.
+    assert.equal(agentHub.standingFor(agent.id, 'bob').remaining, 5, 'and it was free');
+
+    // And Bob gets his own full quota — the same limit, not the remainder. The
+    // sixth run is Alice's: spending his last query hands the turn back to her,
+    // and the question she asked on the way out is read the moment it lands.
+    assert.equal(await ask(agentHub, 'bob', 5, log), 6);
+    assert.equal(agentHub.standingFor(agent.id, 'alice').state, 'active');
+    assert.equal(agentHub.standingFor(agent.id, 'alice').remaining, 5);
   });
 });
 
@@ -1057,7 +1069,14 @@ test('an idle holder is moved aside even with queries left, and the next peer is
     // Being told is the point: without this Bob would have to keep trying to
     // discover his turn had come.
     const told = frames.filter((f) => f.peerId === 'bob' && f.obj.type === 'agent-reply');
-    assert.match(told.at(-1).obj.text, /Your turn/, 'the waiting peer is notified');
+    assert.ok(
+      told.some((f) => /Your turn/.test(f.obj.text)),
+      'the waiting peer is notified'
+    );
+    // And it is not just an invitation to ask again: the question he asked while
+    // he was still in line is answered the moment the turn lands.
+    assert.equal(told.at(-1).obj.text, 'echo:q0', 'his held question was read');
+    assert.equal(agentHub.standingFor(agent.id, 'bob').held, false);
     assert.ok(
       frames.some((f) => f.peerId === 'bob' && f.obj.type === 'agent-queue' && f.obj.state === 'active'),
       'and their roster card is updated'

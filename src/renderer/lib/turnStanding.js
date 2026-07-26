@@ -75,8 +75,13 @@ export function turnStandingLabel(peer, secondsLeft) {
     case 'brace':
       return `You are next — the turn passes to you in ${secondsLeft}s`;
     default:
-      return `Waiting for a turn — position ${peer.queuePosition}, ${peer.queueAhead} ${
-        peer.queueAhead === 1 ? 'query' : 'queries'
-      } ahead of you`;
+      return (
+        `Waiting for a turn — position ${peer.queuePosition}, ${peer.queueAhead} ${
+          peer.queueAhead === 1 ? 'query' : 'queries'
+        } ahead of you` +
+        // The one thing that changes what you would do next: with a question
+        // already held there is nothing to come back and retype.
+        (peer.queueHeld ? '. Your question is held and will be read when your turn comes' : '')
+      );
   }
 }

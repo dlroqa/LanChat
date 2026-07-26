@@ -3,7 +3,7 @@ import { Send, Paperclip, Mic } from '../lib/icons.jsx';
 import { startRecording, pickFormat, formatDuration } from '../lib/voice.js';
 
 // Message composer: auto-growing textarea, Enter to send, attach and voice.
-export default function Composer({ onSend, onAttach, onTyping, onVoice, disabled, offline = false, canAttach = true }) {
+export default function Composer({ draft, onSend, onAttach, onTyping, onVoice, disabled, offline = false, canAttach = true }) {
   // Recording needs MediaRecorder with an Opus-capable container; hide the
   // affordance entirely where that is missing rather than failing on press.
   const canRecord = Boolean(onVoice) && Boolean(pickFormat());
@@ -18,6 +18,19 @@ export default function Composer({ onSend, onAttach, onTyping, onVoice, disabled
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [text]);
+
+  // A refused message comes back here rather than being lost. Keyed on the nonce
+  // and not the text, so asking the same thing twice restores it twice — and the
+  // cursor goes to the end, since the likely next move is to add to it, not to
+  // start over.
+  useEffect(() => {
+    if (!draft) return;
+    setText(draft.text);
+    const el = ref.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(draft.text.length, draft.text.length);
+  }, [draft?.nonce]);
 
   function signalTyping(active) {
     if (active === typingRef.current) return;

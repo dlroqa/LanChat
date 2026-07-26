@@ -160,6 +160,16 @@ function AgentPanel({ peer, status, awaiting }) {
             ? `Reached through ${peer.viaName}, who approves anything it wants to run. Everyone sharing it takes turns.`
             : 'Runs on this machine. You approve every tool call it wants to make — that is never handed to a peer.'}
       </div>
+
+      {/* The one thing worth saying to somebody standing in a queue: you do not
+          have to watch it. Only shown while it is true, and it stops being true
+          the moment the question is read. */}
+      {peer.queueHeld && (
+        <div className="conn-note conn-note-held">
+          Your question is held — it will be read the moment your turn comes, and it does not spend one of your
+          queries.
+        </div>
+      )}
     </div>
   );
 }

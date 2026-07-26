@@ -22,16 +22,24 @@ export default function MessageBubble({ msg, grouped, previewUrl, previewFallbac
 
   // A text message still waiting for the peer to come back online.
   const queued = out && msg.kind !== 'file' && msg.pending;
+  // Refused because a question of ours is already waiting to be read. It exists
+  // only in this window and only for a moment — long enough to be seen going.
+  const rejected = out && msg.rejected === true;
 
   return (
     <div className={`bubble-row ${out ? 'out' : 'in'} ${grouped ? 'grouped' : ''}`}>
-      <div className={`bubble ${queued ? 'queued' : ''}`}>
+      <div className={`bubble ${queued ? 'queued' : ''} ${rejected ? 'rejected' : ''}`}>
         {body}
         <div className="time">
           {formatTime(msg.ts)}
           {queued && (
             <span className="queued-mark" title="Waiting for them to come online">
               · queued
+            </span>
+          )}
+          {rejected && (
+            <span className="rejected-mark" title="Not sent — your first question is still waiting to be read">
+              · not your turn
             </span>
           )}
         </div>

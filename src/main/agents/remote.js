@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 
 const { remoteAgentIdFor, isRemoteAgentId, parseRemoteAgentId } = require('./registry');
 const { createVirtualSocket } = require('./virtualSocket');
+const { busyLine } = require('./turnCopy');
 
 // The other half of agent sharing: an agent owned by *another* peer, seen from
 // this machine.
@@ -135,6 +136,34 @@ function createRemoteAgents({ hub, store }) {
   // Using it reveals the contact, which is how a "dummy chat" appears for an
   // agent the owner shared without direct chat switched on.
   function send(ownerPeerId, entry, text) {
+    // Asking again while the question we already sent is still waiting to be
+    // read. It would not be answered any sooner, so it is refused here rather
+    // than sent: never written down, never on the wire, and the text goes back
+    // to whoever typed it.
+    //
+    // Refused on this machine rather than by the owner because the owner cannot
+    // answer fast enough to be an answer — its anti-flood swallows anything
+    // asked within a few seconds of the last attempt, which is exactly when a
+    // second attempt happens. Its own refusal still stands behind this for the
+    // moment when our standing is stale.
+    if (entry.standing && entry.standing.state === 'waiting' && entry.held) {
+      return {
+        rejected: true,
+        // Handed back so the composer can be refilled — a refusal must not cost
+        // somebody the sentence they wrote.
+        text,
+        notice: {
+          id: crypto.randomUUID(),
+          peerId: entry.id,
+          direction: 'in',
+          kind: 'text',
+          text: busyLine(entry.name, entry.standing.position),
+          ts: Date.now(),
+          notice: true,
+        },
+      };
+    }
+
     show(ownerPeerId, entry);
     const message = {
       id: crypto.randomUUID(),
@@ -181,6 +210,10 @@ function createRemoteAgents({ hub, store }) {
     const entry = get(ownerPeerId, msg.agentId);
     if (!entry) return null;
     entry.standing = { state: msg.state, position: msg.position, remaining: msg.remaining };
+    // Whether a question of ours is already waiting to be read. Kept on the entry
+    // as well as the card because `send` consults it before anything reaches the
+    // renderer, and cleared the moment the owner says it has been read.
+    entry.held = msg.held === true;
     if (!hub.identities.has(entry.id)) return entry;
     hub.setIdentity(entry.id, {
       queueState: msg.state,
@@ -190,6 +223,7 @@ function createRemoteAgents({ hub, store }) {
       queueAhead: msg.ahead || 0,
       queueExpiring: msg.expiring === true,
       queueExpiresInSec: msg.expiresInSec || 0,
+      queueHeld: entry.held,
     });
     return entry;
   }

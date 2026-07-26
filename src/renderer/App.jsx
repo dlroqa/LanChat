@@ -9,7 +9,7 @@ import AddPeerModal from './components/AddPeerModal.jsx';
 import UpdatePrompt from './components/UpdatePrompt.jsx';
 import UpdateBanner from './components/UpdateBanner.jsx';
 import { CallManager } from './lib/rtc.js';
-import { Ringer, playNotification, playCallEvent, playPttCue } from './lib/sounds.js';
+import { Ringer, playNotification, playCallEvent, playPttCue, playRejectCue } from './lib/sounds.js';
 import ConnectionPanel from './components/ConnectionPanel.jsx';
 import PttBar from './components/PttBar.jsx';
 import { PttManager, attachPttKey, defaultPttKey } from './lib/ptt.js';
@@ -25,6 +25,21 @@ const api = window.lanchat;
 // so this is only about when the bubble goes — a saved conversation is clean
 // either way, even if the app is closed while one is still showing.
 const NOTICE_TTL_MS = 60000;
+
+// How long a refused message stays on screen before it is taken away.
+//
+// Long enough to see it appear and be removed — the point is that you watch it
+// go, so it is unmistakably your message that was refused and not some general
+// complaint about the queue. Any shorter and it reads as a send that failed to
+// render at all.
+const REJECT_LINGER_MS = 900;
+
+// Ids for bubbles that only ever exist in this window. Counted rather than
+// randomised because nothing outside this process will ever see one, and a
+// counter cannot collide with itself the way two calls in the same millisecond
+// can.
+let localId = 0;
+const nextLocalId = () => `local-${(localId += 1)}`;
 
 export default function App() {
   const [self, setSelf] = useState(null);
@@ -54,6 +69,10 @@ export default function App() {
   const [update, setUpdate] = useState(null); // full modal: download/install flow
   const [updateBanner, setUpdateBanner] = useState(null); // subtle top-centre notice
   const [queued, setQueued] = useState({}); // peerId -> messages waiting to send
+  // Text handed back to the composer after a refused send, so a refusal never
+  // costs somebody the sentence they wrote. The nonce is what makes asking twice
+  // with the same words restore twice.
+  const [draft, setDraft] = useState(null); // { threadId, text, nonce }
 
   const configRef = useRef(config);
   const laterDismissedRef = useRef(null); // update version dismissed with "Later" this session
@@ -170,6 +189,10 @@ export default function App() {
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4000);
   }
 
+  function removeMessage(peerId, id) {
+    setMessages((prev) => ({ ...prev, [peerId]: (prev[peerId] || []).filter((m) => m.id !== id) }));
+  }
+
   function appendMessage(peerId, msg) {
     setMessages((prev) => {
       const list = prev[peerId] ? [...prev[peerId]] : [];
@@ -185,10 +208,7 @@ export default function App() {
     if (msg.notice && !noticeTimers.current[msg.id]) {
       noticeTimers.current[msg.id] = setTimeout(() => {
         delete noticeTimers.current[msg.id];
-        setMessages((prev) => ({
-          ...prev,
-          [peerId]: (prev[peerId] || []).filter((m) => m.id !== msg.id),
-        }));
+        removeMessage(peerId, msg.id);
       }, NOTICE_TTL_MS);
     }
   }
@@ -405,6 +425,10 @@ export default function App() {
   // --- Load history when selecting a peer ---
   useEffect(() => {
     if (!selectedId) return;
+    // A refused message was handed back to the composer; leaving the offer
+    // standing would push it in again on the way back to this thread, over
+    // whatever had been typed since.
+    setDraft(null);
     setUnread((u) => ({ ...u, [selectedId]: 0 }));
     if (loadedPeers.current.has(selectedId)) return;
     loadedPeers.current.add(selectedId);
@@ -487,6 +511,31 @@ export default function App() {
     // "Ready" while it was plainly working.
     if (isAgentThread(selectedId)) setAwaiting((a) => ({ ...a, [selectedId]: true }));
     const msg = await api.sendChat(selectedId, text);
+    // Refused: a question of ours is already waiting to be read, and this one
+    // would not be answered any sooner. Shown and then taken away rather than
+    // never shown, so what is refused is visibly *this* message — and the words
+    // go back to the composer, because being told to wait should not cost you
+    // what you wrote.
+    if (msg.rejected) {
+      setAwaiting((a) => ({ ...a, [selectedId]: false }));
+      const ghost = {
+        id: nextLocalId(),
+        peerId: selectedId,
+        direction: 'out',
+        kind: 'text',
+        text: msg.text,
+        ts: Date.now(),
+        rejected: true,
+      };
+      appendMessage(selectedId, ghost);
+      appendMessage(selectedId, msg.notice);
+      if (!configRef.current.muteNotifications) {
+        playRejectCue({ volume: Math.min(1, (configRef.current.notificationVolume ?? 0.7) + 0.2) });
+      }
+      setTimeout(() => removeMessage(selectedId, ghost.id), REJECT_LINGER_MS);
+      setDraft({ threadId: selectedId, text: msg.text, nonce: Date.now() });
+      return;
+    }
     appendMessage(selectedId, msg);
     // Held locally and retried on reconnect. This machine has to still be
     // running for that to happen — there is no server to hold it for us.
@@ -631,6 +680,7 @@ export default function App() {
           previewUrl={previewUrl}
           previewFallback={self?.platform === 'win32'}
           showAddresses={config.showAddresses}
+          draft={draft && draft.threadId === selectedId ? draft : null}
           onSend={sendText}
           onAttach={attach}
           onVoice={sendVoice}

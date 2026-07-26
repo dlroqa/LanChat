@@ -320,13 +320,13 @@ test('two peers take turns, and each is told where they stand', async (t) => {
   }
   assert.equal(A.log.length, 5, 'the holder gets a full quota');
 
-  // C now asks and must be queued, not served.
+  // C now asks and must be queued, not served — but the question is kept.
   const before = A.log.length;
   C.call('lanchat:sendChat', { peerId: cRemote, text: 'my turn?' });
   await waitFor(
-    () => C.hub.identities.get(cRemote)?.queueState,
+    () => C.hub.identities.get(cRemote)?.queueHeld === true,
     5000,
-    'C to be told where it stands'
+    'C to be told its question is held'
   );
   assert.equal(A.log.length, before, "C's request was not served while B held the turn");
 
@@ -334,6 +334,25 @@ test('two peers take turns, and each is told where they stand', async (t) => {
   assert.equal(cCard.queueState, 'waiting');
   assert.equal(cCard.queuePosition, 1, 'and knows it is next');
   assert.equal(cCard.queueQuota, 5);
+  assert.deepEqual(
+    C.store.read(cRemote).map((m) => m.text),
+    ['my turn?'],
+    'and it is still in the transcript to come back to'
+  );
+
+  // Asking again while that one is still waiting is the same question twice. It
+  // is refused on C's own machine: nothing sent, nothing written down, and the
+  // words handed back so they can be typed at instead of retyped.
+  const refused = C.call('lanchat:sendChat', { peerId: cRemote, text: 'well?' });
+  assert.equal(refused.rejected, true);
+  assert.equal(refused.text, 'well?', 'the text comes back');
+  assert.match(refused.notice.text, /busy with someone else/);
+  assert.equal(refused.notice.notice, true, 'and the explanation is transient');
+  assert.deepEqual(
+    C.store.read(cRemote).map((m) => m.text),
+    ['my turn?'],
+    'the second attempt was never stored'
+  );
 
   // B is out of quota with C waiting, so the next attempt hands over.
   B.call('lanchat:sendChat', { peerId: bRemote, text: 'one more' });
@@ -342,10 +361,20 @@ test('two peers take turns, and each is told where they stand', async (t) => {
     8000,
     'the turn to pass to C'
   );
-  assert.equal(A.log.length, before, "B's over-quota request was refused, not served");
+  assert.ok(!A.log.includes('one more'), "B's over-quota request was refused, not served");
   assert.equal(B.hub.identities.get(bRemote).queueState, 'waiting', 'and B is now queued');
 
-  // C gets its own full quota, not the remainder of B's.
+  // The question C asked while it was in line is read the moment the turn lands,
+  // rather than C having to notice and ask it again.
+  await waitFor(() => A.log.includes('my turn?'), 8000, "C's held question to be read");
+  await waitFor(
+    () => C.hub.identities.get(cRemote)?.queueHeld === false,
+    5000,
+    'the held marker to clear'
+  );
+
+  // And reading it cost nothing: C gets its own full quota, not the remainder of
+  // B's, and not one less for the question it asked while waiting.
   assert.equal(C.hub.identities.get(cRemote).queueRemaining, 5);
   // The other two states the panel colours, read off the same cards: C holding
   // the turn, B behind it in line.
