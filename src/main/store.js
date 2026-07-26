@@ -55,22 +55,32 @@ class MessageStore {
     return list[idx];
   }
 
-  // Removes turn-queue notices written by an older version, which stored them as
-  // ordinary messages. Without this, upgrading stops new ones but leaves every
-  // one already on disk in place — so the threads that prompted the change stay
-  // exactly as cluttered, and still export that way.
+  // An agent thread should hold what was asked and the answer to it. Older
+  // versions also wrote the machinery around that — whose turn it is, where you
+  // are in the queue, why a run failed — as ordinary messages, so upgrading stops
+  // new ones but leaves every one already on disk in place. Those threads would
+  // stay exactly as cluttered, and keep exporting that way.
   //
-  // Matching on text is the only option available: those messages carry no flag
-  // to find them by, which is the very thing being fixed. It is narrow on
-  // purpose — the patterns are anchored, only inbound messages are considered,
-  // and only agent threads are opened (`agent_…` and `remote-agent_…`, since
-  // `fileFor` turns `:` and `#` into underscores, while a chat with a person is
-  // named by a bare id). A message a human typed is never a candidate.
+  // Going forward that distinction is carried on the message itself, decided
+  // where it is written. Here it cannot be: the records this looks at predate the
+  // flag, which is the very thing being fixed, so text is all there is to go on.
   //
-  // Idempotent, so it can run at every startup: once the notices are gone
-  // nothing matches, and a peer still running an older build gets their notices
-  // cleaned up on the next launch too. The patterns can be dropped in a later
-  // release, once no history predating the change is still in circulation.
+  // Kept narrow, in four independent ways, because deleting somebody's history
+  // wrongly is far worse than leaving a line of clutter behind:
+  //   * only agent threads are opened at all — `agent_…` and `remote-agent_…`,
+  //     which `fileFor`'s sanitising makes recognisable, while a chat with a
+  //     person is named by a bare id;
+  //   * only inbound text messages are considered;
+  //   * anything a peer asked is exempt outright — `askedBy` is set only on the
+  //     question path, so a real question can never match however it is worded;
+  //   * the patterns are anchored end to end. Their wording has not changed since
+  //     the turn system was introduced (verified across every release that
+  //     touched it), so they match what is actually out there.
+  //
+  // Idempotent, so it runs at every startup rather than behind a migration flag:
+  // once the notices are gone nothing matches, and it also cleans up whatever a
+  // peer still on an older build sends us in the meantime. The patterns can be
+  // dropped in a later release, once no history predating the change survives.
   pruneLegacyNotices() {
     const PATTERNS = [
       /^Your turn — you have \d+ queries\.$/,
@@ -78,11 +88,14 @@ class MessageStore {
       /^That is \d+ queries — passing to the next person waiting\. You are #\d+ in line; ask again when your turn comes round\.$/,
       /^.{1,64} is busy with someone else\. You are #\d+ in line — ask again when it is your turn\.$/,
       /^I am still working on the previous message — one at a time, please\.$/,
+      // A failed run is not an answer either, and was stored as one.
+      /^⚠️ /,
     ];
     const isNotice = (m) =>
       m &&
       m.direction === 'in' &&
       (m.kind === 'text' || !m.kind) &&
+      !m.askedBy &&
       typeof m.text === 'string' &&
       PATTERNS.some((p) => p.test(m.text));
 

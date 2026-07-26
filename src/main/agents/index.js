@@ -222,7 +222,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     // position and the countdown are all still accurate for a silenced peer. Only
     // the chat line is withheld, because they have shown they are not reading it.
     if (state.holder && !state.quiet.has(state.holder)) {
-      reply(record.id, `Your turn — you have ${TURN_QUOTA} queries.`, state.holder, { notice: true });
+      reply(record.id, `Your turn — you have ${TURN_QUOTA} queries.`, state.holder);
     }
   }
 
@@ -294,8 +294,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
               agentId,
               `You have been idle — your turn passes to the next person in about ${seconds}s ` +
                 `(${waiting} waiting). Ask something to keep it.`,
-              state.holder,
-              { notice: true }
+              state.holder
             );
           }
         }
@@ -413,9 +412,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     if (!record || !entry) return;
 
     if (entry.busy) {
-      reply(agentId, 'I am still working on the previous message — one at a time, please.', origin, {
-        notice: true,
-      });
+      reply(agentId, 'I am still working on the previous message — one at a time, please.', origin);
       return;
     }
     entry.busy = true;
@@ -448,7 +445,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
           entry.pendingApproval = null;
           bus.emit('agent-typing', { agentId, isTyping: false });
           relayActivity(agentId, origin, false, null);
-          reply(agentId, output || streamed || '(no output)', origin);
+          reply(agentId, output || streamed || '(no output)', origin, { answer: true });
           // Hand over as soon as the last query of a turn finishes, so whoever
           // is next is told immediately rather than on their next attempt.
           if (origin) releaseIfSpent(agentId);
@@ -468,19 +465,23 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   // Agent output re-enters the app through the same bus event as peer traffic, so
   // it is stored and rendered by the existing ipc.js router with no special case.
   //
-  // `notice: true` marks the turn system talking about itself rather than the
-  // agent answering. Those lines are true for the moment they arrive and worthless
-  // a minute later, so they are shown and then dropped — never written to history.
-  // Keeping them would bury a two-line conversation under the scheduling around it,
-  // and put that noise in every saved transcript.
-  function reply(agentId, text, origin, { notice = false } = {}) {
+  // An agent thread keeps two things: what was asked, and the answer to it.
+  // Everything else this function sends — whose turn it is, where you are in the
+  // queue, why a run failed — is true for the moment it arrives and worthless a
+  // minute later, so it is shown and then dropped rather than written down.
+  //
+  // Which is why `answer` is opt-in and nothing else has to be marked: a notice
+  // added here in future is transient because that is the default, not because
+  // somebody remembered to say so. Only the one call that carries the agent's
+  // output asks to be kept.
+  function reply(agentId, text, origin, { answer = false } = {}) {
     // A peer's conversation with the agent belongs in its own thread, not in the
     // human chat with that peer — otherwise asking an agent something graffitis
     // two real conversations. The owner still sees everything, just filed under
     // "Agent · via <peer>" instead of smeared through their chat with them.
     const threadId = origin ? delegateIdFor(agentId, origin) : agentId;
     const message = { from: threadId, type: 'chat', id: crypto.randomUUID(), text, ts: Date.now() };
-    if (notice) message.notice = true;
+    if (!answer) message.notice = true;
     message[LOCAL_ORIGIN] = true;
     bus.emit('peer-message', message);
     // If a remote peer asked, relay the answer back to that peer alone — never
@@ -493,7 +494,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
         name: nameOf(agentId),
         text,
         ts: Date.now(),
-        ...(notice && { notice: true }),
+        ...(!answer && { notice: true }),
       });
     }
   }
@@ -785,8 +786,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
         claim.rotated
           ? `That is ${TURN_QUOTA} queries — passing to the next person waiting. You are #${standing.position} in line; ask again when your turn comes round.`
           : `${nameOf(record.id)} is busy with someone else. You are #${standing.position} in line — ask again when it is your turn.`,
-        peerId,
-        { notice: true }
+        peerId
       );
       publishStanding(record);
       return true;

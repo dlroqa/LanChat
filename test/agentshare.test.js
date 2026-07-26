@@ -74,6 +74,12 @@ function echoTransports(log) {
       start: async () => ({ detail: 'ready' }),
       send: async ({ text }, h) => {
         log.push(text);
+        // A prompt that makes the run fail, so the error path can be driven
+        // without a second transport stub.
+        if (text.startsWith('fail:')) {
+          h.onError?.(new Error('transport is down'));
+          return;
+        }
         h.onDone?.({ text: `echo:${text}` });
       },
       stop: async () => {},
@@ -593,6 +599,22 @@ test('turn-queue notices are shown once and saved by neither side', async (t) =>
     'a genuine question and answer still survive'
   );
 
+  // A failed run is not an answer either, so it is shown and then dropped like
+  // any other notice — the question stays, the transport's complaint does not.
+  await new Promise((r) => setTimeout(r, 3100)); // past the anti-flood interval
+  B.call('lanchat:sendChat', { peerId: bRemote, text: 'fail:now' });
+  const failed = await waitFor(
+    () => B.events.find((e) => e.type === 'chat' && /transport is down/.test(e.payload?.text || '')),
+    5000,
+    'the error to reach the renderer'
+  );
+  assert.equal(failed.payload.notice, true, 'marked transient rather than kept as a reply');
+  assert.deepEqual(
+    B.store.read(bRemote).map((m) => `${m.direction}:${m.text}`),
+    ['out:what is the time', 'in:echo:what is the time', 'out:fail:now'],
+    'the question survives on its own, with no error stored beside it'
+  );
+
   // The flag is honoured only for a locally produced agent message. A peer must
   // not be able to send us something that renders and then leaves no trace.
   B.hub.send(idA, { type: 'chat', text: 'keep this', notice: true });
@@ -614,12 +636,16 @@ test('notices already on disk from an older version are cleared out at startup',
     'That is 5 queries — passing to the next person waiting. You are #1 in line; ask again when your turn comes round.',
     'Hermes is busy with someone else. You are #1 in line — ask again when it is your turn.',
     'I am still working on the previous message — one at a time, please.',
+    '⚠️ connect ECONNREFUSED 127.0.0.1:8081',
   ].map((text, i) => ({ id: `n${i}`, direction: 'in', kind: 'text', text, ts: 1000 + i }));
 
-  // The owner's view of a peer's conversation with their agent.
+  // The owner's view of a peer's conversation with their agent. The second
+  // question is a peer quoting a notice back at the agent: `askedBy` marks it as
+  // something a person asked, so it stays whatever it says.
   write('agent_aaa_bbb.json', [
     { id: 'q', direction: 'in', kind: 'text', text: 'what profile are you using?', ts: 1, askedBy: 'bbb' },
     ...notices,
+    { id: 'q2', direction: 'in', kind: 'text', text: 'Your turn — you have 5 queries.', ts: 1500, askedBy: 'bbb' },
     { id: 'a', direction: 'in', kind: 'text', text: 'I’m using the Hermes profile “lanchat”.', ts: 2000 },
   ]);
   // The asking peer's own copy of the same thing.
@@ -634,12 +660,16 @@ test('notices already on disk from an older version are cleared out at startup',
   ]);
 
   const removed = store.pruneLegacyNotices();
-  assert.equal(removed, 10, 'every stored notice in both agent threads goes');
+  assert.equal(removed, 12, 'every stored notice in both agent threads goes');
 
   assert.deepEqual(
     read('agent_aaa_bbb.json').map((m) => m.text),
-    ['what profile are you using?', 'I’m using the Hermes profile “lanchat”.'],
-    'the real conversation survives intact, in order'
+    [
+      'what profile are you using?',
+      'Your turn — you have 5 queries.',
+      'I’m using the Hermes profile “lanchat”.',
+    ],
+    'questions and answers survive intact and in order, a quoted notice included'
   );
   assert.deepEqual(
     read('remote-agent_ccc_ddd.json').map((m) => m.text),
