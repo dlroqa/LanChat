@@ -102,7 +102,7 @@ export default function Sidebar({
             <Avatar name={p.name} id={p.id} avatar={p.avatar} online={p.online} />
             <div className="meta">
               <div className="name">
-                {p.name || p.hostname || 'Unknown'}
+                <span className="name-text">{p.name || p.hostname || 'Unknown'}</span>
                 {p.shared && (
                   <span className="tag" title="Shared with you from another tailnet">
                     shared
@@ -167,7 +167,7 @@ export default function Sidebar({
               <div key={t.ip} className="peer offline" title="Online on Tailscale but not running LanChat">
                 <Avatar name={t.hostname} id={t.ip} />
                 <div className="meta">
-                  <div className="name">{t.hostname}</div>
+                  <div className="name"><span className="name-text">{t.hostname}</span></div>
                   <div className="sub">{platformLabel(t.os)} · app not running</div>
                 </div>
               </div>

@@ -244,10 +244,22 @@ input:focus-visible {
   flex: 1;
 }
 .peer .name {
+  display: flex;
+  align-items: center;
+  min-width: 0;
   font-weight: 500;
+}
+/* Only the name itself truncates. The badges beside it carry state — queue
+   position, a live countdown — so letting them be the thing that gets cut
+   hides exactly what they exist to show. */
+.peer .name .name-text {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.peer .name > .tag,
+.peer .name > .queue-dots {
+  flex: 0 0 auto;
 }
 .peer .sub {
   font-size: 12px;
@@ -342,6 +354,64 @@ input:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .tag.counting {
     animation: none;
+  }
+}
+
+/* Waiting for a turn on a shared agent. A "#1 in line · 5 ahead" badge does not
+   fit the name row and was collapsing to a bare ellipsis, so the wait is shown
+   as motion instead: three dots running in sequence, amber while the queue is
+   stalled and blue the moment the handover countdown starts — the change of
+   colour is itself the news. */
+.queue-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  color: var(--warn);
+  transition: color 0.25s ease;
+}
+.queue-dots.counting {
+  /* --primary is a little dim for 4px dots on --bg; the hover variant reads
+     unmistakably blue at this size without leaving the palette. */
+  color: var(--primary-hover);
+}
+.queue-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: queue-dot 1.2s ease-in-out infinite;
+}
+.queue-dots i:nth-child(2) {
+  animation-delay: 0.16s;
+}
+.queue-dots i:nth-child(3) {
+  animation-delay: 0.32s;
+}
+@keyframes queue-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+.queue-dots b {
+  margin-left: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  font-variant-numeric: tabular-nums;
+}
+/* The global reduced-motion rule already stops the animation; pin the dots to
+   near-full opacity so they do not freeze mid-fade and read as disabled. */
+@media (prefers-reduced-motion: reduce) {
+  .queue-dots i {
+    opacity: 0.85;
   }
 }
 
