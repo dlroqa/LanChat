@@ -30,6 +30,7 @@ A simple, peer-to-peer **LAN & Tailscale chat** app — text, voice, video, and 
 | 📶 **Live connection graphs** | When not in a call, the panel charts real round-trip latency and link quality. |
 | 🔊 **Sound choices** | 6 ringtones + 8 message sounds, each with volume control and a custom-file option. |
 | 📎 **File sharing** | Send any file, photo, or video — images & clips preview inline. Drag-and-drop supported. |
+| 🔗 **Links** | Links in messages are clickable and open in your own browser, never inside LanChat. LanChat also unfurls the first link in a message into a small card with the page's title, description, and picture — fetched by the app itself (there is no server to do it for you), only for a message you have actually scrolled to, and switched off in **Settings → Privacy** if you would rather nothing left your machine. |
 | 🪪 **Simple identity** | Pick a display name, and either a colour or your own profile picture. No sign-up. |
 | 🔔 **Status menu** | Lives in the macOS menu bar, Windows tray, and Ubuntu status area — who's online, unread badge, quick jump into a chat. |
 | 🔒 **Addresses hidden** | IP addresses are hidden by default; peers are identified by name. |

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import Avatar from './Avatar.jsx';
 import Logo from './Logo.jsx';
 import MessageBubble from './MessageBubble.jsx';
@@ -23,6 +23,10 @@ export default function ChatPane({
   showAddresses,
   // Text handed back after a refused send, for the composer to pick up again.
   draft,
+  // Links in messages: how one is opened, and how one is unfurled (undefined
+  // when the user has previews turned off).
+  onOpenLink,
+  linkPreview,
   onSend,
   onAttach,
   onTyping,
@@ -38,6 +42,10 @@ export default function ChatPane({
   onApprove,
 }) {
   const scrollRef = useRef(null);
+  // Whether the reader is at the end of the conversation. A link card arriving
+  // late grows a bubble, which would otherwise nudge the newest message out of
+  // sight — so the bottom is held, but only for someone who was already there.
+  const atBottom = useRef(true);
   // Live while a handover is counting down, so both sides see the same number.
   const queueLabel = useQueueLabel(peer);
   // An agent thinks rather than types, and it does not send keepalives — so its
@@ -50,6 +58,17 @@ export default function ChatPane({
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, typing, awaiting]);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (el) atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  };
+
+  // Stable, so a card is not handed a new callback on every render of the pane.
+  const keepAtBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (el && atBottom.current) el.scrollTop = el.scrollHeight;
+  }, []);
 
   if (!peer) {
     return (
@@ -120,7 +139,7 @@ export default function ChatPane({
         </div>
       </div>
 
-      <div className="messages" ref={scrollRef}>
+      <div className="messages" ref={scrollRef} onScroll={onScroll}>
         {messages.map((m, i) => {
           const prev = messages[i - 1];
           const newDay = !prev || formatDay(prev.ts) !== formatDay(m.ts);
@@ -137,6 +156,9 @@ export default function ChatPane({
                 progress={progress[m.id]}
                 onOpen={onOpenFile}
                 onReveal={onRevealFile}
+                onOpenLink={onOpenLink}
+                linkPreview={linkPreview}
+                onPreviewShown={keepAtBottom}
               />
             </React.Fragment>
           );

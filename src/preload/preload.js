@@ -58,6 +58,12 @@ contextBridge.exposeInMainWorld('lanchat', {
   revealFile: (filePath) => invoke('lanchat:revealFile', filePath),
   openFile: (filePath) => invoke('lanchat:openFile', filePath),
 
+  // Links found in messages. Both are refused in main for anything that is not
+  // an http(s) URL: one opens in the real browser rather than in this window, and
+  // the other is fetched in main — the window never reaches a remote host itself.
+  openExternal: (url) => invoke('lanchat:openExternal', url),
+  linkPreview: (url) => invoke('lanchat:linkPreview', url),
+
   // Subscribe to main-process events. Returns an unsubscribe function.
   onEvent: (handler) => {
     const listener = (_e, evt) => handler(evt);

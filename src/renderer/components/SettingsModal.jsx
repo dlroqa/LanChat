@@ -14,6 +14,7 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
   const [enableLan, setLan] = useState(config.enableLan);
   const [useStun, setUseStun] = useState((config.iceServers || []).length > 0);
   const [showAddresses, setShowAddresses] = useState(Boolean(config.showAddresses));
+  const [linkPreviews, setLinkPreviews] = useState(config.linkPreviews !== false);
   // Applied immediately via IPC (not batched into onSave), since the OS login
   // item should reflect the toggle the moment it changes.
   const [openAtLogin, setOpenAtLogin] = useState(Boolean(config.openAtLogin));
@@ -43,6 +44,7 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
       enableLan,
       iceServers: useStun ? [{ urls: DEFAULT_STUN }] : [],
       showAddresses,
+      linkPreviews,
       ...devices,
       ...sounds,
       ...ptt,
@@ -130,6 +132,12 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
           desc="Off by default. Peers are identified by name; addresses stay hidden."
           on={showAddresses}
           set={setShowAddresses}
+        />
+        <Toggle
+          label="Preview links in messages"
+          desc="Links stay clickable either way. With this on, LanChat fetches the page itself to show its title and picture — the site sees your IP, the way it would if you opened it."
+          on={linkPreviews}
+          set={setLinkPreviews}
         />
 
         {self?.platform === 'win32' && (

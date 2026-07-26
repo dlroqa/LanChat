@@ -15,6 +15,10 @@ const DEFAULTS = Object.freeze({
   discoveryPort: 47101, // UDP LAN broadcast port
   iceServers: [], // e.g. [{ urls: 'stun:stun.l.google.com:19302' }]
   showAddresses: false, // hide peers' IP addresses in the UI by default
+  // Links in messages are always clickable; this is only about unfurling them
+  // into a card, which means LanChat fetching the page itself — the one thing in
+  // the app that reaches past your own network, so it is a visible setting.
+  linkPreviews: true,
   ringtone: 'classic', // see renderer lib/sounds.js
   ringtoneVolume: 0.8,
   customRingtonePath: null,

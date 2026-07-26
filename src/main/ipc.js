@@ -7,6 +7,8 @@ const { ipcMain, dialog, shell } = require('electron');
 const { guessMime } = require('./fileTransfer');
 const { LOCAL_ORIGIN: AGENT_LOCAL_ORIGIN } = require('./agents');
 const { createRemoteAgents } = require('./agents/remote');
+const { normalizeWebUrl } = require('./webLinks');
+const { createLinkPreview } = require('./linkPreview');
 
 // Bridges the main-process services to the renderer:
 //   - ipcMain.handle(...)  : renderer -> main commands (request/response)
@@ -206,6 +208,7 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       'audioInputId',
       'videoInputId',
       'showAddresses',
+      'linkPreviews',
       'ringtone',
       'ringtoneVolume',
       'customRingtonePath',
@@ -541,6 +544,35 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     return true;
   });
 
+  // ---- links in messages ----
+  // A link in a bubble opens in the real browser, never inside LanChat: the
+  // window has our preload attached, and nothing a peer sends should ever be
+  // loaded next to it. normalizeWebUrl is what makes that true — anything that
+  // is not http(s) is refused here rather than handed to the OS.
+  ipcMain.handle('lanchat:openExternal', async (_e, rawUrl) => {
+    const url = normalizeWebUrl(rawUrl);
+    if (!url) return { ok: false, reason: 'not a web link' };
+    try {
+      await shell.openExternal(url);
+      return { ok: true };
+    } catch (err) {
+      emit('toast', { level: 'error', text: `Could not open the link: ${err.message}` });
+      return { ok: false, reason: err.message };
+    }
+  });
+
+  // Unfurling a link into a card. Everything about the fetch — what may be
+  // reached, how much is read, what comes back — lives in linkPreview.js.
+  const electron = require('electron');
+  const linkPreview = createLinkPreview({ version: (electron.app && electron.app.getVersion()) || '0' });
+
+  ipcMain.handle('lanchat:linkPreview', (_e, rawUrl) => {
+    // The setting is enforced here, not in the renderer: with previews off, no
+    // request leaves this machine even if a window asks for one.
+    if (config.get('linkPreviews') === false) return { ok: false, reason: 'previews are off' };
+    return linkPreview.get(rawUrl);
+  });
+
   async function sendFiles(peerId, paths) {
     const sent = [];
     // Agents are text-only participants — there is no endpoint to upload to.
@@ -606,6 +638,7 @@ function publicConfig(config) {
     audioInputId,
     videoInputId,
     showAddresses,
+    linkPreviews,
     ringtone,
     ringtoneVolume,
     customRingtonePath,
@@ -630,6 +663,7 @@ function publicConfig(config) {
     audioInputId,
     videoInputId,
     showAddresses,
+    linkPreviews,
     ringtone,
     ringtoneVolume,
     customRingtonePath,

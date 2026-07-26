@@ -2,7 +2,7 @@
 
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { app, BrowserWindow, session, safeStorage } = require('electron');
+const { app, BrowserWindow, session, safeStorage, shell } = require('electron');
 
 const { Config } = require('./config');
 const { buildIdentity } = require('./identity');
@@ -18,6 +18,7 @@ const { createLinkStats } = require('./linkStats');
 const { createPip } = require('./pip');
 const { createAgentHub } = require('./agents');
 const { Outbox } = require('./outbox');
+const { normalizeWebUrl } = require('./webLinks');
 
 // Long enough that the update check never competes with first-run setup.
 const STARTUP_UPDATE_CHECK_DELAY = 4000;
@@ -78,8 +79,33 @@ function createWindow({ hidden = false } = {}) {
 
   if (pip) pip.attach(mainWindow);
 
+  confineNavigation(mainWindow.webContents);
+
   mainWindow.on('closed', () => {
     mainWindow = null;
+  });
+}
+
+// Messages carry links now, and this window is the last place one should ever
+// open: it has our preload attached. So the window itself never navigates and
+// never opens a child window — a web link is handed to the real browser, and
+// anything that is not a web link is dropped. The renderer already routes clicks
+// through IPC; this is the backstop for the paths it does not control (middle
+// click, target=_blank, a dropped URL).
+function confineNavigation(webContents) {
+  const isOwnPage = (url) => url.startsWith('file://') || url.startsWith('http://localhost:5273');
+
+  webContents.setWindowOpenHandler(({ url }) => {
+    const web = normalizeWebUrl(url);
+    if (web) shell.openExternal(web);
+    return { action: 'deny' };
+  });
+
+  webContents.on('will-navigate', (e, url) => {
+    if (isOwnPage(url)) return;
+    e.preventDefault();
+    const web = normalizeWebUrl(url);
+    if (web) shell.openExternal(web);
   });
 }
 

@@ -1,10 +1,29 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { formatTime, formatBytes, isImage, isVideo, isAudio } from '../lib/util.js';
 import { FileIcon, Download } from '../lib/icons.jsx';
+import { linkify } from '../lib/linkify.js';
+import LinkPreview from './LinkPreview.jsx';
 
 // previewUrl builds a localhost URL the main-process server streams the file from.
-export default function MessageBubble({ msg, grouped, previewUrl, previewFallback, progress, onOpen, onReveal }) {
+export default function MessageBubble({
+  msg,
+  grouped,
+  previewUrl,
+  previewFallback,
+  progress,
+  onOpen,
+  onReveal,
+  // Links in message text: opened in the real browser, and unfurled into a card
+  // when the user has previews on (`linkPreview` is undefined when they don't).
+  onOpenLink,
+  linkPreview,
+  onPreviewShown,
+}) {
   const out = msg.direction === 'out';
+
+  const runs = useMemo(() => (msg.kind === 'file' ? [] : linkify(msg.text)), [msg.kind, msg.text]);
+  // The first link only: a message with several should not become a wall of cards.
+  const firstLink = runs.find((r) => r.type === 'link');
 
   const body =
     msg.kind === 'file' ? (
@@ -17,7 +36,7 @@ export default function MessageBubble({ msg, grouped, previewUrl, previewFallbac
         onReveal={onReveal}
       />
     ) : (
-      <div className="text">{msg.text}</div>
+      <MessageText runs={runs} onOpenLink={onOpenLink} />
     );
 
   // A text message still waiting for the peer to come back online.
@@ -30,6 +49,15 @@ export default function MessageBubble({ msg, grouped, previewUrl, previewFallbac
     <div className={`bubble-row ${out ? 'out' : 'in'} ${grouped ? 'grouped' : ''}`}>
       <div className={`bubble ${queued ? 'queued' : ''} ${rejected ? 'rejected' : ''}`}>
         {body}
+        {firstLink && linkPreview && (
+          <LinkPreview
+            url={firstLink.href}
+            out={out}
+            fetchPreview={linkPreview}
+            onOpen={onOpenLink}
+            onShown={onPreviewShown}
+          />
+        )}
         <div className="time">
           {formatTime(msg.ts)}
           {queued && (
@@ -46,6 +74,42 @@ export default function MessageBubble({ msg, grouped, previewUrl, previewFallbac
       </div>
     </div>
   );
+}
+
+// Message text, with the links in it made clickable. The runs come from
+// linkify(), which only ever reports plain text and http(s) URLs — the anchors
+// are built here, so nothing a peer writes can turn into markup.
+function MessageText({ runs, onOpenLink }) {
+  return (
+    <div className="text">
+      {runs.map((run, i) =>
+        run.type === 'link' ? (
+          <a
+            key={i}
+            className="msg-link"
+            href={run.href}
+            title={run.href}
+            onClick={(e) => openLink(e, run.href, onOpenLink)}
+            // Middle click means "open in a new tab" everywhere else; here it is
+            // the same thing as a click, and never a new window inside the app.
+            onAuxClick={(e) => e.button === 1 && openLink(e, run.href, onOpenLink)}
+          >
+            {run.text}
+          </a>
+        ) : (
+          <React.Fragment key={i}>{run.text}</React.Fragment>
+        )
+      )}
+    </div>
+  );
+}
+
+// The window itself never navigates: the URL is handed to the main process,
+// which opens it in the real browser.
+function openLink(e, href, onOpenLink) {
+  e.preventDefault();
+  e.stopPropagation();
+  if (onOpenLink) onOpenLink(href);
 }
 
 function FileContent({ msg, previewUrl, previewFallback, progress, onOpen, onReveal }) {

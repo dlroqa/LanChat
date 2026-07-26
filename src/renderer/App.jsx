@@ -495,6 +495,15 @@ export default function App() {
 
   const previewUrl = (path) => (path && self ? localFile(self, path) : null);
 
+  // Links in messages. Opening one always goes through main (which refuses
+  // anything that is not http(s)); unfurling one is a setting, and passing
+  // `undefined` when it is off is what keeps the bubbles from ever asking.
+  const openLink = (url) => url && api.openExternal(url);
+  const fetchLinkPreview = useMemo(
+    () => (config.linkPreviews === false ? undefined : (url) => api.linkPreview(url)),
+    [config.linkPreviews]
+  );
+
   // --- Actions ---
   async function saveProfile(profile) {
     const id = await api.setProfile(profile);
@@ -680,6 +689,8 @@ export default function App() {
           previewUrl={previewUrl}
           previewFallback={self?.platform === 'win32'}
           showAddresses={config.showAddresses}
+          onOpenLink={openLink}
+          linkPreview={fetchLinkPreview}
           draft={draft && draft.threadId === selectedId ? draft : null}
           onSend={sendText}
           onAttach={attach}

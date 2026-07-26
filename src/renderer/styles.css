@@ -18,6 +18,11 @@
   --primary-hover: #3b78f0;
   --primary-soft: #1e355f;
   --on-primary: #ffffff;
+  /* Links inside a message. --primary is a button colour: on the incoming
+     bubble's surface it lands near 3:1, which is not enough for text you are
+     meant to read, so links get their own lighter blue. */
+  --link: #8ab4ff;
+  --link-hover: #b3ceff;
 
   --online: #22c55e;
   --online-dim: #16351f;
@@ -592,6 +597,147 @@ input:focus-visible {
 }
 .bubble-row.out .bubble .time {
   color: rgba(255, 255, 255, 0.75);
+}
+
+/* ---- links in messages ----------------------------------------------------
+   Message text is scanned for links (lib/linkify.js) and the anchors are built
+   in the bubble, so nothing a peer sends becomes markup. A click never
+   navigates this window: main opens the URL in the real browser.
+
+   Underlined as well as coloured, because on an outgoing bubble the background
+   is already the blue that would otherwise be doing the telling. */
+.bubble .msg-link {
+  color: var(--link);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  transition: color 160ms ease;
+}
+.bubble .msg-link:hover {
+  color: var(--link-hover);
+}
+.bubble-row.out .bubble .msg-link {
+  color: var(--on-primary);
+  text-decoration-color: rgba(255, 255, 255, 0.65);
+}
+.bubble-row.out .bubble .msg-link:hover {
+  text-decoration-color: var(--on-primary);
+}
+.bubble .msg-link:focus-visible,
+.link-card:focus-visible {
+  outline: 2px solid var(--link-hover);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* The zero-height marker a bubble shows until its preview has arrived: it gives
+   the observer something to watch without reserving room for a card that may
+   never exist. */
+.link-card-anchor {
+  display: block;
+  height: 0;
+}
+
+.link-card {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  max-width: 100%;
+  border: 1px solid var(--border-soft);
+  /* The accent edge is what says "this is about the link above" rather than a
+     second message. */
+  border-left: 3px solid var(--primary-hover);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.22);
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  animation: link-card-in 200ms ease-out;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease;
+}
+.link-card:hover {
+  background: rgba(0, 0, 0, 0.32);
+}
+.bubble-row.out .link-card {
+  border-color: rgba(255, 255, 255, 0.22);
+  border-left-color: rgba(255, 255, 255, 0.8);
+  background: rgba(0, 0, 0, 0.16);
+}
+.bubble-row.out .link-card:hover {
+  background: rgba(0, 0, 0, 0.26);
+}
+
+.link-thumb {
+  flex: 0 0 66px;
+  width: 66px;
+  height: 66px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--surface-2);
+  user-select: none;
+}
+
+.link-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  justify-content: center;
+}
+.link-site {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  /* --fg-faint is a hair under 4.5:1 against the card's darkened surface, and
+     this is the smallest text in the bubble. */
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.link-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.link-desc {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+}
+/* Two lines each: enough to know what the page is, not enough to bury the
+   message it was sent with. */
+.link-title,
+.link-desc {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.bubble-row.out .link-site,
+.bubble-row.out .link-desc {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+@keyframes link-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .link-card {
+    animation: none;
+  }
 }
 
 .file-bubble {
