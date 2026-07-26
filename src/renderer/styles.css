@@ -34,6 +34,15 @@
      a second shade of the same warning. */
   --turn-orange: #f97316;
 
+  /* The agent's status row is the one place in the app that is meant to catch
+     your eye from across the desk, so it gets its own brighter set rather than
+     borrowing the status colours the rest of the UI uses at rest. All three sit
+     above 4.5:1 on --surface, so the glow is decoration on top of text that is
+     already legible without it. */
+  --neon-ready: #2bff9a;
+  --neon-busy: #35e6ff;
+  --neon-error: #ff4d7d;
+
   /* The sidebar's profile block and the chat header sit side by side, so their
      bottom borders have to land on the same line. Pinning both to one height
      keeps them aligned no matter how the text inside either one changes. */
@@ -1679,62 +1688,180 @@ input[type='range']:disabled::-webkit-slider-thumb {
   background: var(--surface);
 }
 
-.agent-state-orb {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: currentColor;
-  flex-shrink: 0;
-  box-shadow: 0 0 0 0 currentColor;
-}
-
+/* ---- Status label ----
+   Set heavier and a shade larger than the panel around it, with the tracking
+   pulled in: this is the one line in the panel meant to be read at a glance
+   rather than studied, and Inter at 600 is what carries that weight. */
 .agent-state-label {
-  font-size: 15px;
-  font-weight: 500;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.012em;
   display: inline-flex;
   align-items: baseline;
-  gap: 2px;
-  /* Each new phrase fades in, so the cycle reads as one thought replacing
-     another rather than text snapping. */
-  animation: agent-phrase 0.45s ease;
+  gap: 3px;
+  /* Glow only ever adds light, so the text keeps the contrast it had without
+     it — the neon look never costs legibility. Scoped to this row so the
+     subtitle above, which shares the tone classes, stays flat. */
+  text-shadow: 0 0 14px color-mix(in srgb, currentColor 42%, transparent);
 }
-@keyframes agent-phrase {
+
+/* The word types itself in beneath a travelling block cursor. Characters are
+   laid out as one run so nothing shifts as the cursor passes over them. */
+.typed-run {
+  white-space: pre;
+}
+.typed-char {
+  display: inline-block;
+}
+
+/* The cursor *is* the character it covers: filled with the tone colour and its
+   glyph knocked out, so the block is always exactly one character wide. */
+.typed-cursor {
+  background: currentColor;
+  /* Not `color: transparent` — that would take `currentColor` with it and the
+     block would paint nothing. Knocking out the fill alone leaves `color` as the
+     tone colour for the background to pick up. */
+  -webkit-text-fill-color: transparent;
+  border-radius: 1.5px;
+  box-shadow: 0 0 12px color-mix(in srgb, currentColor 60%, transparent);
+  animation: typed-cursor-in 0.14s ease-out;
+}
+@keyframes typed-cursor-in {
   from {
-    opacity: 0;
-    transform: translateY(3px);
+    opacity: 0.35;
   }
   to {
     opacity: 1;
-    transform: none;
   }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 .agent-tone-ready {
-  color: var(--online);
+  color: var(--neon-ready);
 }
 .agent-tone-busy {
-  color: var(--primary);
+  color: var(--neon-busy);
 }
 .agent-tone-error {
-  color: var(--danger);
+  color: var(--neon-error);
 }
+/* Not an attention state, and deliberately not competing with the three that
+   are — an agent you cannot reach stays grey. */
 .agent-tone-off {
   color: var(--fg-faint);
 }
-
-/* Only the working state animates — a calm agent should look calm. */
-.agent-tone-busy .agent-state-orb {
-  animation: agent-orb 1.6s ease-out infinite;
+/* One step up from --fg-faint in the status row alone. At 17px this is body
+   text rather than a caption, and --fg-faint lands at 3.5:1 on the panel
+   surface; the neutral grey beside it reads the same and clears 4.5:1. The
+   subtitle above, which shares the class at 12px, is untouched. */
+.agent-state.agent-tone-off {
+  color: var(--fg-muted);
 }
-@keyframes agent-orb {
-  0% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 55%, transparent);
+
+/* ---- Spark pip ----
+   Where the dot used to sit. At rest it is a lit pip in the tone colour; while
+   the agent is working it throws a small firework, and each burst arrives in a
+   new hue (--spark-h, chosen in JS) so the colour never repeats back to back.
+   Everything moves on transform and opacity alone, so a burst never touches
+   layout however often it fires. */
+.agent-spark {
+  position: relative;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+}
+
+.agent-spark-core {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 10px color-mix(in srgb, currentColor 70%, transparent);
+  /* A resting agent still has a pulse, just a slow one. */
+  animation: spark-idle 3.2s ease-in-out infinite;
+}
+
+.agent-spark.is-live .agent-spark-core {
+  background: hsl(calc(var(--spark-h) * 1deg) 100% 68%);
+  box-shadow: 0 0 14px hsl(calc(var(--spark-h) * 1deg) 100% 62% / 0.85);
+  animation: spark-flash 1.5s ease-out infinite;
+}
+
+@keyframes spark-idle {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.85;
   }
-  70% {
-    box-shadow: 0 0 0 10px transparent;
+  50% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+}
+
+/* The core snaps open as the sparks leave, then settles — a launch, not a
+   throb. */
+@keyframes spark-flash {
+  0% {
+    transform: scale(0.55);
+  }
+  10% {
+    transform: scale(1.35);
+  }
+  45%,
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* Eight sparks, each carrying its own angle (--a), throw distance (--d) and
+   index (--i). The angles and distances are deliberately uneven — evenly spaced
+   rays at one radius draw a sun, and this is meant to be a firework. The index
+   fans the hue out around the burst colour and staggers the launch, so a burst
+   is a spray of related neons rather than eight identical dots leaving at once. */
+.agent-spark-ray {
+  position: absolute;
+  width: 2.5px;
+  height: 2.5px;
+  border-radius: 50%;
+  background: hsl(calc(var(--spark-h) * 1deg + var(--i) * 24deg) 100% 68%);
+  box-shadow: 0 0 6px hsl(calc(var(--spark-h) * 1deg + var(--i) * 24deg) 100% 62% / 0.9);
+  transform-origin: center;
+  opacity: 0;
+  animation: spark-fly 1.5s cubic-bezier(0.12, 0.72, 0.3, 1) infinite;
+  animation-delay: calc(var(--i) * 22ms);
+}
+
+/* Out fast, then a long coast to nothing — the shape of something thrown, not
+   something scaled. */
+@keyframes spark-fly {
+  0% {
+    transform: rotate(var(--a)) translateY(0) scale(0.4);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  55% {
+    transform: rotate(var(--a)) translateY(calc(var(--d) * -0.88)) scale(1);
+    opacity: 0.95;
   }
   100% {
-    box-shadow: 0 0 0 0 transparent;
+    transform: rotate(var(--a)) translateY(calc(var(--d) * -1)) scale(0);
+    opacity: 0;
   }
 }
 
@@ -1850,8 +1977,11 @@ input[type='range']:disabled::-webkit-slider-thumb {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agent-state-label,
-  .agent-tone-busy .agent-state-orb,
+  /* The cursor and the sparks are gone entirely here — `useReducedMotion` stops
+     rendering them, so the label is simply the finished word and the pip is a
+     lit dot. These rules cover what is left. */
+  .typed-cursor,
+  .agent-spark-core,
   .agent-dots i {
     animation: none;
   }

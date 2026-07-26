@@ -3,6 +3,7 @@ import Avatar from './Avatar.jsx';
 import { useCountdown } from '../lib/useCountdown.js';
 import { useAgentPhrase } from '../lib/agentPhrase.js';
 import { turnStanding, turnStandingLabel } from '../lib/turnStanding.js';
+import { useSweep, useBurstHue, useReducedMotion } from '../lib/statusMotion.js';
 
 // Live connection quality for the selected peer, drawn from real round-trip
 // measurements taken over the peer WebSocket (see src/main/linkStats.js) — the
@@ -124,9 +125,9 @@ function AgentPanel({ peer, status, awaiting }) {
       {/* Where a human peer gets a latency graph, an agent says what it is
           doing. Same slot, information that actually applies. */}
       <div className={`agent-state agent-tone-${state.tone}`}>
-        <span className="agent-state-orb" aria-hidden="true" />
-        <span className="agent-state-label" key={state.label}>
-          {state.label}
+        <SparkPip active={state.tone === 'busy'} />
+        <span className="agent-state-label">
+          <TypedLabel text={state.label} sweeping={state.tone === 'busy'} />
           {state.tone === 'busy' && (
             <span className="agent-dots" aria-hidden="true">
               <i />
@@ -171,6 +172,82 @@ function AgentPanel({ peer, status, awaiting }) {
         </div>
       )}
     </div>
+  );
+}
+
+// The status word, typed in under a block cursor that travels left to right —
+// and, while the agent is working, sweeping back across the finished word so the
+// row keeps moving for as long as the agent does.
+//
+// The cursor is the character it is sitting on, drawn as a filled block rather
+// than a bar of its own: it is then exactly as wide as the glyph underneath, at
+// any font size, without measuring anything. Characters not yet typed keep their
+// space (`visibility`, not `display`), so the row never reflows mid-word.
+function TypedLabel({ text, sweeping }) {
+  const reduced = useReducedMotion();
+  const { head, typed } = useSweep(text, sweeping, !reduced);
+  const chars = Array.from(text || '');
+
+  return (
+    <span className="typed">
+      {/* Read as one word. The spans below are scaffolding for the cursor and
+          would otherwise be announced letter by letter. */}
+      <span className="sr-only">{text}</span>
+      <span className="typed-run" aria-hidden="true">
+        {chars.map((ch, i) => {
+          const cursor = i === head;
+          const pending = !typed && head != null && i > head;
+          return (
+            <span
+              key={`${i}-${ch}`}
+              className={cursor ? 'typed-char typed-cursor' : 'typed-char'}
+              style={pending ? { visibility: 'hidden' } : undefined}
+            >
+              {/* A space under the cursor has no glyph to fill, so it borrows
+                  the width of an en-space and blocks that instead. */}
+              {ch === ' ' && cursor ? ' ' : ch}
+            </span>
+          );
+        })}
+      </span>
+    </span>
+  );
+}
+
+// What used to be a stationary dot. While the agent is working it throws a small
+// firework — a core that flashes and eight sparks flying out — and every burst
+// picks a new neon hue, so the colour is never the same twice running. At rest
+// it is just a lit pip in the tone colour, because a calm agent should look calm.
+// Angle and throw distance per spark, off the compass on purpose: eight evenly
+// spaced rays at one radius draw a sun, and this is meant to look thrown.
+const SPARKS = [
+  [8, 11],
+  [56, 8],
+  [97, 12],
+  [141, 9],
+  [186, 10],
+  [228, 13],
+  [271, 8],
+  [319, 11],
+];
+
+function SparkPip({ active }) {
+  const reduced = useReducedMotion();
+  const live = active && !reduced;
+  const hue = useBurstHue(live);
+
+  return (
+    <span
+      className={live ? 'agent-spark is-live' : 'agent-spark'}
+      style={live ? { '--spark-h': hue } : undefined}
+      aria-hidden="true"
+    >
+      <span className="agent-spark-core" />
+      {live &&
+        SPARKS.map(([a, d], i) => (
+          <i key={a} className="agent-spark-ray" style={{ '--a': `${a}deg`, '--d': `${d}px`, '--i': i }} />
+        ))}
+    </span>
   );
 }
 
