@@ -32,8 +32,64 @@ export default function Sidebar({
     return list.filter((p) => (p.name || '').toLowerCase().includes(s) || (p.hostname || '').toLowerCase().includes(s));
   }, [peers, q]);
 
+  // Agents live in their own section at the top rather than among the people —
+  // they are a different kind of correspondent, and anything that arrives as an
+  // agent lands here without the list needing to know about it in advance.
+  const agents = useMemo(() => filtered.filter((p) => p.kind === 'agent'), [filtered]);
+  const people = useMemo(() => filtered.filter((p) => p.kind !== 'agent'), [filtered]);
+
   // Tailnet devices that are online but not running LanChat (informational).
   const noApp = useMemo(() => (tailnet || []).filter((t) => t.online && !t.hasApp), [tailnet]);
+
+  const peerRow = (p) => (
+    <div
+      key={p.id}
+      className={`peer ${p.id === selectedId ? 'active' : ''} ${p.online ? '' : 'offline'}`}
+      onClick={() => onSelect(p.id)}
+    >
+      <Avatar name={p.name} id={p.id} avatar={p.avatar} online={p.online} />
+      <div className="meta">
+        <div className="name">
+          <span className="name-text">{p.name || p.hostname || 'Unknown'}</span>
+          {p.shared && (
+            <span className="tag" title="Shared with you from another tailnet">
+              shared
+            </span>
+          )}
+          {p.kind === 'agent' && (
+            <span className="tag" title={`Agent connected over ${p.agentKind}`}>
+              agent
+            </span>
+          )}
+          {/* Where this thread stands in the queue for a shared agent, so
+              waiting your turn is visible rather than looking like the
+              agent is ignoring you. */}
+          <QueueBadge peer={p} />
+        </div>
+        <div className="sub">
+          {p.kind === 'agent'
+            ? // A shared agent says whose it is, so it is never mistaken for
+              // one of your own: `delegate` is a peer's conversation with
+              // your agent, `remote` is an agent a peer shared with you.
+              p.delegate || p.remote
+              ? `Agent · via ${p.viaName}`
+              : p.online
+                ? `Agent · ${p.agentKind}`
+                : 'Agent · off'
+            : p.online
+              ? platformLabel(p.platform) || 'Online'
+              : 'Offline'}
+          {showAddresses && p.address ? ` · ${p.address.split(':')[0]}` : ''}
+        </div>
+      </div>
+      {unread[p.id] > 0 && <span className="unread-dot">{unread[p.id]}</span>}
+      {!unread[p.id] && queued[p.id] > 0 && (
+        <span className="queued-dot" title={`${queued[p.id]} message(s) waiting to send`}>
+          {queued[p.id]}
+        </span>
+      )}
+    </div>
+  );
 
   return (
     <div className="sidebar">
@@ -66,82 +122,46 @@ export default function Sidebar({
         </div>
       </div>
 
-      <div className="section-label">
-        <span>People</span>
-        <span style={{ display: 'flex', gap: 2 }}>
-          <button
-            className="icon-btn"
-            style={{ width: 26, height: 26 }}
-            onClick={onNewGroupCall}
-            title="Start a group call"
-          >
-            <GroupCall size={16} />
-          </button>
-          <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={onRefresh} title="Refresh">
-            <Refresh size={15} />
-          </button>
-          <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={onAddPeer} title="Add peer by IP">
-            <Plus size={16} />
-          </button>
-        </span>
-      </div>
-
       <div className="peer-list">
-        {filtered.length === 0 && (
+        {/* Agents first, so the panel opens on them. The section only exists
+            when there is an agent to put in it — an empty heading would read
+            as something missing. */}
+        {agents.length > 0 && (
+          <>
+            <div className="section-label">
+              <span>Agents</span>
+            </div>
+            {agents.map(peerRow)}
+          </>
+        )}
+
+        <div className="section-label">
+          <span>People</span>
+          <span style={{ display: 'flex', gap: 2 }}>
+            <button
+              className="icon-btn"
+              style={{ width: 26, height: 26 }}
+              onClick={onNewGroupCall}
+              title="Start a group call"
+            >
+              <GroupCall size={16} />
+            </button>
+            <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={onRefresh} title="Refresh">
+              <Refresh size={15} />
+            </button>
+            <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={onAddPeer} title="Add peer by IP">
+              <Plus size={16} />
+            </button>
+          </span>
+        </div>
+
+        {people.length === 0 && (
           <div className="empty-hint">
             No LanChat users found yet. People on your Tailscale network or LAN who run LanChat show up here
             automatically. You can also add one by IP with the + button.
           </div>
         )}
-        {filtered.map((p) => (
-          <div
-            key={p.id}
-            className={`peer ${p.id === selectedId ? 'active' : ''} ${p.online ? '' : 'offline'}`}
-            onClick={() => onSelect(p.id)}
-          >
-            <Avatar name={p.name} id={p.id} avatar={p.avatar} online={p.online} />
-            <div className="meta">
-              <div className="name">
-                <span className="name-text">{p.name || p.hostname || 'Unknown'}</span>
-                {p.shared && (
-                  <span className="tag" title="Shared with you from another tailnet">
-                    shared
-                  </span>
-                )}
-                {p.kind === 'agent' && (
-                  <span className="tag" title={`Agent connected over ${p.agentKind}`}>
-                    agent
-                  </span>
-                )}
-                {/* Where this thread stands in the queue for a shared agent, so
-                    waiting your turn is visible rather than looking like the
-                    agent is ignoring you. */}
-                <QueueBadge peer={p} />
-              </div>
-              <div className="sub">
-                {p.kind === 'agent'
-                  ? // A shared agent says whose it is, so it is never mistaken for
-                    // one of your own: `delegate` is a peer's conversation with
-                    // your agent, `remote` is an agent a peer shared with you.
-                    p.delegate || p.remote
-                    ? `Agent · via ${p.viaName}`
-                    : p.online
-                      ? `Agent · ${p.agentKind}`
-                      : 'Agent · off'
-                  : p.online
-                    ? platformLabel(p.platform) || 'Online'
-                    : 'Offline'}
-                {showAddresses && p.address ? ` · ${p.address.split(':')[0]}` : ''}
-              </div>
-            </div>
-            {unread[p.id] > 0 && <span className="unread-dot">{unread[p.id]}</span>}
-            {!unread[p.id] && queued[p.id] > 0 && (
-              <span className="queued-dot" title={`${queued[p.id]} message(s) waiting to send`}>
-                {queued[p.id]}
-              </span>
-            )}
-          </div>
-        ))}
+        {people.map(peerRow)}
 
         {/* An empty tailnet list is ambiguous on its own — say which of "no
             CLI", "signed out" or "nothing there" it actually is. */}

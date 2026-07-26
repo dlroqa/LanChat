@@ -227,6 +227,16 @@ input:focus-visible {
   padding-bottom: 12px;
 }
 
+/* The section headings now scroll with the list (Agents sits above People), so
+   they stick to the top instead — the People row carries the refresh, add and
+   group-call buttons, which must stay reachable however far the list scrolls. */
+.peer-list .section-label {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-2);
+}
+
 .peer {
   display: flex;
   align-items: center;
