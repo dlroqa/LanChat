@@ -149,6 +149,9 @@ async function startServices() {
 
   const downloadsDir = path.join(app.getPath('downloads'), 'LanChat');
   const store = new MessageStore(app.getPath('userData'));
+  // Histories written before turn notices became transient still hold them, so
+  // they are cleared out here rather than left to clutter the thread forever.
+  store.pruneLegacyNotices();
   const hub = new PeerHub({ getIdentity, bus });
   const server = createServer({ config, getIdentity, hub, bus, downloadsDir });
   const discovery = createDiscovery({ config, getIdentity, hub, bus });

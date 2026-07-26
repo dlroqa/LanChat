@@ -600,6 +600,63 @@ test('turn-queue notices are shown once and saved by neither side', async (t) =>
   assert.equal(A.store.read(idB)[0].text, 'keep this', 'a peer cannot flag their own message away');
 });
 
+test('notices already on disk from an older version are cleared out at startup', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lanchat-prune-'));
+  const store = new MessageStore(dir);
+  const history = path.join(dir, 'history');
+  const write = (file, list) => fs.writeFileSync(path.join(history, file), JSON.stringify(list), 'utf8');
+  const read = (file) => JSON.parse(fs.readFileSync(path.join(history, file), 'utf8'));
+
+  // Every shape the old build wrote, as it appears in a real history file.
+  const notices = [
+    'Your turn — you have 5 queries.',
+    'You have been idle — your turn passes to the next person in about 20s (1 waiting). Ask something to keep it.',
+    'That is 5 queries — passing to the next person waiting. You are #1 in line; ask again when your turn comes round.',
+    'Hermes is busy with someone else. You are #1 in line — ask again when it is your turn.',
+    'I am still working on the previous message — one at a time, please.',
+  ].map((text, i) => ({ id: `n${i}`, direction: 'in', kind: 'text', text, ts: 1000 + i }));
+
+  // The owner's view of a peer's conversation with their agent.
+  write('agent_aaa_bbb.json', [
+    { id: 'q', direction: 'in', kind: 'text', text: 'what profile are you using?', ts: 1, askedBy: 'bbb' },
+    ...notices,
+    { id: 'a', direction: 'in', kind: 'text', text: 'I’m using the Hermes profile “lanchat”.', ts: 2000 },
+  ]);
+  // The asking peer's own copy of the same thing.
+  write('remote-agent_ccc_ddd.json', [
+    { id: 'ask', direction: 'out', kind: 'text', text: 'give me a brief report of the system status', ts: 1 },
+    ...notices,
+  ]);
+  // A chat with a person, named by a bare id. Even the exact wording is left
+  // alone here: only agent threads are candidates.
+  write('7cd6bd1c-ac68-4bb8-bc07-dd906ddc1861.json', [
+    { id: 'h', direction: 'in', kind: 'text', text: 'Your turn — you have 5 queries.', ts: 1 },
+  ]);
+
+  const removed = store.pruneLegacyNotices();
+  assert.equal(removed, 10, 'every stored notice in both agent threads goes');
+
+  assert.deepEqual(
+    read('agent_aaa_bbb.json').map((m) => m.text),
+    ['what profile are you using?', 'I’m using the Hermes profile “lanchat”.'],
+    'the real conversation survives intact, in order'
+  );
+  assert.deepEqual(
+    read('remote-agent_ccc_ddd.json').map((m) => m.text),
+    ['give me a brief report of the system status'],
+    "and so does the asking peer's own question"
+  );
+  assert.equal(
+    read('7cd6bd1c-ac68-4bb8-bc07-dd906ddc1861.json').length,
+    1,
+    'a message from a person is never touched, whatever it says'
+  );
+
+  // Safe to run on every launch, which is what also cleans up notices sent by a
+  // peer who has not upgraded yet.
+  assert.equal(store.pruneLegacyNotices(), 0, 'a second pass finds nothing to do');
+});
+
 test('deleting a chat history removes it from disk, agent threads included', async (t) => {
   const A = makeNode('owner5', await freePort());
   const B = makeNode('peer5', await freePort());
