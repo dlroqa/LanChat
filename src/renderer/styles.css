@@ -1750,6 +1750,77 @@ input[type='range']:disabled::-webkit-slider-thumb {
 .agent-tone-ready {
   color: var(--neon-ready);
 }
+
+/* ---- The living Ready ----
+   Ready is the state the panel sits in most of the time, and a flat word next to
+   a flat dot reads as switched off rather than as standing by. So it alone gets
+   a neon light running through it: every letter holds its own hue at any instant
+   *and* a brighter crest sweeps across them, left to right, starting at the pip.
+
+   Hue stays inside 140–200, green through cyan. That band is the whole point of
+   the constraint — Ready must never flash anything that could be read as a
+   warning, and holding saturation and lightness fixed keeps every frame above
+   8.7:1 on this surface (a full spectrum would have dropped to 3.46:1 at blue).
+
+   Busy, error and off are deliberately untouched. So is the 12.5px `.conn-sub`
+   subtitle, which shares `agent-tone-ready` — hence the `.agent-state` prefix on
+   both rules below. */
+@keyframes ready-drift {
+  0% {
+    color: hsl(150 100% 68%);
+    text-shadow: 0 0 14px hsl(150 100% 62% / 0.42);
+  }
+  /* The crest: a short, bright window that is the travelling band. Lightness
+     only ever goes up here, so it costs nothing in contrast. */
+  18% {
+    color: hsl(168 100% 84%);
+    text-shadow: 0 0 22px hsl(168 100% 70% / 0.75);
+  }
+  30% {
+    color: hsl(180 100% 68%);
+    text-shadow: 0 0 14px hsl(180 100% 62% / 0.42);
+  }
+  55% {
+    color: hsl(200 100% 68%);
+    text-shadow: 0 0 14px hsl(200 100% 62% / 0.42);
+  }
+  80% {
+    color: hsl(163 100% 68%);
+    text-shadow: 0 0 14px hsl(163 100% 62% / 0.42);
+  }
+  /* Back where it started, so the loop has no seam. */
+  100% {
+    color: hsl(150 100% 68%);
+    text-shadow: 0 0 14px hsl(150 100% 62% / 0.42);
+  }
+}
+
+/* Each letter lags the one before it, which is what makes the wave travel
+   rightwards: a negative delay puts an element *ahead* in the cycle, so lagging
+   means a delay that is less negative the further right the letter sits. Staying
+   negative throughout avoids the dead pause a positive delay would open with.
+
+   The lag is 0.28s rather than something smaller because it sets how far apart
+   the letters sit in hue: five letters at 0.28s span 54% of the 2.6s cycle, so
+   the word holds most of the green-to-cyan range at once. At a third of that
+   they were all within a few degrees of each other and the effect read as one
+   colour breathing. It also narrows the crest to roughly one letter at a time,
+   which is what makes the bright band a band. `--pos` maxes at 5 here
+   ("Ready"), so the delay stays negative. */
+.agent-state.agent-tone-ready .typed-char {
+  animation: ready-drift 2.6s linear infinite;
+  animation-delay: calc(var(--pos, 0) * 0.28s - 2.6s);
+}
+
+/* The pip runs the same light on the same clock at --pos 0, so the wave visibly
+   starts at the dot and runs into the word — while keeping the slow pulse it
+   already had. Two animations, two delays, in the same order. */
+.agent-state.agent-tone-ready .agent-spark-core {
+  animation:
+    spark-idle 3.2s ease-in-out infinite,
+    ready-drift 2.6s linear infinite;
+  animation-delay: 0s, -2.6s;
+}
 .agent-tone-busy {
   color: var(--neon-busy);
 }

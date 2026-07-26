@@ -201,7 +201,10 @@ function TypedLabel({ text, sweeping }) {
             <span
               key={`${i}-${ch}`}
               className={cursor ? 'typed-char typed-cursor' : 'typed-char'}
-              style={pending ? { visibility: 'hidden' } : undefined}
+              // `--pos` is the character's place in the row, counting the pip
+              // ahead of it as 0. Only the Ready state reads it, to lag each
+              // letter behind the one before it so the colour wave travels.
+              style={{ '--pos': i + 1, ...(pending ? { visibility: 'hidden' } : null) }}
             >
               {/* A space under the cursor has no glyph to fill, so it borrows
                   the width of an en-space and blocks that instead. */}
