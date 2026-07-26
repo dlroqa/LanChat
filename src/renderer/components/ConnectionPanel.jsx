@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import Avatar from './Avatar.jsx';
 import { useCountdown } from '../lib/useCountdown.js';
 import { useAgentPhrase } from '../lib/agentPhrase.js';
+import { turnStanding, turnStandingLabel } from '../lib/turnStanding.js';
 
 // Live connection quality for the selected peer, drawn from real round-trip
 // measurements taken over the peer WebSocket (see src/main/linkStats.js) — the
@@ -91,15 +92,9 @@ function AgentPanel({ peer, status, awaiting }) {
   else if (errored) state = { label: 'Something went wrong', tone: 'error' };
   else if (busy) state = { label: detail || phrase, tone: 'busy' };
 
-  const turn = peer.queueState === 'active'
-    ? counting
-      ? `${secondsLeft}s left`
-      : `${peer.queueRemaining}/${peer.queueQuota} left`
-    : peer.queueState === 'waiting'
-      ? counting
-        ? `your turn in ${secondsLeft}s`
-        : `#${peer.queuePosition} in line`
-      : '—';
+  // One derivation feeds both boxes below, so the word in Status and the tint on
+  // Turn can never disagree about which of them is true.
+  const standing = turnStanding(peer, secondsLeft);
 
   return (
     <div className="conn-panel">
@@ -129,9 +124,19 @@ function AgentPanel({ peer, status, awaiting }) {
         </span>
       </div>
 
+      {/* Status says where this thread stands in the queue whenever it stands
+          anywhere at all — waiting behind someone, about to be handed the turn,
+          holding it, or about to lose it. What the agent is *doing* is already
+          spelled out in full in the row above, so the box is free to answer the
+          question the box next to it raises. */}
       <div className="conn-stats">
-        <Stat label="Status" value={state.tone === 'busy' ? 'Working' : state.label} />
-        <Stat label="Turn" value={turn} />
+        <Stat label="Status" value={standing?.word ?? (state.tone === 'busy' ? 'Working' : state.label)} />
+        <Stat
+          label="Turn"
+          value={standing ? standing.text : '—'}
+          tone={standing?.key}
+          title={turnStandingLabel(peer, secondsLeft)}
+        />
         <Stat label="Via" value={peer.remote || peer.delegate ? peer.viaName : peer.agentKind} />
       </div>
 
@@ -210,9 +215,12 @@ function SignalBars({ bars, color }) {
   );
 }
 
-function Stat({ label, value }) {
+// `tone` tints the box for a state worth spotting without reading it. Left off,
+// the stat looks exactly as it always has — which is how the latency stats above
+// stay untouched.
+function Stat({ label, value, tone, title }) {
   return (
-    <div className="stat">
+    <div className={tone ? `stat stat-turn stat-turn-${tone}` : 'stat'} title={title || undefined}>
       <div className="stat-value">{value}</div>
       <div className="stat-label">{label}</div>
     </div>

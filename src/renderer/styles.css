@@ -24,6 +24,10 @@
   --danger: #ef4444;
   --danger-hover: #f36464;
   --warn: #f59e0b;
+  /* Amber already means "careful" here, and a handover has to be told apart from
+     a wait at a glance, so it gets its own distinctly redder orange rather than
+     a second shade of the same warning. */
+  --turn-orange: #f97316;
 
   /* The sidebar's profile block and the chat header sit side by side, so their
      bottom borders have to land on the same line. Pinning both to one height
@@ -1470,6 +1474,8 @@ input[type='range']:disabled::-webkit-slider-thumb {
   gap: 8px;
 }
 .stat {
+  position: relative;
+  overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
@@ -1593,11 +1599,100 @@ input[type='range']:disabled::-webkit-slider-thumb {
   }
 }
 
+/* ---- Turn box ----
+   The one stat whose value moves on its own, so it is the one worth being able
+   to read without reading it: the colour says which of the five states the
+   thread is in, and the Status box next to it says the same thing in a word.
+   A pane of tinted glass rather than a painted chip — the panel surface still
+   shows through, and the text keeps exactly the colour it always had. */
+.stat-turn {
+  background: color-mix(in srgb, var(--surface) 74%, transparent);
+  backdrop-filter: blur(10px) saturate(120%);
+  -webkit-backdrop-filter: blur(10px) saturate(120%);
+  border-color: color-mix(in srgb, var(--turn-tint) 34%, var(--border-soft));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+/* The tint lives in its own layer, so the blink animates opacity alone — that
+   stays on the compositor and never touches layout. */
+.stat-turn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* Tinted edge to edge, with the sheen running across it rather than fading out
+     to nothing — a pane of coloured glass catching the light, not a box someone
+     started painting and abandoned halfway down. */
+  background: linear-gradient(
+    155deg,
+    color-mix(in srgb, var(--turn-tint) 46%, transparent) 0%,
+    color-mix(in srgb, var(--turn-tint) 27%, transparent) 58%,
+    color-mix(in srgb, var(--turn-tint) 21%, transparent) 100%
+  );
+}
+
+/* Above the tint, so the value keeps exactly the colour it has always had. */
+.stat-turn .stat-value,
+.stat-turn .stat-label {
+  position: relative;
+}
+/* The one exception, and it is legibility rather than state: the 11px label is
+   --fg-faint, which lands at 2.4:1 once there is colour behind it. One step up
+   to the neutral grey next to it puts every tint back over 4.5:1. */
+.stat-turn .stat-label {
+  color: var(--fg-muted);
+}
+
+.stat-turn-waiting {
+  --turn-tint: var(--warn);
+}
+.stat-turn-brace {
+  --turn-tint: var(--primary-hover);
+}
+.stat-turn-ready {
+  --turn-tint: var(--online);
+}
+.stat-turn-handover {
+  --turn-tint: var(--turn-orange);
+}
+/* Not a state so much as the absence of one: present, and deliberately not
+   competing with the four that mean something. Same grey the panel already uses
+   for an agent it cannot reach. */
+.stat-turn-offline {
+  --turn-tint: var(--fg-faint);
+}
+.stat-turn-offline::before {
+  opacity: 0.5;
+}
+
+/* Only the two states with a clock running blink. Waiting and holding a turn are
+   situations, not events — they can sit still. */
+.stat-turn-brace::before,
+.stat-turn-handover::before {
+  animation: turn-blink 1.5s ease-in-out infinite;
+}
+@keyframes turn-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .agent-state-label,
   .agent-tone-busy .agent-state-orb,
   .agent-dots i {
     animation: none;
+  }
+  /* Held at full tint rather than mid-blink: the colour is the state, and it
+     still has to be the right one when the motion is gone. */
+  .stat-turn-brace::before,
+  .stat-turn-handover::before {
+    animation: none;
+    opacity: 1;
   }
 }
 

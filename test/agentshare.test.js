@@ -20,6 +20,15 @@ const { EventEmitter } = require('node:events');
 // functions the renderer calls can be invoked here.
 const handlers = new Map();
 let saveTo = null; // where the stubbed save dialog pretends the user chose
+
+// The renderer's reading of a standing, evaluated here so the panel can be
+// checked against cards that actually crossed a socket rather than against a
+// hand-written fixture of what we think crosses one. ESM for the browser, so the
+// `export` keywords come off (same as test/signal.test.js).
+const { turnStanding } = new Function(
+  `${fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'lib', 'turnStanding.js'), 'utf8').replace(/^export\s+/gm, '')}
+   return { turnStanding };`
+)();
 const orig = Module._resolveFilename;
 Module._resolveFilename = function (r, ...a) {
   return r === 'electron' ? 'estub' : orig.call(this, r, ...a);
@@ -332,6 +341,14 @@ test('two peers take turns, and each is told where they stand', async (t) => {
 
   // C gets its own full quota, not the remainder of B's.
   assert.equal(C.hub.identities.get(cRemote).queueRemaining, 5);
+  // The other two states the panel colours, read off the same cards: C holding
+  // the turn, B behind it in line.
+  assert.deepEqual(turnStanding(C.hub.identities.get(cRemote), 0), {
+    key: 'ready',
+    word: 'Ready',
+    text: '5/5 left',
+  });
+  assert.equal(turnStanding(B.hub.identities.get(bRemote), 0).key, 'waiting');
   // Past the anti-flood interval, which is a separate mechanism from the quota.
   await new Promise((r) => setTimeout(r, 3100));
   C.call('lanchat:sendChat', { peerId: cRemote, text: 'hello at last' });
@@ -429,6 +446,15 @@ test('a pending handover counts down on both machines at once', async (t) => {
     'the same number of seconds on both sides'
   );
   assert.ok(holder.queueExpiresInSec > 0 && holder.queueExpiresInSec <= 20);
+
+  // And the panel reads those same cards as the two states it colours: the one
+  // about to lose the turn, and the one about to be handed it. Asserted on the
+  // cards themselves, so a field renamed anywhere along the wire fails here
+  // rather than quietly leaving the box grey.
+  assert.equal(turnStanding(holder, 6).key, 'handover');
+  assert.equal(turnStanding(holder, 6).word, 'Handover');
+  assert.equal(turnStanding(next, 6).key, 'brace');
+  assert.equal(turnStanding(next, 6).word, 'Brace');
 
   // Using the turn calls the whole thing off, for both of them.
   await new Promise((r) => setTimeout(r, 3100)); // clear the anti-flood window
