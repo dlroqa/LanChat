@@ -123,6 +123,10 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
 
   // Decides whether `peerId` may spend a query now. Never called for the local
   // user — the machine's owner does not queue for their own agent.
+  //
+  // `yielded` names the peer whose idle turn this claim took over, if any. It is
+  // reported rather than acted on here so this stays a state transition and all
+  // the outbound copy keeps living in `accept`.
   function claimTurn(agentId, peerId) {
     const state = turnState(agentId);
     const now = Date.now();
@@ -131,8 +135,20 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     // and wandering off cannot freeze the queue. Whoever asks next takes over:
     // passTurn promotes the head of the queue, or clears the holder so the
     // caller claims it below.
+    //
+    // The outgoing holder rejoins the back, exactly as the sweep requeues one.
+    // Without it they are neither the holder nor in the queue, so publishStanding
+    // — which only addresses participants — has nobody to correct, and their card
+    // sits there claiming a turn that has moved on. This is the path taken when
+    // nobody was waiting to trigger the sweep in the first place.
+    let yielded = null;
     if (state.holder && state.holder !== peerId && now - state.last > TURN_IDLE_MS) {
+      yielded = state.holder;
+      // Handed a turn they never spent anything on: they keep their place, they
+      // just stop being told about the next one. Same rule as the sweep.
+      if (state.used === 0) state.quiet.add(yielded);
       passTurn(state);
+      if (!state.queue.includes(yielded)) state.queue.push(yielded);
     }
 
     if (!state.holder) {
@@ -146,7 +162,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
           // Out of turn with others waiting: hand over and rejoin the back.
           passTurn(state);
           if (!state.queue.includes(peerId)) state.queue.push(peerId);
-          return { ok: false, rotated: true };
+          return { ok: false, rotated: true, yielded };
         }
         state.used = 0; // nobody waiting, so nothing to be fair about
       }
@@ -154,11 +170,11 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
       state.last = now;
       state.warned = false; // they are active again, so the countdown resets
       state.quiet.delete(peerId); // and worth talking to again
-      return { ok: true, rotated: false };
+      return { ok: true, rotated: false, yielded };
     }
 
     if (!state.queue.includes(peerId)) state.queue.push(peerId);
-    return { ok: false, rotated: false };
+    return { ok: false, rotated: false, yielded };
   }
 
   // Where a peer stands, in the shape the roster renders.
@@ -793,12 +809,27 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
           : `${nameOf(record.id)} is busy with someone else. You are #${standing.position} in line — ask again when it is your turn.`,
         peerId
       );
-      publishStanding(record);
-      return true;
     }
 
+    // Published once for either outcome: the queue can move on a refusal just as
+    // it does on a claim, and everyone standing in it needs the same correction.
     publishStanding(record);
-    deliver(record.id, text, peerId);
+
+    // Somebody's idle turn was taken over by this claim. The warning that
+    // normally precedes losing a turn only goes out while another peer is
+    // already waiting, so a holder who went quiet on their own gets none — the
+    // first they would know of it is a card that changed underneath them.
+    if (claim.yielded && !turnState(record.id).quiet.has(claim.yielded)) {
+      const theirs = standingFor(record.id, claim.yielded);
+      reply(
+        record.id,
+        `Your turn went idle and someone else asked, so it has passed to them. ` +
+          `You are #${theirs.position} in line; ask again when your turn comes round.`,
+        claim.yielded
+      );
+    }
+
+    if (claim.ok) deliver(record.id, text, peerId);
     return true;
   }
 

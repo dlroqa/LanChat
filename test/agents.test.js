@@ -1095,6 +1095,114 @@ test('an idle holder yields so one peer cannot block the queue forever', async (
   }
 });
 
+// The turn is passed on, never taken away — including when nobody was waiting to
+// trigger the sweep, so the takeover happens on the next peer's question
+// instead. Getting this wrong left the outgoing holder outside the queue
+// entirely, which meant nothing was ever addressed to them again and their card
+// went on claiming a turn that had moved on.
+test('a turn taken over after a silence leaves the outgoing holder next in line', async () => {
+  const realNow = Date.now;
+  let t = realNow();
+  Date.now = () => t;
+  try {
+    const { hub, agentHub, log } = makeHub();
+    const { agent } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+    await agentHub.setSharing(agent.id, { networkWide: true });
+
+    const frames = [];
+    hub.send = (peerId, obj) => {
+      frames.push({ peerId, obj });
+      return true;
+    };
+
+    joinPeer(hub, 'alice');
+    joinPeer(hub, 'bob');
+
+    // Alice has the agent to herself: two queries, nobody queued behind her, so
+    // no sweep ever warns her or moves the turn along.
+    t += 4000;
+    await ask(agentHub, 'alice', 1, log);
+    t += 4000;
+    await ask(agentHub, 'alice', 1, log);
+    assert.equal(agentHub.standingFor(agent.id, 'alice').remaining, 3);
+
+    // She wanders off. A minute later Bob turns up and asks.
+    frames.length = 0;
+    t += 61000;
+    assert.equal(await ask(agentHub, 'bob', 1, log), 1, 'the newcomer is served straight away');
+
+    assert.equal(agentHub.standingFor(agent.id, 'bob').state, 'active', 'and holds the turn');
+    const alice = agentHub.standingFor(agent.id, 'alice');
+    assert.equal(alice.state, 'waiting', 'while she is put in the queue, not dropped from it');
+    assert.equal(alice.position, 1, 'at the front of it, since nobody else is waiting');
+    assert.equal(alice.ahead, 4, 'with what Bob has left standing between her and the agent');
+
+    // The point of the requeue: she is a participant again, so the correction
+    // actually reaches her.
+    const hers = frames.filter((f) => f.peerId === 'alice' && f.obj.type === 'agent-queue');
+    assert.equal(hers.at(-1).obj.state, 'waiting', 'her card is told the turn has moved');
+    assert.equal(hers.at(-1).obj.position, 1);
+
+    // And she is told why, since the idle warning never fired for her — there
+    // was nobody waiting at the time for it to fire about.
+    const told = frames.filter((f) => f.peerId === 'alice' && f.obj.type === 'agent-reply');
+    assert.match(told.at(-1).obj.text, /#1 in line/);
+    assert.equal(told.at(-1).obj.notice, true, 'as a notice, shown once rather than kept');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('a peer who never used the turn they were handed is not told when it goes', async () => {
+  const realNow = Date.now;
+  let t = realNow();
+  Date.now = () => t;
+  try {
+    const { hub, agentHub, log } = makeHub();
+    const { agent } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+    await agentHub.setSharing(agent.id, { networkWide: true });
+
+    const frames = [];
+    hub.send = (peerId, obj) => {
+      frames.push({ peerId, obj });
+      return true;
+    };
+
+    joinPeer(hub, 'alice');
+    joinPeer(hub, 'bob');
+
+    t += 4000;
+    await ask(agentHub, 'alice', 1, log);
+    t += 4000;
+    await ask(agentHub, 'bob', 1, log); // queued behind her
+
+    // Alice sits out her turn, so Bob inherits one he never asked for.
+    t += 61000;
+    agentHub.releaseIdleTurns();
+    assert.equal(agentHub.standingFor(agent.id, 'bob').state, 'active');
+
+    // Alice comes back and takes it over. Bob has shown he is not reading, so
+    // he keeps his place and hears nothing about it.
+    frames.length = 0;
+    t += 61000;
+    await ask(agentHub, 'alice', 1, log);
+
+    assert.equal(agentHub.standingFor(agent.id, 'bob').state, 'waiting', 'he keeps his place');
+    assert.equal(agentHub.standingFor(agent.id, 'bob').position, 1);
+    assert.ok(
+      frames.some((f) => f.peerId === 'bob' && f.obj.type === 'agent-queue' && f.obj.state === 'waiting'),
+      'his card still tracks the queue accurately'
+    );
+    assert.deepEqual(
+      frames.filter((f) => f.peerId === 'bob' && f.obj.type === 'agent-reply'),
+      [],
+      'but nothing is said to him about a turn he never used'
+    );
+  } finally {
+    Date.now = realNow;
+  }
+});
+
 test('a forged sender id is replaced by the socket it actually arrived on', () => {
   const bus = new EventEmitter();
   const seen = [];

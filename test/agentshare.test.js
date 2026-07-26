@@ -469,6 +469,84 @@ test('a pending handover counts down on both machines at once', async (t) => {
   await waitFor(() => C.hub.identities.get(cRemote)?.queueExpiring === false, 5000, 'the waiter to stop');
 });
 
+// The other way a turn changes hands: nobody was waiting, so no sweep ever ran,
+// and the takeover happens on the newcomer's question instead. The machine that
+// lost the turn has to be told over the wire — it has no other way to find out,
+// and a card left saying "your turn" while somebody else is being served is how
+// two people end up both believing the agent is theirs.
+test('a turn taken over after a silence is corrected on the machine that lost it', async (t) => {
+  const A = makeNode('owner10', await freePort());
+  const B = makeNode('faded', await freePort());
+  const C = makeNode('newcomer', await freePort());
+  await A.server.start();
+  await B.server.start();
+  await C.server.start();
+  t.after(() => {
+    for (const n of [A, B, C]) {
+      n.hub.close();
+      n.server.stop();
+    }
+  });
+
+  const idA = A.getIdentity().id;
+  const idC = C.getIdentity().id;
+  const { agent } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  await A.agentHub.setSharing(agent.id, { networkWide: true, directChat: true });
+  await connect(A, B);
+  await connect(A, C);
+
+  const bRemote = await waitFor(() => remoteIdOn(B, idA, agent.id), 5000, 'B to see the agent');
+  const cRemote = await waitFor(() => remoteIdOn(C, idA, agent.id), 5000, 'C to see the agent');
+
+  // B has the agent to itself and spends one query. Nothing is queued behind it,
+  // so no sweep will ever warn it or move the turn on.
+  B.call('lanchat:sendChat', { peerId: bRemote, text: 'mine' });
+  await waitFor(() => B.hub.identities.get(bRemote)?.queueState === 'active', 5000, 'B to hold the turn');
+  assert.equal(B.hub.identities.get(bRemote).queueRemaining, 4);
+
+  // B goes quiet. A minute later C asks. The inbound leg is driven directly, the
+  // way the sweep is in the tests above — routeDirect is the exact function
+  // ipc.js calls on an agent-chat frame — so the clock can be moved without
+  // holding it forward across the wire. Everything that follows is real traffic.
+  const realNow = Date.now;
+  Date.now = () => realNow() + 61000;
+  try {
+    A.agentHub.routeDirect(idC, agent.id, 'my turn now');
+  } finally {
+    Date.now = realNow;
+  }
+
+  await waitFor(() => C.hub.identities.get(cRemote)?.queueState === 'active', 5000, 'C to take over');
+  await waitFor(() => B.hub.identities.get(bRemote)?.queueState === 'waiting', 5000, 'B to be corrected');
+
+  const faded = B.hub.identities.get(bRemote);
+  assert.equal(faded.queuePosition, 1, 'B keeps a place rather than dropping out of the queue');
+  assert.equal(faded.queueAhead, 4, "with what C has left of C's turn ahead of it");
+
+  // Read the way the panel reads it, off the card that actually crossed the
+  // socket: the box that said Ready / 4/5 left now says Waiting / #1 in line.
+  assert.equal(turnStanding(faded, 0).word, 'Waiting');
+  assert.equal(turnStanding(faded, 0).text, '#1 in line');
+  assert.equal(turnStanding(C.hub.identities.get(cRemote), 0).word, 'Ready');
+
+  // And B is told why, since the idle warning never fired for it — there was
+  // nobody waiting at the time for it to fire about.
+  const told = await waitFor(
+    () =>
+      B.events.find(
+        (e) => e.type === 'chat' && e.payload?.peerId === bRemote && /passed to them/.test(e.payload?.text || '')
+      ),
+    5000,
+    'B to be told the turn moved'
+  );
+  assert.match(told.payload.text, /#1 in line/);
+  assert.equal(told.payload.notice, true, 'as a notice, not a message');
+  assert.ok(
+    B.store.read(bRemote).every((m) => !/passed to them/.test(m.text || '')),
+    'so it is shown once and never written down'
+  );
+});
+
 // The turn is passed on, never taken away. A peer who is handed a turn while
 // away from the keyboard and lets it lapse must still hold the place they
 // queued for — losing it is what made turn taking feel arbitrary. Proven over
