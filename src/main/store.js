@@ -55,11 +55,15 @@ class MessageStore {
     return list[idx];
   }
 
-  // An agent thread should hold what was asked and the answer to it. Older
-  // versions also wrote the machinery around that — whose turn it is, where you
-  // are in the queue, why a run failed — as ordinary messages, so upgrading stops
-  // new ones but leaves every one already on disk in place. Those threads would
-  // stay exactly as cluttered, and keep exporting that way.
+  // An agent thread should hold what was asked and what came back. Older versions
+  // also wrote the machinery around that — whose turn it is, where you are in the
+  // queue, that the agent is busy — as ordinary messages, so upgrading stops new
+  // ones but leaves every one already on disk in place. Those threads would stay
+  // exactly as cluttered, and keep exporting that way.
+  //
+  // Only that machinery goes. Anything a running version keeps, this keeps too:
+  // questions, answers, and the errors that explain a missing answer all stay,
+  // whatever their age.
   //
   // Going forward that distinction is carried on the message itself, decided
   // where it is written. Here it cannot be: the records this looks at predate the
@@ -88,8 +92,6 @@ class MessageStore {
       /^That is \d+ queries — passing to the next person waiting\. You are #\d+ in line; ask again when your turn comes round\.$/,
       /^.{1,64} is busy with someone else\. You are #\d+ in line — ask again when it is your turn\.$/,
       /^I am still working on the previous message — one at a time, please\.$/,
-      // A failed run is not an answer either, and was stored as one.
-      /^⚠️ /,
     ];
     const isNotice = (m) =>
       m &&

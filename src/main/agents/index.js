@@ -445,7 +445,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
           entry.pendingApproval = null;
           bus.emit('agent-typing', { agentId, isTyping: false });
           relayActivity(agentId, origin, false, null);
-          reply(agentId, output || streamed || '(no output)', origin, { answer: true });
+          reply(agentId, output || streamed || '(no output)', origin, { keep: true });
           // Hand over as soon as the last query of a turn finishes, so whoever
           // is next is told immediately rather than on their next attempt.
           if (origin) releaseIfSpent(agentId);
@@ -456,7 +456,10 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
           bus.emit('agent-typing', { agentId, isTyping: false });
           relayActivity(agentId, origin, false, null);
           emitStatus(agentId, 'error', err.message);
-          reply(agentId, `⚠️ ${err.message}`, origin);
+          // Kept, like the output would have been: it is the result of a
+          // question somebody asked, and a thread showing a question with no
+          // reply beside it would be hiding what happened.
+          reply(agentId, `⚠️ ${err.message}`, origin, { keep: true });
         },
       }
     );
@@ -465,23 +468,25 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   // Agent output re-enters the app through the same bus event as peer traffic, so
   // it is stored and rendered by the existing ipc.js router with no special case.
   //
-  // An agent thread keeps two things: what was asked, and the answer to it.
-  // Everything else this function sends — whose turn it is, where you are in the
-  // queue, why a run failed — is true for the moment it arrives and worthless a
-  // minute later, so it is shown and then dropped rather than written down.
+  // An agent thread keeps two things: what was asked, and what came back from
+  // the run — the output, or the error explaining why there was none. Everything
+  // else this function sends is the machinery around that: whose turn it is,
+  // where you are in the queue, that the agent is still busy. Those are true for
+  // the moment they arrive and worthless a minute later, so they are shown and
+  // then dropped rather than written down.
   //
-  // Which is why `answer` is opt-in and nothing else has to be marked: a notice
+  // Which is why `keep` is opt-in and no notice has to be marked as one: a notice
   // added here in future is transient because that is the default, not because
-  // somebody remembered to say so. Only the one call that carries the agent's
-  // output asks to be kept.
-  function reply(agentId, text, origin, { answer = false } = {}) {
+  // somebody remembered to say so. Only the two calls carrying a result ask to be
+  // kept, and they say so at the point where that is obvious.
+  function reply(agentId, text, origin, { keep = false } = {}) {
     // A peer's conversation with the agent belongs in its own thread, not in the
     // human chat with that peer — otherwise asking an agent something graffitis
     // two real conversations. The owner still sees everything, just filed under
     // "Agent · via <peer>" instead of smeared through their chat with them.
     const threadId = origin ? delegateIdFor(agentId, origin) : agentId;
     const message = { from: threadId, type: 'chat', id: crypto.randomUUID(), text, ts: Date.now() };
-    if (!answer) message.notice = true;
+    if (!keep) message.notice = true;
     message[LOCAL_ORIGIN] = true;
     bus.emit('peer-message', message);
     // If a remote peer asked, relay the answer back to that peer alone — never
@@ -494,7 +499,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
         name: nameOf(agentId),
         text,
         ts: Date.now(),
-        ...(!answer && { notice: true }),
+        ...(!keep && { notice: true }),
       });
     }
   }
