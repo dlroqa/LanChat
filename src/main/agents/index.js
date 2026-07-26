@@ -852,17 +852,27 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   // human chat, then handed to the transport — if it is this peer's turn.
   function accept(record, peerId, text) {
     const threadId = ensureDelegateIdentity(record, peerId);
-    bus.emit('agent-request', { threadId, agentId: record.id, peerId, text, ts: Date.now() });
+    const state = turnState(record.id);
+    const ts = Date.now();
+    const note = () => bus.emit('agent-request', { threadId, agentId: record.id, peerId, text, ts });
+
+    // A second question asked while one of theirs is already waiting to be read
+    // is refused below — and it is not written down either. This thread is what
+    // the agent's next answer is read against, so the same question arriving
+    // three times makes that answer worse, not more likely. Keeping the
+    // conversation to the questions that were actually asked is the point of the
+    // mechanism rather than a side effect of it.
+    const duplicate = state.held.has(peerId);
+    if (!duplicate) note();
 
     // Anti-flood runs before anything is spent. Checking it later would let a
     // looping peer burn their own quota on messages that never reach the agent,
     // and turn each one into an outbound status frame — the exact amplification
-    // the throttle exists to prevent. The request is still recorded above, so
-    // the owner sees what was sent either way.
+    // the throttle exists to prevent. A message it swallows is still recorded
+    // above, so a peer hammering the door is visible rather than invisible.
     const entry = live.get(record.id);
     if (checkThrottle(record.id, peerId, Boolean(entry && entry.busy)) === 'silent') return true;
 
-    const state = turnState(record.id);
     const claim = claimTurn(record.id, peerId);
     if (!claim.ok) {
       // Kept rather than dropped: they framed the question, and making them
@@ -874,10 +884,10 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
       // standing; this branch is what catches it when that standing is a beat
       // stale, or when the peer is running a build that does not know to.
       const standing = standingFor(record.id, peerId);
-      if (state.held.has(peerId)) {
+      if (duplicate) {
         reply(record.id, busyLine(nameOf(record.id), standing.position), peerId);
       } else {
-        state.held.set(peerId, { text, ts: Date.now() });
+        state.held.set(peerId, { text, ts });
         reply(
           record.id,
           claim.rotated
@@ -886,11 +896,13 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
           peerId
         );
       }
-    } else {
+    } else if (state.held.delete(peerId)) {
       // They hold the turn and are asking now, so anything kept from before is
       // superseded by what they just said. Only reachable when a handover landed
-      // while the agent was mid-run and they typed before the sweep read it.
-      state.held.delete(peerId);
+      // while the agent was mid-run and they typed before the sweep read it —
+      // and this message was skipped above as a duplicate, so it needs writing
+      // down after all now that it is the one being answered.
+      note();
     }
 
     // Published once for either outcome: the queue can move on a refusal just as

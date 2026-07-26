@@ -737,6 +737,59 @@ test('a remote peer gets five queries, then the turn passes to whoever is waitin
   });
 });
 
+test('a peer who keeps asking out of turn cannot flood the agent thread', async () => {
+  // The asking machine refuses a second attempt itself, so this is the case it
+  // cannot cover: a peer that does not, whether because it is running an older
+  // build or because it was told to keep trying. The thread the agent's next
+  // answer is read against must stay the questions that were actually asked.
+  //
+  // The clock is stepped by hand rather than with withFakeClock, which advances
+  // on every read and would run the holder past the idle timeout mid-test.
+  const realNow = Date.now;
+  let t = realNow();
+  Date.now = () => t;
+  try {
+    const { hub, agentHub, log } = makeHub();
+    const { agent } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+    await agentHub.setSharing(agent.id, { networkWide: true });
+
+    const asked = [];
+    hub.bus.on('agent-request', (r) => asked.push(r.text));
+    hub.send = () => true;
+    joinPeer(hub, 'alice');
+    joinPeer(hub, 'bob');
+
+    // Alice takes the turn; Bob queues behind her and will not stop asking. Each
+    // attempt is spaced past the anti-flood interval, so what is under test is
+    // the held slot and not the throttle.
+    t += 4000;
+    await ask(agentHub, 'alice', 1, log);
+    for (const q of ['first question', 'second question', 'third question']) {
+      t += 4000;
+      agentHub.routeFromPeer('bob', `@Hermes ${q}`);
+      await new Promise((r) => setImmediate(r));
+    }
+
+    assert.deepEqual(
+      asked.filter((x) => x.endsWith('question')),
+      ['first question'],
+      'only the question that was kept is written down'
+    );
+    assert.equal(log.length, 1, 'and none of them reached the agent while Alice held the turn');
+
+    // Alice spends the rest of her turn, which hands it to Bob. What the agent
+    // then reads is the question he asked first, not the last thing he shouted.
+    for (let i = 0; i < 4; i += 1) {
+      t += 4000;
+      await ask(agentHub, 'alice', 1, log);
+    }
+    assert.ok(log.includes('first question'), 'the held question is what gets answered');
+    assert.ok(!log.includes('third question'), 'and the repeats never arrive at all');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
 test('with nobody waiting a lone peer keeps going rather than being blocked', async () => {
   await withFakeClock(async () => {
     const { hub, agentHub, log } = makeHub();

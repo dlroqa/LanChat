@@ -339,6 +339,14 @@ test('two peers take turns, and each is told where they stand', async (t) => {
     ['my turn?'],
     'and it is still in the transcript to come back to'
   );
+  // The wording is the whole difference between being told to come back and try
+  // again and being told there is nothing to come back for. Asserted on the copy
+  // C actually reads, not on the string the owner built.
+  const firstNotice = C.events
+    .filter((e) => e.type === 'chat' && e.payload.peerId === cRemote && e.payload.notice)
+    .at(-1).payload;
+  assert.match(firstNotice.text, /kept your question/, 'C is told the question is held');
+  assert.doesNotMatch(firstNotice.text, /ask again/, 'and not told to ask again');
 
   // Asking again while that one is still waiting is the same question twice. It
   // is refused on C's own machine: nothing sent, nothing written down, and the
