@@ -15,20 +15,50 @@ const { guessMime: mimeFromName } = require('./fileTransfer');
 // already gated by Tailscale ACLs / the local network. Peers self-identify via a
 // `hello` frame carrying their id + display card.
 
-function createServer({ config, getIdentity, hub, bus, downloadsDir }) {
+// `windows` is a parameter rather than a bare platform check so both paths can
+// be exercised on one machine — the point of confining a fix to a platform is
+// lost if the confinement itself is untested.
+function createServer({
+  config,
+  getIdentity,
+  hub,
+  bus,
+  downloadsDir,
+  store,
+  windows = process.platform === 'win32',
+}) {
   let server = null;
   let wss = null;
 
   // Only files we sent or received may be previewed over the local HTTP endpoint,
   // so the renderer can show inline image/video thumbnails without exposing the FS.
+  //
+  // Windows names the same file more than one way — drive letter and folder
+  // names differ in case between what a file dialog hands back and what a peer's
+  // transfer header carried, and separators can arrive either way round — while
+  // the filesystem treats them all as one file. Comparing the raw strings meant a
+  // path the app had itself just allowed could still miss, so the key is
+  // normalised there: nothing is served that was not allowed, it is simply
+  // recognised however it is spelled. Elsewhere the string is the key, as it has
+  // always been.
   const previewable = new Set();
-  bus.on('file-received', (info) => info?.path && previewable.add(info.path));
-  bus.on('file-sent', (p) => p && previewable.add(p));
-  bus.on('allow-preview', (p) => p && previewable.add(p));
+  const previewKey = (p) => (windows ? path.normalize(String(p)).toLowerCase() : String(p));
+  const allowPreview = (p) => p && previewable.add(previewKey(p));
+  bus.on('file-received', (info) => allowPreview(info?.path));
+  bus.on('file-sent', (p) => allowPreview(p));
+  bus.on('allow-preview', (p) => allowPreview(p));
   // Custom notification sounds persist across restarts, so re-allow them.
   for (const key of ['customRingtonePath', 'customNotificationPath']) {
-    const p = config.get(key);
-    if (p) previewable.add(p);
+    allowPreview(config.get(key));
+  }
+  // Windows only: so do the files already in a conversation. The allowlist was
+  // rebuilt from live events alone, so it held whatever had been sent or
+  // received since launch and nothing else — every photo already in a thread
+  // came back 404 on the next start and drew as a broken thumbnail. Reading the
+  // paths back off disk does not widen what may be read: the same files, still
+  // named explicitly, still nothing else on the machine.
+  if (windows && store && typeof store.filePaths === 'function') {
+    for (const p of store.filePaths()) allowPreview(p);
   }
 
   function handleWhoami(res) {
@@ -85,7 +115,7 @@ function createServer({ config, getIdentity, hub, bus, downloadsDir }) {
 
   function handlePreview(url, res) {
     const p = url.searchParams.get('path');
-    if (!p || !previewable.has(p) || !fs.existsSync(p)) {
+    if (!p || !previewable.has(previewKey(p)) || !fs.existsSync(p)) {
       res.writeHead(404);
       res.end('not found');
       return;

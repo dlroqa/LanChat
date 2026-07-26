@@ -18,6 +18,8 @@ export default function ChatPane({
   awaiting,
   progress,
   previewUrl,
+  // Windows only: fall back to the file row when a thumbnail cannot be fetched.
+  previewFallback,
   showAddresses,
   onSend,
   onAttach,
@@ -129,6 +131,7 @@ export default function ChatPane({
                 msg={m}
                 grouped={grouped}
                 previewUrl={previewUrl}
+                previewFallback={previewFallback}
                 progress={progress[m.id]}
                 onOpen={onOpenFile}
                 onReveal={onRevealFile}

@@ -153,7 +153,9 @@ async function startServices() {
   // they are cleared out here rather than left to clutter the thread forever.
   store.pruneLegacyNotices();
   const hub = new PeerHub({ getIdentity, bus });
-  const server = createServer({ config, getIdentity, hub, bus, downloadsDir });
+  // `store` is passed so previews of files already in a conversation survive a
+  // restart — see the allowlist in server.js.
+  const server = createServer({ config, getIdentity, hub, bus, downloadsDir, store });
   const discovery = createDiscovery({ config, getIdentity, hub, bus });
   const fileSender = createFileSender({ hub, getIdentity, bus });
 

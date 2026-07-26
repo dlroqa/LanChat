@@ -1,14 +1,21 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { formatTime, formatBytes, isImage, isVideo, isAudio } from '../lib/util.js';
 import { FileIcon, Download } from '../lib/icons.jsx';
 
 // previewUrl builds a localhost URL the main-process server streams the file from.
-export default function MessageBubble({ msg, grouped, previewUrl, progress, onOpen, onReveal }) {
+export default function MessageBubble({ msg, grouped, previewUrl, previewFallback, progress, onOpen, onReveal }) {
   const out = msg.direction === 'out';
 
   const body =
     msg.kind === 'file' ? (
-      <FileContent msg={msg} previewUrl={previewUrl} progress={progress} onOpen={onOpen} onReveal={onReveal} />
+      <FileContent
+        msg={msg}
+        previewUrl={previewUrl}
+        previewFallback={previewFallback}
+        progress={progress}
+        onOpen={onOpen}
+        onReveal={onReveal}
+      />
     ) : (
       <div className="text">{msg.text}</div>
     );
@@ -33,16 +40,24 @@ export default function MessageBubble({ msg, grouped, previewUrl, progress, onOp
   );
 }
 
-function FileContent({ msg, previewUrl, progress, onOpen, onReveal }) {
+function FileContent({ msg, previewUrl, previewFallback, progress, onOpen, onReveal }) {
+  // Windows only: a thumbnail that cannot be fetched used to leave the browser's
+  // broken-image glyph sitting in the bubble — the one thing on screen that says
+  // nothing and does nothing. The file is still there and still openable, so the
+  // bubble falls back to the row that says so. Left off elsewhere, the bubble
+  // renders exactly as it always has.
+  const [previewFailed, setPreviewFailed] = useState(false);
   const f = msg.file || {};
   const url = previewUrl ? previewUrl(f.path) : null;
+  const media = url && !(previewFallback && previewFailed);
   const pct = progress != null ? Math.round(progress * 100) : null;
+  const fail = previewFallback ? () => setPreviewFailed(true) : undefined;
 
-  if (url && isImage(f.mime)) {
+  if (media && isImage(f.mime)) {
     return (
       <div className="file-bubble">
         <div className="file-media">
-          <img src={url} alt={f.name} onClick={() => onOpen(f.path)} loading="lazy" />
+          <img src={url} alt={f.name} onClick={() => onOpen(f.path)} onError={fail} loading="lazy" />
         </div>
         <FileMeta f={f} onReveal={onReveal} />
         {pct != null && pct < 100 && <Progress pct={pct} />}
@@ -51,20 +66,20 @@ function FileContent({ msg, previewUrl, progress, onOpen, onReveal }) {
   }
   // Any audio file gets an inline player, which makes a voice message just an
   // ordinary audio transfer rather than a separate message kind on the wire.
-  if (url && isAudio(f.mime)) {
+  if (media && isAudio(f.mime)) {
     return (
       <div className="file-bubble">
-        <audio className="audio-player" src={url} controls preload="metadata" />
+        <audio className="audio-player" src={url} controls preload="metadata" onError={fail} />
         <FileMeta f={f} onReveal={onReveal} />
         {pct != null && pct < 100 && <Progress pct={pct} />}
       </div>
     );
   }
-  if (url && isVideo(f.mime)) {
+  if (media && isVideo(f.mime)) {
     return (
       <div className="file-bubble">
         <div className="file-media">
-          <video src={url} controls preload="metadata" />
+          <video src={url} controls preload="metadata" onError={fail} />
         </div>
         <FileMeta f={f} onReveal={onReveal} />
         {pct != null && pct < 100 && <Progress pct={pct} />}
@@ -79,7 +94,10 @@ function FileContent({ msg, previewUrl, progress, onOpen, onReveal }) {
         </span>
         <div className="file-info">
           <div className="fn">{f.name}</div>
-          <div className="fs">{formatBytes(f.size)}</div>
+          <div className="fs">
+            {formatBytes(f.size)}
+            {previewFallback && previewFailed && ' · preview unavailable'}
+          </div>
         </div>
         <button className="icon-btn" onClick={(e) => (e.stopPropagation(), onReveal(f.path))} title="Show in folder">
           <Download size={18} />

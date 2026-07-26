@@ -19,6 +19,17 @@ const QUALITY = {
   fair: { label: 'Fair', color: 'var(--warn)', bars: 2 },
   poor: { label: 'Poor', color: 'var(--danger)', bars: 1 },
   offline: { label: 'Offline', color: 'var(--fg-faint)', bars: 0 },
+  // The two below are reported by Windows only (see src/main/linkStats.js);
+  // macOS and Linux never produce them, so the panel reads there exactly as it
+  // always has.
+  //
+  // Connected, nothing measured yet — said plainly rather than borrowing a band
+  // the link has not earned.
+  measuring: { label: 'Measuring…', color: 'var(--fg-faint)', bars: 0 },
+  // The socket is open but the round trips are going nowhere. "Offline" would be
+  // wrong (the peer is right there in the roster) and a quality band would be a
+  // guess, so the panel says the one thing that is true.
+  unreachable: { label: 'Not responding', color: 'var(--warn)', bars: 0 },
 };
 
 export default function ConnectionPanel({ peer, stats, agentStatus, awaiting }) {
@@ -38,7 +49,7 @@ export default function ConnectionPanel({ peer, stats, agentStatus, awaiting }) 
 
   if (peer.kind === 'agent') return <AgentPanel peer={peer} status={agentStatus} awaiting={awaiting} />;
 
-  const q = QUALITY[stats?.quality || (peer.online ? 'good' : 'offline')];
+  const q = QUALITY[stats?.quality || (peer.online ? 'good' : 'offline')] || QUALITY.offline;
   const samples = stats?.samples || [];
 
   return (
@@ -63,9 +74,11 @@ export default function ConnectionPanel({ peer, stats, agentStatus, awaiting }) 
       </div>
 
       <div className="conn-note">
-        {peer.online
-          ? 'Measured peer-to-peer over your LAN or Tailscale mesh. Start a video call and it plays here.'
-          : 'This peer is offline. They will appear here when LanChat is running on their device.'}
+        {!peer.online
+          ? 'This peer is offline. They will appear here when LanChat is running on their device.'
+          : stats?.quality === 'unreachable'
+            ? 'Connected, but nothing is coming back from this peer yet. Figures appear as soon as one round trip completes.'
+            : 'Measured peer-to-peer over your LAN or Tailscale mesh. Start a video call and it plays here.'}
       </div>
     </div>
   );

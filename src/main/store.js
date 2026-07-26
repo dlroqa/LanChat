@@ -131,6 +131,41 @@ class MessageStore {
     return removed;
   }
 
+  // Every file a stored conversation refers to, sent or received.
+  //
+  // The preview endpoint serves only files LanChat itself put in a conversation,
+  // and that list was rebuilt from live events alone — so it held whatever had
+  // been sent or received since launch, and nothing else. Every image already in
+  // a thread came back 404 on the next start and drew as a broken thumbnail.
+  // Reading the paths back off disk is what makes a preview outlive the session
+  // that created it, without widening what may be read: the same files, still
+  // named explicitly, still nothing else on the machine.
+  filePaths() {
+    const out = [];
+    let files;
+    try {
+      files = fs.readdirSync(this.dir);
+    } catch {
+      return out;
+    }
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue;
+      let list;
+      try {
+        list = JSON.parse(fs.readFileSync(path.join(this.dir, file), 'utf8'));
+      } catch {
+        continue;
+      }
+      if (!Array.isArray(list)) continue;
+      for (const m of list) {
+        if (m && m.kind === 'file' && m.file && typeof m.file.path === 'string' && m.file.path) {
+          out.push(m.file.path);
+        }
+      }
+    }
+    return out;
+  }
+
   // Deletes a conversation outright. Used by "clear chat history", which is
   // meant to be exactly as final as it sounds — the file goes, rather than the
   // messages being hidden while staying on disk.

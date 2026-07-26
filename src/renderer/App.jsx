@@ -201,6 +201,21 @@ export default function App() {
       setConfigured(state.configured);
       setConfig(state.config);
       setPeers(state.presence || []);
+      // Windows only: start from whatever has already been measured, rather than
+      // an empty panel until the next round trip lands. A window opened from the
+      // tray after hours of uptime should not look like a link that has never
+      // been measured. Elsewhere the panel fills from live events as it always
+      // has.
+      if (state.identity?.platform === 'win32') {
+        try {
+          const stats = await api.linkStats();
+          if (Array.isArray(stats) && stats.length) {
+            setLinkStats(Object.fromEntries(stats.filter(Boolean).map((s) => [s.peerId, s])));
+          }
+        } catch {
+          // Nothing measured yet — the live events fill this in.
+        }
+      }
       if (!state.configured) {
         setFirstRun(true);
         setModal('profile');
@@ -441,15 +456,20 @@ export default function App() {
     return { ...base, online: live ? live.online : false };
   }, [selectedId, peers]);
 
-  const soundUrl = (path) =>
-    path && selfRef.current
-      ? `http://localhost:${selfRef.current.servicePort}/lanchat/preview?path=${encodeURIComponent(path)}`
-      : null;
+  // Windows asks for the loopback address itself rather than the name for it:
+  // there "localhost" resolves to ::1 first, while the service listens on
+  // 0.0.0.0 — IPv4 only — so a thumbnail was one failed name resolution away
+  // from never loading. It is the same endpoint either way; macOS and Linux,
+  // where this has always worked, keep asking for it by name.
+  const localHost = (identity) => (identity?.platform === 'win32' ? '127.0.0.1' : 'localhost');
+  const localFile = (identity, path) =>
+    `http://${localHost(identity)}:${identity.servicePort}/lanchat/preview?path=${encodeURIComponent(path)}`;
+
+  const soundUrl = (path) => (path && selfRef.current ? localFile(selfRef.current, path) : null);
 
   selectedPeerRef.current = selectedPeer;
 
-  const previewUrl = (path) =>
-    path && self ? `http://localhost:${self.servicePort}/lanchat/preview?path=${encodeURIComponent(path)}` : null;
+  const previewUrl = (path) => (path && self ? localFile(self, path) : null);
 
   // --- Actions ---
   async function saveProfile(profile) {
@@ -609,6 +629,7 @@ export default function App() {
             api.answerAgentApproval(selectedId, req.runId, choice);
           }}
           previewUrl={previewUrl}
+          previewFallback={self?.platform === 'win32'}
           showAddresses={config.showAddresses}
           onSend={sendText}
           onAttach={attach}
