@@ -47,8 +47,9 @@ function createServer({
   bus.on('file-received', (info) => allowPreview(info?.path));
   bus.on('file-sent', (p) => allowPreview(p));
   bus.on('allow-preview', (p) => allowPreview(p));
-  // Custom notification sounds persist across restarts, so re-allow them.
-  for (const key of ['customRingtonePath', 'customNotificationPath']) {
+  // Custom notification sounds persist across restarts, so re-allow them. Keep
+  // in step with SOUND_KINDS in ipc.js, which is what writes these keys.
+  for (const key of ['customRingtonePath', 'customNotificationPath', 'customAgentMusicPath']) {
     allowPreview(config.get(key));
   }
   // Windows only: so do the files already in a conversation. The allowlist was

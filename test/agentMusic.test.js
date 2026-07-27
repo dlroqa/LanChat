@@ -21,6 +21,63 @@ const { fadeMs, clampVolume, AgentMusic, FADE_IN_MS, FADE_OUT_MS, MIN_FADE_MS } 
    return { fadeMs, clampVolume, AgentMusic, FADE_IN_MS, FADE_OUT_MS, MIN_FADE_MS };`
 )();
 
+// The track list is built by a Vite glob, which plain Node cannot parse — so the
+// one `import.meta` expression is swapped for a fixture and everything built on
+// top of it is the real code. That is the part worth testing: what a dropped-in
+// file ends up called, and which URL a saved setting resolves to.
+function loadTracks(fixture) {
+  const src = fs
+    .readFileSync(path.join(ROOT, 'src', 'renderer', 'lib', 'agentMusicTrack.js'), 'utf8')
+    .replace(/const found = import\.meta\.glob\([\s\S]*?\n\}\);/, 'const found = FIXTURE;')
+    .replace(/^export\s+/gm, '');
+  return new Function(
+    'FIXTURE',
+    `${src}
+     return { TRACKS, TRACK_KEYS, HAS_TRACK, DEFAULT_TRACK, trackUrl, trackKey, trackLabel };`
+  )(fixture);
+}
+
+const SAMPLE = {
+  '../assets/music/sleepy-island.opus': '/assets/sleepy-island-h4sh.opus',
+  '../assets/music/agent-loop.opus': '/assets/agent-loop-DWlj.opus',
+};
+
+test('a dropped-in file is named after itself, in sentence case', () => {
+  const { trackKey, trackLabel } = loadTracks({});
+  assert.strictEqual(trackKey('../assets/music/sleepy-island.opus'), 'sleepy-island');
+  assert.strictEqual(trackLabel('sleepy-island'), 'Sleepy island');
+  assert.strictEqual(trackLabel('agent_loop'), 'Agent loop');
+  assert.strictEqual(trackLabel('lofi  beats'), 'Lofi beats');
+});
+
+test('the track list is sorted, so the dropdown does not reshuffle between builds', () => {
+  const { TRACK_KEYS, TRACKS, DEFAULT_TRACK, HAS_TRACK } = loadTracks(SAMPLE);
+  assert.deepStrictEqual(TRACK_KEYS, ['agent-loop', 'sleepy-island']);
+  assert.strictEqual(TRACKS['sleepy-island'].label, 'Sleepy island');
+  assert.strictEqual(DEFAULT_TRACK, 'agent-loop');
+  assert.strictEqual(HAS_TRACK, true);
+});
+
+test('a build with no music has no tracks and nothing to default to', () => {
+  const { TRACK_KEYS, HAS_TRACK, DEFAULT_TRACK, trackUrl } = loadTracks({});
+  assert.deepStrictEqual(TRACK_KEYS, []);
+  assert.strictEqual(HAS_TRACK, false);
+  assert.strictEqual(DEFAULT_TRACK, null);
+  assert.strictEqual(trackUrl(null, null), null, 'nothing to play is silence, not a throw');
+});
+
+test('a saved setting resolves to the right url, and an unknown one falls back', () => {
+  const { trackUrl } = loadTracks(SAMPLE);
+  assert.strictEqual(trackUrl('sleepy-island', null), '/assets/sleepy-island-h4sh.opus');
+  assert.strictEqual(trackUrl('custom', 'http://localhost:47100/x'), 'http://localhost:47100/x');
+  // Custom chosen but no file picked yet — silence, and the toggle stays usable.
+  assert.strictEqual(trackUrl('custom', null), null);
+  // A track that was removed from the build since the setting was saved.
+  assert.strictEqual(trackUrl('deleted-track', null), '/assets/agent-loop-DWlj.opus');
+  // Never chosen at all.
+  assert.strictEqual(trackUrl(null, null), '/assets/agent-loop-DWlj.opus');
+});
+
 // Enough of the Web Audio graph to watch the ramps go by. The audio thread would
 // take until `at` to arrive; the tests only need where it was told to go.
 function fakeAudio() {
@@ -195,10 +252,56 @@ test('disposing pauses, drops the element, and lets a later start build a fresh 
   assert.strictEqual(music.wanted, false);
 });
 
+test('switching track tears down the old element and builds a fresh one', () => {
+  const els = [];
+  const audio = fakeAudio();
+  const music = new AgentMusic({
+    url: 'one.opus',
+    context: () => audio.ctx,
+    element: () => {
+      const el = fakeElement();
+      els.push(el);
+      return el;
+    },
+  });
+  music.setVolume(0.5);
+  music.start();
+  assert.strictEqual(els.length, 1);
+
+  // Same track again is not a reason to restart anything.
+  music.setUrl('one.opus');
+  assert.strictEqual(els.length, 1, 'setting the same url must be a no-op');
+
+  // A different one keeps playing, on a new element — a source node cannot be
+  // made twice for the same element, so reusing it would throw.
+  music.setUrl('two.opus');
+  assert.strictEqual(els.length, 2, 'a new track needs a new element');
+  assert.strictEqual(els[0].pauses, 1, 'the old track is stopped');
+  assert.strictEqual(els[1].plays, 1, 'the new one starts');
+  assert.strictEqual(music.url, 'two.opus');
+});
+
+test('switching track while idle does not start playing', () => {
+  const els = [];
+  const audio = fakeAudio();
+  const music = new AgentMusic({
+    url: 'one.opus',
+    context: () => audio.ctx,
+    element: () => {
+      const el = fakeElement();
+      els.push(el);
+      return el;
+    },
+  });
+  music.setUrl('two.opus');
+  assert.strictEqual(els.length, 0, 'nothing was playing, so nothing should start');
+  assert.strictEqual(music.wanted, false);
+});
+
 test('the music keys are plumbed all three ways, including the return of publicConfig', () => {
   const defaults = fs.readFileSync(path.join(ROOT, 'src', 'main', 'config.js'), 'utf8');
   const ipc = fs.readFileSync(path.join(ROOT, 'src', 'main', 'ipc.js'), 'utf8');
-  for (const key of ['agentMusicEnabled', 'agentMusicVolume']) {
+  for (const key of ['agentMusicEnabled', 'agentMusic', 'agentMusicVolume', 'customAgentMusicPath']) {
     assert.match(defaults, new RegExp(`^\\s*${key}:`, 'm'), `${key} is missing from DEFAULTS`);
     assert.match(ipc, new RegExp(`'${key}'`), `${key} is missing from the setConfig allowlist`);
     // Once to take it off config.data and once to put it on the wire. A key that

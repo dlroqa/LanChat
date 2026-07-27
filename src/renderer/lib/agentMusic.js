@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react';
 import { audioContext } from './sounds.js';
-import { TRACK_URL } from './agentMusicTrack.js';
 
 // A bed of music for as long as an agent is working, and silence the rest of the
 // time.
@@ -63,7 +62,7 @@ export class AgentMusic {
   // The context and the element are arguments so the state machine can be driven
   // by a test without a renderer: everything that reaches outside this file goes
   // through them.
-  constructor({ url = TRACK_URL, context = audioContext, element = (u) => new Audio(u) } = {}) {
+  constructor({ url = null, context = audioContext, element = (u) => new Audio(u) } = {}) {
     this.url = url || null;
     this.makeContext = context;
     this.makeElement = element;
@@ -125,6 +124,20 @@ export class AgentMusic {
     }
     if (ms <= 0) p.setValueAtTime(to, now);
     else p.linearRampToValueAtTime(to, now + ms / 1000);
+  }
+
+  // Changing the track. A MediaElementAudioSourceNode is welded to its element
+  // for good, so a different piece of music means a new pair of both — which is
+  // why this tears the graph down rather than reassigning `el.src`. The intent
+  // survives: swap tracks while an agent is working and the new one fades in
+  // where the old one left off.
+  setUrl(url) {
+    const next = url || null;
+    if (next === this.url) return;
+    const wasWanted = this.wanted;
+    this._teardown();
+    this.url = next;
+    if (wasWanted) this.start();
   }
 
   setVolume(v) {
@@ -215,6 +228,10 @@ export class AgentMusic {
   }
 
   dispose() {
+    this._teardown();
+  }
+
+  _teardown() {
     clearTimeout(this.stopTimer);
     this.stopTimer = null;
     this._offGesture();
@@ -234,12 +251,40 @@ export class AgentMusic {
   }
 }
 
+// How long an audition in Settings runs before it fades itself out. Long enough
+// to hear whether a loop suits being worked to, short enough that forgetting to
+// stop it is not a problem.
+export const PREVIEW_SECONDS = 12;
+
+// Auditions a track with the same fades the real thing uses, so what you hear in
+// Settings is what an agent starting work sounds like. Returns the stop
+// function; calling it twice is harmless.
+export function previewTrack(url, volume) {
+  const music = new AgentMusic({ url });
+  music.setVolume(volume);
+  music.start();
+
+  let stopped = false;
+  const finish = () => {
+    if (stopped) return;
+    stopped = true;
+    clearTimeout(timer);
+    music.stop();
+    // The graph goes only once the fade-out has actually run out.
+    setTimeout(() => music.dispose(), FADE_OUT_MS + 200);
+  };
+  const timer = setTimeout(finish, PREVIEW_SECONDS * 1000);
+  return finish;
+}
+
 // Drives the bed from one boolean. Called once, at the top of the app, because
 // the music is a property of the machine's state and not of whichever
 // conversation happens to be open — switching threads mid-run must not touch it.
-export function useAgentMusic(busy, { enabled = false, volume = 0.5 } = {}) {
+export function useAgentMusic(busy, { enabled = false, volume = 0.5, url = null } = {}) {
   const ref = useRef(null);
-  const wanted = Boolean(busy) && enabled === true;
+  // No track chosen, or "custom" with nothing picked yet, is simply silence —
+  // the same as being switched off, and not a thing to report.
+  const wanted = Boolean(busy) && enabled === true && Boolean(url);
   const vol = clampVolume(volume);
 
   // Read inside the effect below without being a dependency of it: a nudge of
@@ -253,15 +298,19 @@ export function useAgentMusic(busy, { enabled = false, volume = 0.5 } = {}) {
 
   useEffect(() => {
     if (!wanted) {
+      // Not `setUrl` here as well: a track chosen while nothing is playing is
+      // picked up by the `start()` below next time round, and swapping it now
+      // would tear down the graph mid-fade-out and cut the tail short.
       ref.current?.stop();
       return undefined;
     }
-    if (!ref.current) ref.current = new AgentMusic();
+    if (!ref.current) ref.current = new AgentMusic({ url });
+    ref.current.setUrl(url);
     ref.current.setVolume(volRef.current);
     ref.current.start();
     const cap = setTimeout(() => ref.current?.stop(), MAX_RUN_MS);
     return () => clearTimeout(cap);
-  }, [wanted]);
+  }, [wanted, url]);
 
   // Never leave a loop playing if the window goes.
   useEffect(

@@ -19,6 +19,7 @@ import NewGroupCallModal from './components/NewGroupCallModal.jsx';
 import { GroupCallManager } from './lib/groupCall.js';
 import { isAgentThread } from './lib/agentPhrase.js';
 import { useAgentMusic } from './lib/agentMusic.js';
+import { trackUrl, DEFAULT_TRACK } from './lib/agentMusicTrack.js';
 
 const api = window.lanchat;
 
@@ -646,6 +647,9 @@ export default function App() {
   useAgentMusic(agentWorking && !inCall && !groupActive && !incoming && !groupInvited, {
     enabled: config.agentMusicEnabled === true,
     volume: config.agentMusicVolume ?? 0.5,
+    // A bundled track by name, or the user's own file served by the same local
+    // endpoint the custom ringtone plays from.
+    url: trackUrl(config.agentMusic || DEFAULT_TRACK, soundUrl(config.customAgentMusicPath)),
   });
 
   function startGroupCall(chosenPeers, withVideo) {

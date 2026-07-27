@@ -334,9 +334,13 @@ The right panel has no latency to chart for an agent, so it uses that space to s
 
 ### Music while it works
 
-If a track is bundled into the build, **Settings → Sounds** offers a bed of music that fades in when an agent starts working and fades out when it finishes. It has its own toggle and volume, separate from message sounds, and it is **off until you turn it on**. Switching conversations mid-run does not interrupt it, a call silences it until the call ends, and an agent that finishes and is asked something else a second later never restarts the track — the fade simply turns around where it stands.
+**Settings → Sounds** offers a bed of music that fades in when an agent starts working and fades out when it finishes. It sits with the ringtone and message-sound pickers and works the same way — a dropdown of the tracks bundled into the build, a **Custom file…** option for one of your own, a preview button, and its own volume. It is separate from message sounds, and **off until you turn it on**.
 
-Building from source, the track is yours to choose: drop an audio file at `src/renderer/assets/agent-loop.opus` (`.mp3`, `.ogg`, `.m4a`, `.wav` and `.flac` work too) and rebuild. Nothing else to wire up. Prefer Ogg/Opus if you want the loop seamless — MP3 carries encoder padding at both ends, which becomes a small gap every time round. With no file there the setting explains itself and stays switched off, and the build is otherwise unchanged.
+Switching conversations mid-run does not interrupt it, a call silences it until the call ends, and an agent that finishes and is asked something else a second later never restarts the track — the fade simply turns around where it stands.
+
+A custom file must be **Ogg Vorbis or Opus**: both stay small over a loop long enough to work to, and both repeat without a seam, where MP3's encoder padding becomes a small gap every time round.
+
+Building from source, the bundled list is yours: drop audio files into `src/renderer/assets/music/` and rebuild. The file name becomes the name in Settings — `sleepy-island.opus` is listed as "Sleepy island" — so adding a track needs no code change at all. With the folder empty the setting says so and the build is otherwise unchanged.
 
 ---
 

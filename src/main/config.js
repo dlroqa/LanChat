@@ -32,7 +32,9 @@ const DEFAULTS = Object.freeze({
   // decision. Off until asked for — a loop that started playing by itself the
   // first time you asked an agent something would be a surprise, not a feature.
   agentMusicEnabled: false,
+  agentMusic: null, // null = the first bundled track; or a track name, or 'custom'
   agentMusicVolume: 0.5,
+  customAgentMusicPath: null,
   pttEnabled: true,
   pttKey: null, // null = platform default (Command on macOS, Control elsewhere)
   pttCustomCode: null, // KeyboardEvent.code when pttKey === 'custom'

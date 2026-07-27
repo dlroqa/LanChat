@@ -10,6 +10,32 @@ const { createRemoteAgents } = require('./agents/remote');
 const { normalizeWebUrl } = require('./webLinks');
 const { createLinkPreview } = require('./linkPreview');
 
+// The three kinds of user-supplied audio, and where each one is remembered. The
+// music an agent works to is offered a narrower choice than the other two on
+// purpose: it plays for minutes at a time and ships inside the app's own data
+// directory, and Ogg/Opus is both far the smallest at that length and the only
+// pair that loops without a seam.
+const SOUND_KINDS = Object.freeze({
+  ringtone: {
+    key: 'customRingtonePath',
+    title: 'Choose a sound',
+    filterName: 'Audio',
+    extensions: ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'],
+  },
+  notification: {
+    key: 'customNotificationPath',
+    title: 'Choose a sound',
+    filterName: 'Audio',
+    extensions: ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'],
+  },
+  agentMusic: {
+    key: 'customAgentMusicPath',
+    title: 'Choose a music loop',
+    filterName: 'Ogg Vorbis / Opus',
+    extensions: ['opus', 'ogg', 'oga'],
+  },
+});
+
 // Bridges the main-process services to the renderer:
 //   - ipcMain.handle(...)  : renderer -> main commands (request/response)
 //   - bus events -> webContents 'lanchat:event' : main -> renderer notifications
@@ -217,7 +243,9 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       'customNotificationPath',
       'muteNotifications',
       'agentMusicEnabled',
+      'agentMusic',
       'agentMusicVolume',
+      'customAgentMusicPath',
       'pttEnabled',
       'pttKey',
       'pttCustomCode',
@@ -478,9 +506,11 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   // and whitelists it for the local preview endpoint the renderer plays it from.
   ipcMain.handle('lanchat:pickSound', async (_e, { kind }) => {
     const win = getWindow();
+    const choice = SOUND_KINDS[kind];
+    if (!choice) return null;
     const result = await dialog.showOpenDialog(win, {
-      title: 'Choose a sound',
-      filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'] }],
+      title: choice.title,
+      filters: [{ name: choice.filterName, extensions: choice.extensions }],
       properties: ['openFile'],
     });
     if (result.canceled || !result.filePaths[0]) return null;
@@ -490,8 +520,7 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     const dest = path.join(soundsDir, `${kind}${path.extname(src)}`);
     fs.copyFileSync(src, dest);
     bus.emit('allow-preview', dest);
-    const key = kind === 'ringtone' ? 'customRingtonePath' : 'customNotificationPath';
-    config.set({ [key]: dest });
+    config.set({ [choice.key]: dest });
     return { path: dest, name: path.basename(src) };
   });
 
@@ -649,7 +678,9 @@ function publicConfig(config) {
     customNotificationPath,
     muteNotifications,
     agentMusicEnabled,
+    agentMusic,
     agentMusicVolume,
+    customAgentMusicPath,
     pttEnabled,
     pttKey,
     pttCustomCode,
@@ -676,7 +707,9 @@ function publicConfig(config) {
     customNotificationPath,
     muteNotifications,
     agentMusicEnabled,
+    agentMusic,
     agentMusicVolume,
+    customAgentMusicPath,
     pttEnabled,
     pttKey,
     pttCustomCode,

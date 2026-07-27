@@ -144,6 +144,12 @@ export const Play = (p) => (
     <polygon points="6 3 20 12 6 21 6 3" />
   </S>
 );
+// Stop: for a loop, which unlike a one-shot has to be told when to end.
+export const Stop = (p) => (
+  <S {...p}>
+    <rect x="6" y="6" width="12" height="12" rx="1.5" />
+  </S>
+);
 // Walkie-talkie: body, speaker grille, and antenna.
 export const Radio = (p) => (
   <S {...p}>
