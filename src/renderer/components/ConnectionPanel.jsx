@@ -3,7 +3,7 @@ import Avatar from './Avatar.jsx';
 import { useCountdown } from '../lib/useCountdown.js';
 import { useAgentPhrase } from '../lib/agentPhrase.js';
 import { turnStanding, turnStandingLabel } from '../lib/turnStanding.js';
-import { useSweep, useBurstHue, useReducedMotion } from '../lib/statusMotion.js';
+import { useSweep, useBurstHue, useReadyBurst, useReducedMotion, rayReach } from '../lib/statusMotion.js';
 
 // Live connection quality for the selected peer, drawn from real round-trip
 // measurements taken over the peer WebSocket (see src/main/linkStats.js) — the
@@ -115,6 +115,10 @@ function AgentPanel({ peer, status, awaiting }) {
   // Turn can never disagree about which of them is true.
   const standing = turnStanding(peer, secondsLeft);
 
+  // Fires once, the moment the agent has finished and the word "Ready" has
+  // finished typing itself in. Null the rest of the time.
+  const burst = useReadyBurst(state.tone, state.label);
+
   return (
     <div className="conn-panel">
       <div className="conn-head">
@@ -137,6 +141,9 @@ function AgentPanel({ peer, status, awaiting }) {
       >
         {/* Behind everything, spanning the whole row. */}
         <SpeedStreaks active={state.tone === 'busy'} />
+        {/* The finish. A new id is a new firework, and remounting is what makes
+            the animation start over rather than picking up mid-flight. */}
+        {burst != null && <ReadyBurst key={burst} />}
         {/* Pip and word travel together in a content-sized box, which is what
             lets the veil behind them size itself to the phrase. */}
         <span className="agent-state-front">
@@ -356,6 +363,91 @@ function SparkPip({ active }) {
         SPARKS.map(([a, d], i) => (
           <i key={a} className="agent-spark-ray" style={{ '--a': `${a}deg`, '--d': `${d}px`, '--i': i }} />
         ))}
+    </span>
+  );
+}
+
+// ---- The finish ----
+// One firework, thrown from the middle of the row the moment the agent has
+// finished and the word "Ready" has finished typing itself in. Rays leave the
+// centre, spread outward, and fade to nothing, which leaves the row in exactly
+// the Ready state it was already in — the burst adds a moment, not a mode.
+//
+// The row is far wider than it is tall, so the rays reach along an ellipse
+// rather than a circle: 300px sideways, where a trail has room to run out under
+// the layer's edge mask, and 38px up and down, which stops just inside the
+// border rather than being sliced off by it.
+const BURST_RX = 300;
+const BURST_RY = 38;
+
+// Angle, reach (as a fraction of the ellipse), comet length and thickness, and
+// the launch lag. Lengths are uneven on purpose — a firework is a spray, and
+// rays that all stop at the same radius draw a wheel. The lags deliberately do
+// *not* follow the angles: staggering in angle order would sweep the burst
+// round like a second hand instead of opening it all at once.
+const RAYS = [
+  { a: 4, s: 1.0, w: 52, h: 2, lag: 0, c: 'var(--streak-magenta)' },
+  { a: 17, s: 0.72, w: 34, h: 1, lag: 64, c: 'var(--streak-blue)' },
+  { a: 29, s: 0.88, w: 44, h: 2, lag: 22, c: 'var(--streak-violet)' },
+  { a: 44, s: 0.6, w: 28, h: 1, lag: 96, c: 'var(--streak-magenta)' },
+  { a: 53, s: 0.95, w: 40, h: 3, lag: 8, c: 'var(--streak-blue)' },
+  { a: 68, s: 0.78, w: 30, h: 2, lag: 52, c: 'var(--streak-violet)' },
+  { a: 79, s: 1.0, w: 34, h: 2, lag: 30, c: 'var(--streak-magenta)' },
+  { a: 92, s: 0.66, w: 24, h: 1, lag: 84, c: 'var(--streak-blue)' },
+  { a: 103, s: 0.9, w: 32, h: 2, lag: 12, c: 'var(--streak-violet)' },
+  { a: 118, s: 0.74, w: 30, h: 1, lag: 70, c: 'var(--streak-magenta)' },
+  { a: 127, s: 1.0, w: 46, h: 3, lag: 40, c: 'var(--streak-blue)' },
+  { a: 141, s: 0.62, w: 26, h: 1, lag: 104, c: 'var(--streak-violet)' },
+  { a: 152, s: 0.85, w: 42, h: 2, lag: 18, c: 'var(--streak-magenta)' },
+  { a: 166, s: 0.97, w: 50, h: 2, lag: 58, c: 'var(--streak-blue)' },
+  { a: 176, s: 0.7, w: 38, h: 1, lag: 26, c: 'var(--streak-violet)' },
+  { a: 189, s: 1.0, w: 54, h: 3, lag: 0, c: 'var(--streak-magenta)' },
+  { a: 199, s: 0.8, w: 40, h: 2, lag: 76, c: 'var(--streak-blue)' },
+  { a: 213, s: 0.68, w: 30, h: 1, lag: 34, c: 'var(--streak-violet)' },
+  { a: 224, s: 0.92, w: 36, h: 2, lag: 90, c: 'var(--streak-magenta)' },
+  { a: 236, s: 0.75, w: 28, h: 1, lag: 14, c: 'var(--streak-blue)' },
+  { a: 248, s: 1.0, w: 34, h: 2, lag: 62, c: 'var(--streak-violet)' },
+  { a: 259, s: 0.64, w: 24, h: 1, lag: 44, c: 'var(--streak-magenta)' },
+  { a: 271, s: 0.87, w: 30, h: 2, lag: 100, c: 'var(--streak-blue)' },
+  { a: 284, s: 0.79, w: 32, h: 1, lag: 20, c: 'var(--streak-violet)' },
+  { a: 293, s: 0.96, w: 44, h: 3, lag: 68, c: 'var(--streak-magenta)' },
+  { a: 307, s: 0.7, w: 30, h: 1, lag: 36, c: 'var(--streak-blue)' },
+  { a: 318, s: 1.0, w: 48, h: 2, lag: 6, c: 'var(--streak-violet)' },
+  { a: 331, s: 0.83, w: 40, h: 2, lag: 80, c: 'var(--streak-magenta)' },
+  { a: 342, s: 0.66, w: 32, h: 1, lag: 48, c: 'var(--streak-blue)' },
+  { a: 354, s: 0.9, w: 50, h: 2, lag: 28, c: 'var(--streak-violet)' },
+];
+
+function ReadyBurst() {
+  const reduced = useReducedMotion();
+  // Nothing to freeze and nothing to see: a burst is motion or it is a handful
+  // of coloured bars parked across the row.
+  if (reduced) return null;
+
+  return (
+    <span className="ready-burst" aria-hidden="true">
+      <span className="ready-burst-core" />
+      {RAYS.map((r) => {
+        const d = Math.round(rayReach(r.a, BURST_RX, BURST_RY) * r.s);
+        return (
+          <i
+            key={r.a}
+            className="ready-ray"
+            style={{
+              '--a': `${r.a}deg`,
+              '--d': `${d}px`,
+              // A comet longer than its own flight would have its tail still
+              // crossing the centre when its head arrives, so the short rays
+              // above and below get short comets to match.
+              '--w': `${Math.min(r.w, Math.round(d * 0.8))}px`,
+              '--h': `${r.h}px`,
+              '--c': r.c,
+              // Read by the comet inside, which is where the animation lives.
+              '--lag': `${r.lag}ms`,
+            }}
+          />
+        );
+      })}
     </span>
   );
 }

@@ -112,6 +112,82 @@ export function useBurstHue(active) {
   return hue;
 }
 
+// ---- The Ready burst ----
+//
+// The one moment in the row's life that had no motion of its own: an agent
+// finishing. Busy and Ready both look after themselves, but the step between
+// them was a silent class swap, so a job that had just landed looked exactly
+// like a row that had been idle all afternoon. A firework marks the edge.
+
+// How long one burst takes to fly out and fade to nothing. In step with the CSS
+// animation of the same length, so the element is unmounted the moment after it
+// stops being visible rather than lingering as an invisible layer.
+export const READY_BURST_MS = 2000;
+
+// A beat between the word being whole and the burst leaving, so the two read as
+// one gesture — typed, then celebrated — instead of firing over each other.
+export const READY_BURST_PAD_MS = 120;
+
+// Only a finish is worth a firework. Arriving at Ready from anywhere else —
+// mounting on an idle agent, coming back online, clearing an error — is a state
+// the row simply is, not something that just happened.
+export function burstOnEdge(prevTone, tone) {
+  return prevTone === 'busy' && tone === 'ready';
+}
+
+// When the burst launches, measured from the tone flip: the label starts typing
+// itself in at the same instant, so this waits out exactly that.
+export function readyBurstDelay(len) {
+  return typedTick(len) * STEP_MS + READY_BURST_PAD_MS;
+}
+
+// How far a ray at this angle may travel. The row is far wider than it is tall,
+// so a circular burst would be a stripe with its top and bottom sliced off by
+// the border; reaching along an ellipse instead lets every ray run its full
+// length and fade out in open space, whichever way it is pointed.
+export function rayReach(angleDeg, rx, ry) {
+  const t = (angleDeg * Math.PI) / 180;
+  const x = ry * Math.cos(t);
+  const y = rx * Math.sin(t);
+  return (rx * ry) / Math.sqrt(x * x + y * y);
+}
+
+// Raises a new burst id once the word is typed, then drops it again when the
+// firework has finished. The id is a counter rather than a flag because it is
+// used as a React key: a fresh one remounts the layer, which is what restarts
+// the CSS animation from its first frame — two finishes in quick succession
+// each get their own burst instead of the second landing mid-flight.
+export function useReadyBurst(tone, label) {
+  const [burst, setBurst] = useState(null);
+  const prev = useRef(tone);
+  const seq = useRef(0);
+  const len = label ? label.length : 0;
+
+  useEffect(() => {
+    const from = prev.current;
+    prev.current = tone;
+    if (!burstOnEdge(from, tone)) return undefined;
+
+    let end;
+    const start = setTimeout(() => {
+      seq.current += 1;
+      setBurst(seq.current);
+      end = setTimeout(() => setBurst(null), READY_BURST_MS);
+    }, readyBurstDelay(len));
+
+    // Leaving the panel, or the agent picking up work again, takes the firework
+    // with it — a burst is about the moment it fires, and there is nothing to
+    // celebrate on a row you are no longer looking at.
+    return () => {
+      clearTimeout(start);
+      clearTimeout(end);
+      setBurst(null);
+    };
+  }, [tone, len]);
+
+  return burst;
+}
+
 // Reduced motion is a system preference that can change while the app is open,
 // so it is watched rather than read once at mount.
 export function useReducedMotion() {

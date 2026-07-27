@@ -14,10 +14,11 @@ const path = require('node:path');
 // the `export` keywords and evaluate it — the hooks are only *defined* here, not
 // called, so React never has to exist.
 const SRC = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'lib', 'statusMotion.js'), 'utf8');
-const { sweepFrame, typedTick, nextHue, BURST_HUES, HOLD_TICKS } = new Function(
-  `${SRC.replace(/^import[^;]+;$/gm, '').replace(/^export\s+/gm, '')}
-   return { sweepFrame, typedTick, nextHue, BURST_HUES, HOLD_TICKS };`
-)();
+const { sweepFrame, typedTick, nextHue, BURST_HUES, HOLD_TICKS, burstOnEdge, readyBurstDelay, rayReach } =
+  new Function(
+    `${SRC.replace(/^import[^;]+;$/gm, '').replace(/^export\s+/gm, '')}
+   return { sweepFrame, typedTick, nextHue, BURST_HUES, HOLD_TICKS, burstOnEdge, readyBurstDelay, rayReach };`
+  )();
 
 test('the first pass types the word in, hiding what has not been reached', () => {
   const len = 8; // "Thinking"
@@ -69,5 +70,49 @@ test('burst hues are spread far enough apart to read as different colours', () =
   const sorted = [...BURST_HUES].sort((a, b) => a - b);
   for (let i = 1; i < sorted.length; i += 1) {
     assert.ok(sorted[i] - sorted[i - 1] >= 20, `hues ${sorted[i - 1]} and ${sorted[i]} are too close`);
+  }
+});
+
+test('only finishing work earns a firework', () => {
+  assert.strictEqual(burstOnEdge('busy', 'ready'), true);
+});
+
+test('arriving at Ready any other way does not', () => {
+  // Sitting idle, coming back online, clearing an error, and the very first
+  // render of an agent that was never busy — all of them are Ready, and none of
+  // them is a finish.
+  assert.strictEqual(burstOnEdge('ready', 'ready'), false);
+  assert.strictEqual(burstOnEdge('off', 'ready'), false);
+  assert.strictEqual(burstOnEdge('error', 'ready'), false);
+  assert.strictEqual(burstOnEdge(undefined, 'ready'), false);
+  // Nor does leaving busy for anywhere else.
+  assert.strictEqual(burstOnEdge('busy', 'off'), false);
+  assert.strictEqual(burstOnEdge('busy', 'error'), false);
+});
+
+test('the burst waits for the word to finish typing itself in', () => {
+  const len = 'Ready'.length;
+  assert.ok(
+    readyBurstDelay(len) > typedTick(len) * 48,
+    'the firework must not fire while the cursor is still travelling'
+  );
+});
+
+test('rays reach the ellipse, not a circle', () => {
+  const rx = 300;
+  const ry = 38;
+  // Sideways they run the long axis, up and down the short one.
+  assert.strictEqual(Math.round(rayReach(0, rx, ry)), rx);
+  assert.strictEqual(Math.round(rayReach(180, rx, ry)), rx);
+  assert.strictEqual(Math.round(rayReach(90, rx, ry)), ry);
+  assert.strictEqual(Math.round(rayReach(270, rx, ry)), ry);
+});
+
+test('every other angle lands between the two axes', () => {
+  const rx = 300;
+  const ry = 38;
+  for (let a = 0; a < 360; a += 7) {
+    const d = rayReach(a, rx, ry);
+    assert.ok(d >= ry - 0.001 && d <= rx + 0.001, `${a}deg reached ${d}`);
   }
 });

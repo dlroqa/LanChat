@@ -2144,6 +2144,138 @@ input[type='range']:disabled::-webkit-slider-thumb {
   }
 }
 
+/* ---- The Ready burst ----
+   A single firework thrown from the middle of the row when the agent finishes,
+   and the only motion here that happens once. Rays leave the centre together,
+   spread outward, and fade to nothing over two seconds, which puts the row back
+   in the Ready state it was already in — `ready-drift` never stopped running
+   underneath.
+
+   It lives on the same layer as the speed trails, behind `.agent-state-front`,
+   so it passes under the veil where the word is: the firework is light behind
+   the text and never over it, and "Ready" keeps the contrast it has today.
+
+   Same edge treatment as the trails, and for the same reason — a ray that
+   reaches the side of the row should fade out there rather than be cut off
+   square by the border. */
+.ready-burst {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  mask-image: linear-gradient(90deg, transparent 0, #000 22px, #000 calc(100% - 22px), transparent 100%);
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    transparent 0,
+    #000 22px,
+    #000 calc(100% - 22px),
+    transparent 100%
+  );
+  pointer-events: none;
+}
+
+/* The launch itself: a white core opening into violet, gone well before the
+   rays are. It is what makes the burst read as coming *from* a point rather
+   than as rays that happen to converge on one. */
+.ready-burst-core {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 46px;
+  height: 46px;
+  margin: -23px 0 0 -23px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    var(--streak-white) 0%,
+    color-mix(in srgb, var(--streak-violet) 85%, transparent) 34%,
+    color-mix(in srgb, var(--streak-blue) 30%, transparent) 58%,
+    transparent 72%
+  );
+  animation: ready-burst-flash 700ms ease-out both;
+}
+
+@keyframes ready-burst-flash {
+  0% {
+    transform: scale(0.15);
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1.7);
+    opacity: 0;
+  }
+}
+
+/* Each ray is a carrier pinned at the centre and rotated to its own angle, so
+   the comet inside it only ever travels in one direction — along its own X.
+   Rotating the carrier rather than the comet keeps the gradient's hot head
+   pointing outward whatever the angle. `--d` is how far this ray reaches,
+   computed against the ellipse in ConnectionPanel.jsx. */
+.ready-ray {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--d);
+  height: var(--h);
+  margin-top: calc(var(--h) / -2);
+  transform-origin: 0 50%;
+  transform: rotate(var(--a));
+}
+
+/* The comet: colour bleeding off the tail into a white-hot rounded head. The
+   same shape the speed trails use — built into a gradient rather than blurred,
+   so nothing re-rasterises while it flies. */
+.ready-ray::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--w);
+  height: 100%;
+  border-radius: var(--h);
+  /* Grows out of the centre rather than out of its own middle. */
+  transform-origin: 0 50%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--c) 45%, transparent) 34%,
+    var(--c) 72%,
+    var(--streak-white) 100%
+  );
+  box-shadow: 0 0 9px color-mix(in srgb, var(--c) 65%, transparent);
+  /* `--lag` is set on the carrier and inherited down to here, which is how a
+     pseudo-element gets a per-ray delay at all. */
+  animation: ready-ray-fly 2s cubic-bezier(0.1, 0.72, 0.24, 1) var(--lag, 0ms) both;
+}
+
+/* Out fast, then a long coast to nothing: the first fifth of the animation is
+   the throw and the remaining four fifths are the fade, which is what makes the
+   burst arrive as an event and leave as a settling. */
+@keyframes ready-ray-fly {
+  0% {
+    transform: translate3d(0, 0, 0) scaleX(0.25);
+    opacity: 0;
+  }
+  6% {
+    opacity: 0.95;
+  }
+  22% {
+    transform: translate3d(calc(var(--d) - var(--w)), 0, 0) scaleX(1);
+    opacity: 1;
+  }
+  60% {
+    opacity: 0.45;
+  }
+  100% {
+    transform: translate3d(calc(var(--d) - var(--w) + 14px), 0, 0) scaleX(0.92);
+    opacity: 0;
+  }
+}
+
 /* Sized in em rather than px, so the dots shrink with the word they trail. At
    17px they measure what they always did; at the floor size they stay in
    proportion instead of growing into three bullets beside small type. */
