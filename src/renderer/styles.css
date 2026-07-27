@@ -965,6 +965,195 @@ input:focus-visible {
   pointer-events: none;
 }
 
+/* ---------------- The logo mark ----------------
+   One definition of the LanChat mark, shared by the in-app welcome state and
+   the launch splash (splash.html imports this same stylesheet, so there is no
+   second copy of any of this).
+
+   It is built as a div rather than a lone <svg> because the tile's prism needs
+   a conic gradient and a blend mode, and SVG cannot do either — so the tile is
+   CSS and only the white bubble is SVG, sitting on top.
+
+   Everything scales off --logo-size; the geometry matches scripts/make-icons.js
+   so the animated mark and the packaged PNG icon are the same drawing. */
+.lc-logo {
+  --logo-size: 84px;
+  position: relative;
+  flex: none;
+  width: var(--logo-size);
+  height: var(--logo-size);
+  /* 22/100 of the viewBox — the same corner the icon rasterizer uses. */
+  border-radius: calc(var(--logo-size) * 0.22);
+  /* The base blue stays fully opaque: the prism is a light *on* the tile, not a
+     translucent wash, so the mark still reads as a solid object in a dock.
+
+     It is deeper than --primary on purpose. The prism screens over it, and
+     screen only ever adds — over a #2563eb base every refracted band washed up
+     to the same pale blue and the tile came out flat. Anchoring the base in navy
+     gives the light somewhere to travel, and the two together average back to
+     about --primary, which is the colour the mark has to read as. */
+  background: linear-gradient(150deg, #16307a 0%, #1d4ed8 48%, #2a63e8 100%);
+  overflow: hidden;
+  /* Contains the blend modes below, so they mix with the tile and not with
+     whatever the mark happens to be sitting on. */
+  isolation: isolate;
+}
+
+/* The prism. Hue is held inside indigo → blue → cyan (roughly 195–255°) for the
+   same reason `ready-drift` holds 140–200: the band is the whole point of the
+   constraint. The mark has one job — being recognisably LanChat blue — and a
+   full spectrum sweep would take it through green and magenta, at which point
+   it is no longer the icon the user is looking for in a dock.
+
+   Rotated with a transform rather than a moving background-position: a rotation
+   is composited, a gradient position change repaints the whole tile every frame.
+
+   Oversized by 35% on every side because a square must be ~141% of its own
+   width to still cover the corners once it is turned; the parent's radius and
+   overflow then clip it back, so the light reaches the tile's rounded border
+   instead of stopping at an inscribed circle. */
+.lc-logo-prism {
+  position: absolute;
+  inset: -35%;
+  background: conic-gradient(
+    from 0turn,
+    #0b1b4d 0%,
+    #2563eb 12%,
+    #5b4bf0 26%,
+    #1e3a8a 38%,
+    #38bdf8 52%,
+    #22d3ee 62%,
+    #1d4ed8 76%,
+    #4338ca 88%,
+    #0b1b4d 100%
+  );
+  /* Enough blur to soften the seams between refracted bands, not so much that
+     they merge into one colour — at 0.12 the whole thing averaged out to a flat
+     wash. The dark stops matter as much as the bright ones: they are what keeps
+     the bands legible as separate bands after the blur. */
+  filter: blur(calc(var(--logo-size) * 0.06));
+  mix-blend-mode: screen;
+  opacity: 0.9;
+  /* The resting angle is on the element, and the animation starts from it, so
+     the frame reduced motion freezes on is a composed one rather than whatever
+     0turn happens to look like. */
+  transform: rotate(-18deg);
+  animation: logo-prism 12s linear infinite;
+}
+
+@keyframes logo-prism {
+  from {
+    transform: rotate(-18deg);
+  }
+  to {
+    transform: rotate(342deg);
+  }
+}
+
+/* A specular band crossing the tile. It sweeps in under a third of the cycle
+   and then rests, because a sheen that never stops reads as a loading shimmer
+   rather than as light catching a surface. */
+.lc-logo-sheen {
+  position: absolute;
+  inset: -50% -100%;
+  background: linear-gradient(115deg, transparent 40%, rgba(255, 255, 255, 0.42) 50%, transparent 60%);
+  mix-blend-mode: soft-light;
+  opacity: 0;
+  animation: logo-sheen 3.2s ease-in-out infinite;
+}
+
+@keyframes logo-sheen {
+  0% {
+    transform: translateX(-60%);
+    opacity: 0;
+  }
+  8% {
+    opacity: 0.85;
+  }
+  24% {
+    opacity: 0.85;
+  }
+  30%,
+  100% {
+    transform: translateX(60%);
+    opacity: 0;
+  }
+}
+
+.lc-logo-bubble {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---- The three dots ----
+   Same two rhythms the rest of the app already runs on: the 1.2s bounce with a
+   0.16s stagger that `typing-bounce` and `queue-dot` use, and the 2.6s colour
+   drift with a 0.28s per-item lag that `ready-drift` runs through the word
+   "Ready". Reusing both clocks is what makes the mark feel like this app rather
+   than like a separate production dropped in front of it.
+
+   --pos comes in from JSX exactly as it does for the letters of "Ready"
+   (ConnectionPanel.jsx), and it is what makes the colour crest travel left to
+   right across the three dots. */
+.lc-logo-dot {
+  /* Percentages in an SVG transform resolve against the viewport unless the box
+     is pinned to the shape itself. */
+  transform-box: fill-box;
+  transform-origin: center;
+  /* The still: mid-band, and what reduced motion is left holding. */
+  fill: hsl(174 100% 29%);
+  animation:
+    logo-dot-bounce 1.2s ease-in-out infinite,
+    logo-dot-drift 2.6s linear infinite;
+  animation-delay: calc(var(--pos, 0) * 0.16s), calc(var(--pos, 0) * 0.28s - 2.6s);
+}
+
+@keyframes logo-dot-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-38%);
+  }
+}
+
+/* The hue band is `ready-drift`'s — 150 through 200, green into cyan, never
+   anything that could read as a warning. The lightness is not, and could not
+   be: those stops sit at 68–84% because the status word is on near-black
+   --surface, and on this bubble's white the same values are invisible.
+
+   So the whole scale is inverted. Lightness is pinned to 26–33%, and the crest
+   — the bright travelling window in the original — becomes the *deepest*, most
+   saturated stop instead, because on white it is depth, not lightness, that
+   makes a colour step forward. Every stop below clears 3.5:1 against #fff.
+   There is no glow here either; a text-shadow halo is a dark-ground effect and
+   on white it only muddies the edge of the dot. */
+@keyframes logo-dot-drift {
+  0% {
+    fill: hsl(152 90% 32%);
+  }
+  18% {
+    fill: hsl(170 100% 26%);
+  }
+  30% {
+    fill: hsl(180 100% 30%);
+  }
+  55% {
+    fill: hsl(196 100% 33%);
+  }
+  80% {
+    fill: hsl(163 92% 31%);
+  }
+  /* Back to the first stop, so the loop has no seam. */
+  100% {
+    fill: hsl(152 90% 32%);
+  }
+}
+
 /* ---------------- Buttons ---------------- */
 .btn {
   display: inline-flex;
@@ -3168,4 +3357,226 @@ code.path {
 .pre-toggle.off {
   background: var(--danger);
   color: #fff;
+}
+
+/* ---------------- Launch splash ----------------
+   splash.html is a second Vite entry that imports this same stylesheet, so the
+   mark it shows is `.lc-logo` above — the same drawing the welcome state uses,
+   not a copy that can drift away from it.
+
+   Ten seconds is a long time to hold someone in front of a chat app, so the
+   time is spent on a sequence with a visible end rather than on a loop: the
+   mark ignites, the bubble lands, the dots come to life, the wordmark arrives,
+   and a hairline underneath fills across the remaining wait so the pause reads
+   as progress instead of as a hang. A click or Esc ends it early at any point.
+
+   Timings here and in lib/splashTiming.js are two halves of one clock. */
+.splash {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  background: var(--bg);
+  overflow: hidden;
+  cursor: pointer;
+  animation: splash-handoff 0.6s ease-in 9.4s both;
+}
+
+/* Skipping runs the same exit, just now and faster. */
+.splash.is-leaving {
+  animation: splash-handoff 0.22s ease-in both;
+}
+
+/* The bloom sits behind the mark and is what makes the ignition read as a light
+   coming on rather than as an image being pasted in. */
+.splash-bloom {
+  position: absolute;
+  width: 340px;
+  height: 340px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(59, 130, 246, 0.4) 0%, rgba(37, 99, 235, 0.14) 45%, transparent 70%);
+  filter: blur(14px);
+  animation: splash-bloom 1.2s ease-out both;
+}
+
+.splash-mark {
+  position: relative;
+  animation:
+    splash-ignite 1.2s cubic-bezier(0.16, 1, 0.3, 1) both,
+    splash-lift 0.6s ease-in 9.4s both;
+}
+
+/* The bubble arrives after the tile, so the mark assembles instead of appearing
+   whole. It overrides nothing else about `.lc-logo` — the dots inside are
+   already alive as it lands, which is the point: the mark is never inert. */
+.splash .lc-logo-bubble {
+  animation: splash-bubble 0.8s cubic-bezier(0.16, 1, 0.3, 1) 1.2s both;
+  transform-origin: 50% 44%;
+}
+
+.splash-word {
+  margin-top: 22px;
+  font-size: 27px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--fg);
+  display: flex;
+}
+
+/* Same per-letter idiom as the status label: --pos comes in from JSX and turns
+   one animation into a wave across the word. */
+.splash-word i {
+  font-style: normal;
+  display: inline-block;
+  animation: splash-letter 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(2.6s + var(--pos, 0) * 0.06s);
+}
+
+.splash-version {
+  margin-top: 6px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--fg-faint);
+  animation: splash-fade-in 0.5s ease-out 3.4s both;
+}
+
+/* The hairline. Scaled rather than widened: a transform is composited, a width
+   reflows the row every frame for six seconds. */
+.splash-track {
+  margin-top: 26px;
+  width: 180px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--surface-2);
+  overflow: hidden;
+  animation: splash-fade-in 0.5s ease-out 3.4s both;
+}
+
+.splash-fill {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--primary), var(--neon-busy));
+  transform-origin: left center;
+  animation: splash-fill 6s linear 3.4s both;
+}
+
+/* The escape route has to be discoverable, or it may as well not exist — but it
+   is not the point of the screen, so it arrives late and stays faint. */
+.splash-hint {
+  position: absolute;
+  bottom: 18px;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  opacity: 0;
+  animation: splash-hint 0.6s ease-out 4.6s both;
+}
+
+@keyframes splash-ignite {
+  from {
+    opacity: 0;
+    transform: scale(0.82);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes splash-bloom {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes splash-bubble {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes splash-letter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes splash-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes splash-hint {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 0.62;
+  }
+}
+
+@keyframes splash-fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+/* The handoff: the mark steps toward you as the screen goes, so the window
+   arriving behind it feels like the same gesture continuing rather than a cut. */
+@keyframes splash-lift {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.06);
+  }
+}
+
+@keyframes splash-handoff {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* Reduced motion: the global rule at the top of this file has already switched
+   every animation above off, which leaves each element at its natural state —
+   that is why nothing here sets a hidden base outside a keyframe. What is left
+   is a still mark and a wordmark, held for a moment (splashTiming.js shortens
+   the timer to match) and then handed off. The hairline goes: it exists to
+   narrate a ten-second wait that is no longer happening. */
+@media (prefers-reduced-motion: reduce) {
+  .splash-track,
+  .splash-bloom {
+    display: none;
+  }
 }

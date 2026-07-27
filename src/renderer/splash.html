@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Tighter than the app's own policy: this page loads nothing from the
+         network at all. It deliberately does not pull Inter from Google Fonts
+         either — it is on screen before anything else, on a machine that may
+         well have no route out yet, and --font already falls back to system-ui. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'"
+    />
+    <title>LanChat</title>
+  </head>
+  <body>
+    <div id="splash-root"></div>
+    <script type="module" src="./splash.jsx"></script>
+  </body>
+</html>

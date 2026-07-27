@@ -19,12 +19,18 @@ const { createPip } = require('./pip');
 const { createAgentHub } = require('./agents');
 const { Outbox } = require('./outbox');
 const { normalizeWebUrl } = require('./webLinks');
+const { createSplash, closeSplash, splashIsOpen, createGate } = require('./splash');
 
 // Long enough that the update check never competes with first-run setup.
 const STARTUP_UPDATE_CHECK_DELAY = 4000;
 // Re-check periodically so a session left open for hours still learns about a
 // release that shipped after launch.
 const PERIODIC_UPDATE_CHECK_INTERVAL = 6 * 60 * 60 * 1000;
+
+// Comfortably past the splash's own ten seconds: this is only ever reached when
+// the window has failed to become ready at all, and it must not cut short a
+// boot that is merely slow.
+const SPLASH_REVEAL_TIMEOUT = 20000;
 
 const isDev = process.env.LANCHAT_DEV === '1';
 
@@ -44,7 +50,7 @@ function getWindow() {
   return mainWindow;
 }
 
-function createWindow({ hidden = false } = {}) {
+function createWindow({ hidden = false, onReadyToShow = null } = {}) {
   mainWindow = new BrowserWindow({
     width: 1120,
     height: 740,
@@ -54,6 +60,8 @@ function createWindow({ hidden = false } = {}) {
     title: 'LanChat',
     // Launched at login: create the window but keep it hidden, so the renderer
     // is alive (able to ring and answer calls) while LanChat sits in the tray.
+    // It is also created hidden behind the launch splash, which shows it once
+    // both it and this window are ready (see the reveal gate in splash.js).
     show: !hidden,
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'preload.js'),
@@ -61,6 +69,8 @@ function createWindow({ hidden = false } = {}) {
       nodeIntegration: false,
     },
   });
+
+  if (onReadyToShow) mainWindow.once('ready-to-show', onReadyToShow);
 
   if (isDev) {
     mainWindow.loadURL('http://localhost:5273');
@@ -138,11 +148,20 @@ function applyLoginItem(open) {
 function showWindow() {
   if (!mainWindow) {
     createWindow();
-    return;
+  } else {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
   }
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  mainWindow.focus();
+  // A tray click or a second launch is someone asking for the window *now*, so
+  // the splash has been overtaken and should get out of the way rather than
+  // stay in front of the app it was introducing.
+  //
+  // Closed last, and only once there is another window: during boot the splash
+  // may be the only one open, and destroying it first would leave Electron with
+  // none at all — which on Windows and Linux means `window-all-closed`, and a
+  // quit before the app has finished starting.
+  if (splashIsOpen()) closeSplash();
 }
 
 function setupTray(ipcApi) {
@@ -257,13 +276,42 @@ if (!gotLock && !process.env.LANCHAT_USERDATA) {
 
   app.whenReady().then(async () => {
     setupMediaPermissions();
-    const ipcApi = await startServices();
+
     // Started at login (we pass --hidden in the login-item args, and macOS also
     // reports wasOpenedAtLogin): boot straight to the tray.
+    //
+    // Read before services start rather than after: it only looks at how we
+    // were launched, and the splash below has to be on screen *during* the boot
+    // to be worth anything.
     const launchedHidden =
       process.argv.includes('--hidden') ||
       (process.platform === 'darwin' && app.getLoginItemSettings().wasOpenedAtLogin);
-    createWindow({ hidden: launchedHidden });
+
+    // Launched to the tray there is no window to introduce, and a splash
+    // appearing on the desktop at every login would be an intrusion — so this
+    // is the one launch that stays silent.
+    let arrive = null;
+    if (!launchedHidden) {
+      arrive = createGate(['splash', 'window'], () => {
+        // The window is shown first and the splash torn down after, so the last
+        // thing that happens is the splash lifting off an app that is already
+        // there — never a moment of bare desktop in between.
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.show();
+        closeSplash();
+      });
+      createSplash({ isDev, onDone: () => arrive('splash'), confineNavigation });
+      // Insurance. If the window never reports itself ready — a renderer that
+      // fails to load, a dev server that went away — the gate would otherwise
+      // hold the splash in front of an app nobody can reach, and skipping does
+      // not help because skipping only answers for the splash's half.
+      setTimeout(() => arrive && arrive('window'), SPLASH_REVEAL_TIMEOUT);
+    }
+
+    const ipcApi = await startServices();
+    createWindow({
+      hidden: launchedHidden || Boolean(arrive),
+      onReadyToShow: arrive ? () => arrive('window') : null,
+    });
     setupTray(ipcApi);
     applyLoginItem(Boolean(services.config.get('openAtLogin')));
 
@@ -279,6 +327,9 @@ if (!gotLock && !process.env.LANCHAT_USERDATA) {
 
   app.on('before-quit', () => {
     app.isQuitting = true;
+    // Quitting mid-launch: the splash would otherwise outlive the app that was
+    // starting behind it.
+    closeSplash();
     if (tray) tray.destroy();
     if (services) {
       services.discovery.stop();

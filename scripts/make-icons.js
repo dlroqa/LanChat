@@ -81,16 +81,28 @@ function circle(x, y, cx, cy, r) {
   return (x - cx) ** 2 + (y - cy) ** 2 <= r * r;
 }
 
+// Where the three dots sit. Shared by the shape below and by the app icon's
+// coloured version of them, and matched by the <circle> elements in
+// src/renderer/components/Logo.jsx — the animated mark and this one are the
+// same drawing.
+const DOTS = [0.32, 0.5, 0.68];
+const DOT_CY = 0.415;
+const DOT_R = 0.058;
+
+function inDots(x, y) {
+  for (const cx of DOTS) {
+    if (circle(x, y, cx, DOT_CY, DOT_R)) return true;
+  }
+  return false;
+}
+
 // A speech bubble with a tail and three knocked-out dots.
 function bubble(x, y) {
   const body = roundRect(x, y, 0.09, 0.15, 0.91, 0.68, 0.17);
   const tail = inTriangle(x, y, 0.28, 0.64, 0.3, 0.88, 0.5, 0.66);
   if (!body && !tail) return false;
   // Dots are holes so the shape reads at 16px and works as a macOS template.
-  for (const cx of [0.32, 0.5, 0.68]) {
-    if (circle(x, y, cx, 0.415, 0.058)) return false;
-  }
-  return true;
+  return !inDots(x, y);
 }
 
 // --- status-menu glyphs -------------------------------------------------
@@ -137,23 +149,58 @@ function badge(x, y) {
   return circle(x, y, 0.79, 0.21, 0.2);
 }
 
+// The same bubble with the dots left filled in, for the application icon: there
+// the dots are painted in their own colour on top, so the white has to reach
+// under them. Knocking them out first would leave the tile showing through the
+// dots' anti-aliased edge as a blue ring.
+function bubbleSolid(x, y) {
+  const body = roundRect(x, y, 0.09, 0.15, 0.91, 0.68, 0.17);
+  const tail = inTriangle(x, y, 0.28, 0.64, 0.3, 0.88, 0.5, 0.66);
+  return body || tail;
+}
+
+// Linear ramp through a list of [position, [r,g,b]] stops.
+function ramp(stops, t) {
+  const u = Math.min(Math.max(t, 0), 1);
+  for (let i = 1; i < stops.length; i += 1) {
+    const [p0, c0] = stops[i - 1];
+    const [p1, c1] = stops[i];
+    if (u <= p1) {
+      const k = p1 === p0 ? 0 : (u - p0) / (p1 - p0);
+      return [0, 1, 2].map((n) => c0[n] + (c1[n] - c0[n]) * k);
+    }
+  }
+  return stops[stops.length - 1][1];
+}
+
 // Renders with 4x supersampling for clean edges at tray sizes.
-function render(size, { rgb, background, dot, shape }) {
+//
+// `background` is either one colour or a (x, y) => [r,g,b] sampler, which is how
+// the application icon gets its gradient. `dotColors` paints the bubble's three
+// dots instead of knocking them through to the tile.
+function render(size, { rgb, background, dot, shape, dotColors }) {
   const SS = 4;
   const out = Buffer.alloc(size * size * 4);
+  const sampleBg = typeof background === 'function' ? background : background && (() => background);
   for (let py = 0; py < size; py += 1) {
     for (let px = 0; px < size; px += 1) {
       let hits = 0;
       let bgHits = 0;
       let dotHits = 0;
+      const ink = [0, 0, 0];
       for (let sy = 0; sy < SS; sy += 1) {
         for (let sx = 0; sx < SS; sx += 1) {
           const x = (px + (sx + 0.5) / SS) / size;
           const y = (py + (sy + 0.5) / SS) / size;
-          const draw = shape || bubble;
+          const draw = shape || (dotColors ? bubbleSolid : bubble);
           if (dot && badge(x, y)) dotHits += 1;
           else if (draw(x, y)) hits += 1;
           if (background && roundRect(x, y, 0.02, 0.02, 0.98, 0.98, 0.22)) bgHits += 1;
+          if (dotColors) {
+            for (let d = 0; d < DOTS.length; d += 1) {
+              if (circle(x, y, DOTS[d], DOT_CY, DOT_R)) ink[d] += 1;
+            }
+          }
         }
       }
       const total = SS * SS;
@@ -174,12 +221,18 @@ function render(size, { rgb, background, dot, shape }) {
       if (background) {
         // Coloured tile behind a white bubble (application icon).
         const a = bg;
-        const r = background[0] * (1 - fg) + 255 * fg;
-        const g = background[1] * (1 - fg) + 255 * fg;
-        const b = background[2] * (1 - fg) + 255 * fg;
-        out[i] = Math.round(r);
-        out[i + 1] = Math.round(g);
-        out[i + 2] = Math.round(b);
+        const base = sampleBg(px / size, py / size);
+        const rgbOut = [0, 1, 2].map((n) => base[n] * (1 - fg) + 255 * fg);
+        // Then the dots, over the white.
+        if (dotColors) {
+          for (let d = 0; d < DOTS.length; d += 1) {
+            const k = ink[d] / total;
+            if (k > 0) for (let n = 0; n < 3; n += 1) rgbOut[n] = rgbOut[n] * (1 - k) + dotColors[d][n] * k;
+          }
+        }
+        out[i] = Math.round(rgbOut[0]);
+        out[i + 1] = Math.round(rgbOut[1]);
+        out[i + 2] = Math.round(rgbOut[2]);
         out[i + 3] = Math.round(a * 255);
       } else {
         out[i] = rgb[0];
@@ -234,5 +287,27 @@ for (const [name, shape] of [
   write(path.join(ASSETS, `${name}.png`), 14, { rgb: BLACK, shape });
   write(path.join(ASSETS, `${name}@2x.png`), 28, { rgb: BLACK, shape });
 }
-write(path.join(BUILD, 'icon.png'), 512, { background: BRAND });
+// The application icon is the one place with room for the mark's prism. A PNG
+// cannot shimmer, so it holds a single frame of it: the same indigo → blue →
+// cyan sweep the animated tile turns through (see "The logo mark" in
+// styles.css), laid diagonally so the tile has a lit corner instead of a flat
+// fill. It still averages to --primary, which is the colour the icon has to
+// read as in a dock at 32px.
+const PRISM = [
+  [0, [30, 58, 138]], // #1e3a8a
+  [0.45, [37, 99, 235]], // #2563eb — the brand blue, on the diagonal
+  [1, [56, 189, 248]], // #38bdf8
+];
+// And a still of the colour wave that runs through the dots: three stops from
+// `logo-dot-drift`, in the order the crest reaches them. Each clears 3.5:1
+// against the white bubble, same as every frame of the animation.
+const DOT_INK = [
+  [8, 155, 87], // hsl(152 90% 32%)
+  [0, 148, 133], // hsl(174 100% 29%)
+  [0, 123, 168], // hsl(196 100% 33%)
+];
+write(path.join(BUILD, 'icon.png'), 512, {
+  background: (x, y) => ramp(PRISM, (x + y) / 2),
+  dotColors: DOT_INK,
+});
 console.log('Done.');
