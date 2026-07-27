@@ -136,6 +136,9 @@ function AgentPanel({ peer, status, awaiting }) {
             </span>
           )}
         </span>
+        {/* Last child, so `flex: 1` hands it exactly the space the word leaves
+            over — however long the phrase happens to be. */}
+        <SpeedStreaks active={state.tone === 'busy'} />
       </div>
 
       {/* Status says where this thread stands in the queue whenever it stands
@@ -221,6 +224,54 @@ function TypedLabel({ text, sweeping }) {
 // firework — a core that flashes and eight sparks flying out — and every burst
 // picks a new neon hue, so the colour is never the same twice running. At rest
 // it is just a lit pip in the tone colour, because a calm agent should look calm.
+// Long-exposure light trails across the empty half of the row, on while the
+// agent is working and nowhere else. Nine of them rather than the dozens in a
+// real photograph — this is a 90px status row, not a wallpaper.
+//
+// Every duration divides 2600ms, the phrase clock in agentPhrase.js, so the
+// whole field realigns each time the word changes instead of drifting against
+// it. `y` is the vertical position as a percentage, `w` the trail length and `h`
+// its thickness, `dur` the crossing time and `lag` the stagger.
+const STREAKS = [
+  { y: 14, w: 150, h: 2, c: 'var(--streak-magenta)', dur: 1300, lag: -180, o: 0.85 },
+  { y: 27, w: 96, h: 1, c: 'var(--streak-cyan)', dur: 650, lag: -520, o: 0.7 },
+  { y: 36, w: 210, h: 3, c: 'var(--streak-violet)', dur: 2600, lag: -900, o: 0.9 },
+  { y: 48, w: 128, h: 1, c: 'var(--streak-amber)', dur: 867, lag: -60, o: 0.6 },
+  { y: 57, w: 176, h: 2, c: 'var(--streak-blue)', dur: 1300, lag: -740, o: 0.8 },
+  { y: 66, w: 88, h: 1, c: 'var(--streak-white)', dur: 650, lag: -300, o: 0.55 },
+  { y: 74, w: 196, h: 2, c: 'var(--streak-orange)', dur: 2600, lag: -1600, o: 0.75 },
+  { y: 83, w: 116, h: 1, c: 'var(--streak-rose)', dur: 867, lag: -430, o: 0.65 },
+  { y: 92, w: 160, h: 2, c: 'var(--streak-cyan)', dur: 1300, lag: -1080, o: 0.7 },
+];
+
+function SpeedStreaks({ active }) {
+  const reduced = useReducedMotion();
+  // Taken out of the DOM rather than paused: the global reduced-motion rule
+  // stops animations where they stand, which would leave nine coloured bars
+  // parked across the row.
+  if (!active || reduced) return null;
+
+  return (
+    <span className="agent-streaks" aria-hidden="true">
+      {STREAKS.map((s, i) => (
+        <i
+          key={i}
+          className="agent-streak"
+          style={{
+            '--y': `${s.y}%`,
+            '--w': `${s.w}px`,
+            '--h': `${s.h}px`,
+            '--c': s.c,
+            '--o': s.o,
+            animationDuration: `${s.dur}ms`,
+            animationDelay: `${s.lag}ms`,
+          }}
+        />
+      ))}
+    </span>
+  );
+}
+
 // Angle and throw distance per spark, off the compass on purpose: eight evenly
 // spaced rays at one radius draw a sun, and this is meant to look thrown.
 const SPARKS = [

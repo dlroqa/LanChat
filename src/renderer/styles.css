@@ -43,6 +43,19 @@
   --neon-busy: #35e6ff;
   --neon-error: #ff4d7d;
 
+  /* Light-trail palette, matched to the long-exposure reference. These are the
+     only warm hues anywhere near the status row, which is safe because they are
+     masked away from the text and never touch a state's meaning — the word
+     itself keeps --neon-busy throughout. */
+  --streak-magenta: #ff2bc8;
+  --streak-violet: #a64bff;
+  --streak-blue: #3d7bff;
+  --streak-cyan: #22e0ff;
+  --streak-white: #ffffff;
+  --streak-orange: #ff8a1f;
+  --streak-amber: #ffc93d;
+  --streak-rose: #ff3b6b;
+
   /* The sidebar's profile block and the chat header sit side by side, so their
      bottom borders have to land on the same line. Pinning both to one height
      keeps them aligned no matter how the text inside either one changes. */
@@ -1686,6 +1699,88 @@ input[type='range']:disabled::-webkit-slider-thumb {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
   background: var(--surface);
+  /* Deliberately no `overflow` here. Clipping lives on the streak layer alone,
+     so the firework keeps throwing sparks past the pip as it always has. */
+  position: relative;
+}
+
+/* ---- Speed-light streaks ----
+   Long-exposure light trails in the empty half of the row, on only while the
+   agent is working. Laid out as the last flex child with `flex: 1`, which hands
+   it precisely the space the word leaves over — "Thinking" and "Piecing it
+   together" both work, with no measuring and no magic numbers. Nothing else in
+   the row grows, so the pip and the label do not move by a pixel.
+
+   The mask is what keeps this cheap: trails fade in over the first 44px, so
+   there is never a streak behind a glyph and the text keeps the 10.9:1 it has
+   without them. */
+.agent-streaks {
+  flex: 1;
+  align-self: stretch;
+  position: relative;
+  overflow: hidden;
+  /* Bleed back out through the row's padding so the trails run to the edge and
+     are clipped by the corner rather than stopping short of it. */
+  margin-right: -16px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  mask-image: linear-gradient(90deg, transparent 0, #000 44px);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 44px);
+  pointer-events: none;
+}
+
+/* A hot white core with colour bleeding off both ends — that shape *is* the
+   long exposure. Built into the gradient rather than with `filter: blur()`,
+   which would force a re-rasterise every frame on something that never stops
+   moving. */
+/* The trail rides inside a full-width carrier rather than moving on its own.
+   A percentage translate resolves against the element's *own* box, so a carrier
+   stretched to the layer makes the travel exactly two layer-widths — it scales
+   itself to however much room the phrase leaves, and stays right at the 300px
+   breakpoint too. A fixed pixel travel had to be sized for the worst case, which
+   left the trails parked off-screen most of every cycle on a long phrase. */
+.agent-streak {
+  position: absolute;
+  top: var(--y);
+  left: 0;
+  width: 100%;
+  height: var(--h);
+  animation-name: streak-fly;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+.agent-streak::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--w);
+  height: 100%;
+  border-radius: var(--h);
+  opacity: var(--o);
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--c) 55%, transparent) 30%,
+    var(--c) 44%,
+    #fff 52%,
+    var(--c) 60%,
+    color-mix(in srgb, var(--c) 40%, transparent) 78%,
+    transparent 100%
+  );
+  box-shadow: 0 0 8px color-mix(in srgb, var(--c) 55%, transparent);
+}
+
+/* Duration and delay are set per element, so each trail crosses at its own
+   speed. Every duration divides the 2600ms phrase clock, so the whole field
+   snaps back into step each time the word changes. */
+@keyframes streak-fly {
+  from {
+    transform: translate3d(-100%, 0, 0);
+  }
+  to {
+    transform: translate3d(100%, 0, 0);
+  }
 }
 
 /* ---- Status label ----
