@@ -26,6 +26,13 @@ const DEFAULTS = Object.freeze({
   notificationVolume: 0.7,
   customNotificationPath: null,
   muteNotifications: false,
+  // Music while an agent is working (see renderer lib/agentMusic.js). Its own
+  // pair of keys rather than riding on muteNotifications: a message ping is an
+  // interruption you may want silenced, and a bed you work to is not the same
+  // decision. Off until asked for — a loop that started playing by itself the
+  // first time you asked an agent something would be a surprise, not a feature.
+  agentMusicEnabled: false,
+  agentMusicVolume: 0.5,
   pttEnabled: true,
   pttKey: null, // null = platform default (Command on macOS, Control elsewhere)
   pttCustomCode: null, // KeyboardEvent.code when pttKey === 'custom'

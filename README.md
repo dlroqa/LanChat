@@ -30,7 +30,7 @@ A simple, peer-to-peer **LAN & Tailscale chat** app — text, voice, video, and 
 | 📶 **Live connection graphs** | When not in a call, the panel charts real round-trip latency and link quality. |
 | 🤖 **Agents** | Add an AI agent in **Settings → Agents** and it becomes just another thread. Four ways to connect one — **HTTP API** (recommended), **ACP** over stdio, a **local command**, or an **SSH command** on another host. Share yours with people on your network and they reach it *through* you: approvals stay on your machine and are never handed to a peer, and everyone sharing it takes turns. A new agent is local-only until you grant reach, peer by peer. |
 | ✨ **Living agent status** | An agent has no latency worth charting, so it gets the graph's slot to say what it is *doing* — and the row moves while it does. The phrase types itself in under a block cursor, which then sweeps back across the finished word; the pip beside it throws a small firework in a fresh neon colour every burst; and light trails race the width of the row, timed so they fall back into step each time the phrase changes. The moment it finishes, a firework goes off from the middle of the row — neon rays spreading outward to fill it corner to corner, then fading away over a couple of seconds — and then it settles to a slow green-to-cyan wave running from the pip through the word. Behind the text the trails are damped down, so the word stays easily readable while they pass, and **reduce motion** removes the animation entirely rather than freezing it — the words still say everything. |
-| 🔊 **Sound choices** | 6 ringtones + 8 message sounds, each with volume control and a custom-file option. |
+| 🔊 **Sound choices** | 6 ringtones + 8 message sounds, each with volume control and a custom-file option — plus an optional bed of music that plays for as long as an agent is working. |
 | 📎 **File sharing** | Send any file, photo, or video — images & clips preview inline. Drag-and-drop supported. |
 | 🔗 **Links** | Links in messages are clickable and open in your own browser, never inside LanChat. LanChat also unfurls the first link in a message into a small card with the page's title, description, and picture — fetched by the app itself (there is no server to do it for you), only for a message you have actually scrolled to, and switched off in **Settings → Privacy** if you would rather nothing left your machine. |
 | 🪪 **Simple identity** | Pick a display name, and either a colour or your own profile picture. No sign-up. |
@@ -331,6 +331,12 @@ Ask while someone else is holding the turn and your question is **kept**, not re
 ### Watching it work
 
 The right panel has no latency to chart for an agent, so it uses that space to say what the agent is *doing* — and it animates while it does. See **Living agent status** in [Features](#features).
+
+### Music while it works
+
+If a track is bundled into the build, **Settings → Sounds** offers a bed of music that fades in when an agent starts working and fades out when it finishes. It has its own toggle and volume, separate from message sounds, and it is **off until you turn it on**. Switching conversations mid-run does not interrupt it, a call silences it until the call ends, and an agent that finishes and is asked something else a second later never restarts the track — the fade simply turns around where it stands.
+
+Building from source, the track is yours to choose: drop an audio file at `src/renderer/assets/agent-loop.opus` (`.mp3`, `.ogg`, `.m4a`, `.wav` and `.flac` work too) and rebuild. Nothing else to wire up. Prefer Ogg/Opus if you want the loop seamless — MP3 carries encoder padding at both ends, which becomes a small gap every time round. With no file there the setting explains itself and stays switched off, and the build is otherwise unchanged.
 
 ---
 

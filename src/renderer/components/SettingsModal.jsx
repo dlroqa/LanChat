@@ -26,6 +26,8 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
     notificationVolume: config.notificationVolume,
     customNotificationPath: config.customNotificationPath,
     muteNotifications: config.muteNotifications,
+    agentMusicEnabled: config.agentMusicEnabled,
+    agentMusicVolume: config.agentMusicVolume,
   });
   const [ptt, setPtt] = useState({
     pttEnabled: config.pttEnabled !== false,

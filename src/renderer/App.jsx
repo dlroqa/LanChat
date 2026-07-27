@@ -18,6 +18,7 @@ import GroupInvite from './components/GroupInvite.jsx';
 import NewGroupCallModal from './components/NewGroupCallModal.jsx';
 import { GroupCallManager } from './lib/groupCall.js';
 import { isAgentThread } from './lib/agentPhrase.js';
+import { useAgentMusic } from './lib/agentMusic.js';
 
 const api = window.lanchat;
 
@@ -620,6 +621,32 @@ export default function App() {
     api.setCallActive(inCall && Boolean(call.withVideo));
   }, [inCall, call.withVideo]);
   const incoming = call.status === 'incoming';
+
+  // Is anything on this machine actually running right now?
+  //
+  // `typing` is the honest bracket for a local agent: main raises it once when a
+  // run starts and drops it once when the run ends, and App deliberately does
+  // not expire it the way it expires a person's (see the 'typing' case above).
+  // `awaiting` covers the other direction — a question sent to somebody else's
+  // agent, where all we know is that we asked and have not heard back.
+  //
+  // Pointedly not `agentStatus`: that is a tool-by-tool caption, not a bracket.
+  // It flips to 'ready' between every pair of tool calls and is never reset when
+  // a run finishes, so music driven from it would strobe and then never stop.
+  // Nor `peer.agentBusy`, which for a shared agent means somebody else's
+  // question is running on somebody else's machine.
+  const agentWorking = useMemo(() => {
+    for (const [id, on] of Object.entries(typing)) if (on && isAgentThread(id)) return true;
+    for (const [id, on] of Object.entries(awaiting)) if (on && isAgentThread(id)) return true;
+    return false;
+  }, [typing, awaiting]);
+
+  // A call owns the speakers. The bed comes back, from where it left off, when
+  // the call ends.
+  useAgentMusic(agentWorking && !inCall && !groupActive && !incoming && !groupInvited, {
+    enabled: config.agentMusicEnabled === true,
+    volume: config.agentMusicVolume ?? 0.5,
+  });
 
   function startGroupCall(chosenPeers, withVideo) {
     if (inCall) return toast('Finish your current call first', 'error');

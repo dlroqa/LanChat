@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { RINGTONES, NOTIFICATIONS, Ringer, playNotification } from '../lib/sounds.js';
 import { Play, Plus } from '../lib/icons.jsx';
+import { HAS_TRACK } from '../lib/agentMusicTrack.js';
 
 const api = window.lanchat;
 
@@ -122,6 +123,31 @@ export default function SoundSettings({ value, onChange, soundUrl }) {
           aria-label="Mute message sounds"
         />
       </div>
+
+      <div className="switch" style={{ marginTop: 18 }}>
+        <div>
+          <div style={{ fontWeight: 500 }}>Music while an agent works</div>
+          <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>
+            {HAS_TRACK
+              ? 'Fades in when an agent starts and out when it finishes. Separate from message sounds.'
+              : 'No track is bundled in this build, so nothing will play.'}
+          </div>
+        </div>
+        <button
+          className={`toggle ${value.agentMusicEnabled ? 'on' : ''}`}
+          onClick={() => onChange({ agentMusicEnabled: !value.agentMusicEnabled })}
+          aria-pressed={Boolean(value.agentMusicEnabled)}
+          aria-label="Music while an agent works"
+          disabled={!HAS_TRACK}
+        />
+      </div>
+
+      <Volume
+        label="Agent music volume"
+        value={value.agentMusicVolume ?? 0.5}
+        onChange={(v) => onChange({ agentMusicVolume: v })}
+        disabled={!HAS_TRACK || !value.agentMusicEnabled}
+      />
     </div>
   );
 }

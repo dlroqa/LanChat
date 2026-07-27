@@ -3,6 +3,11 @@
 // Generated rather than shipped as audio files: nothing to bundle, nothing to
 // load from disk or network, and it all works offline inside the packaged app.
 // A user-supplied file can be used instead for either category.
+//
+// The one thing here that could not be generated is the music an agent works to
+// — a piece of music is not something an oscillator can be talked into — so that
+// is a real file, bundled into the renderer build. It lives in lib/agentMusic.js
+// and borrows the context below rather than opening a second one.
 
 // ---------------------------------------------------------------- definitions
 
@@ -91,6 +96,14 @@ function ctx() {
   }
   if (sharedCtx.state === 'suspended') sharedCtx.resume().catch(() => {});
   return sharedCtx;
+}
+
+// The one AudioContext, shared with anything else in the renderer that needs the
+// graph rather than just a note (see lib/agentMusic.js). Browsers cap how many a
+// page may open, and a second one would be a second claim on the output device
+// for no gain. Resumes on the way out, like every other user of it.
+export function audioContext() {
+  return ctx();
 }
 
 // One note with short fades so it never clicks.
