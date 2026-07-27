@@ -3,7 +3,9 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { Config } = require('../src/main/config.js');
 
 // The music bed's two edges are the whole feature, and both of them are timing:
 // a fade that keeps its slope when it is interrupted, and a fade-out that can be
@@ -51,11 +53,26 @@ test('a dropped-in file is named after itself, in sentence case', () => {
 });
 
 test('the track list is sorted, so the dropdown does not reshuffle between builds', () => {
-  const { TRACK_KEYS, TRACKS, DEFAULT_TRACK, HAS_TRACK } = loadTracks(SAMPLE);
+  const { TRACK_KEYS, TRACKS, HAS_TRACK } = loadTracks(SAMPLE);
   assert.deepStrictEqual(TRACK_KEYS, ['agent-loop', 'sleepy-island']);
   assert.strictEqual(TRACKS['sleepy-island'].label, 'Sleepy island');
-  assert.strictEqual(DEFAULT_TRACK, 'agent-loop');
   assert.strictEqual(HAS_TRACK, true);
+});
+
+test('Universe is what plays by default, whatever else is in the folder', () => {
+  const { DEFAULT_TRACK, trackUrl } = loadTracks({
+    '../assets/music/Holiday.opus': '/assets/Holiday-h4sh.opus',
+    '../assets/music/Universe.opus': '/assets/Universe-DWlj.opus',
+    // Sorts before both, and must not take the default away from Universe.
+    '../assets/music/Aurora.opus': '/assets/Aurora-Qp2z.opus',
+  });
+  assert.strictEqual(DEFAULT_TRACK, 'Universe');
+  assert.strictEqual(trackUrl(null, null), '/assets/Universe-DWlj.opus');
+});
+
+test('a library without Universe still has a default rather than silence', () => {
+  const { DEFAULT_TRACK } = loadTracks(SAMPLE);
+  assert.strictEqual(DEFAULT_TRACK, 'agent-loop');
 });
 
 test('a build with no music has no tracks and nothing to default to', () => {
@@ -310,4 +327,56 @@ test('the music keys are plumbed all three ways, including the return of publicC
     const mentions = ipc.split(new RegExp(`\\b${key}\\b`)).length - 1;
     assert.ok(mentions >= 3, `${key} appears ${mentions}× in ipc.js; publicConfig needs it twice`);
   }
+  // The bookkeeping key is internal: the renderer must not be able to write it,
+  // or turning music off would look like an upgrade and turn it back on.
+  assert.doesNotMatch(ipc, /'agentMusicVersion'/, 'agentMusicVersion must stay out of setConfig');
+});
+
+// A fresh directory per case; Config writes its file on first load.
+function configDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'lanchat-music-'));
+}
+
+test('a fresh install starts with the music on', () => {
+  const config = new Config(configDir(), '0.4.15');
+  assert.strictEqual(config.get('agentMusicEnabled'), true);
+  assert.strictEqual(config.get('agentMusic'), null, 'null means the default track, Universe');
+});
+
+test('an update turns the music back on, and it stays off in between', () => {
+  const dir = configDir();
+  new Config(dir, '0.4.15');
+
+  // The user switches it off; reopening the same build leaves it off.
+  new Config(dir, '0.4.15').set({ agentMusicEnabled: false });
+  assert.strictEqual(new Config(dir, '0.4.15').get('agentMusicEnabled'), false);
+
+  // The next build brings it back, once.
+  const updated = new Config(dir, '0.4.16');
+  assert.strictEqual(updated.get('agentMusicEnabled'), true);
+  assert.strictEqual(updated.get('agentMusicVersion'), '0.4.16');
+
+  updated.set({ agentMusicEnabled: false });
+  assert.strictEqual(new Config(dir, '0.4.16').get('agentMusicEnabled'), false, 'off sticks');
+});
+
+test('a config written before this existed is upgraded on first launch', () => {
+  const dir = configDir();
+  fs.writeFileSync(
+    path.join(dir, 'config.json'),
+    JSON.stringify({ id: 'abc', displayName: 'Ed', agentMusicEnabled: false }),
+    'utf8'
+  );
+  const config = new Config(dir, '0.4.15');
+  assert.strictEqual(config.get('agentMusicEnabled'), true);
+  assert.strictEqual(config.get('displayName'), 'Ed', 'the rest of the config is untouched');
+  // And it was persisted, not just held in memory.
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
+  assert.strictEqual(saved.agentMusicEnabled, true);
+});
+
+test('without a version — tests, tooling — the stored setting is left alone', () => {
+  const dir = configDir();
+  new Config(dir, '0.4.15').set({ agentMusicEnabled: false });
+  assert.strictEqual(new Config(dir).get('agentMusicEnabled'), false);
 });

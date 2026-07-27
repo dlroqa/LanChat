@@ -163,7 +163,7 @@ function setupTray(ipcApi) {
 }
 
 async function startServices() {
-  const config = new Config(app.getPath('userData'));
+  const config = new Config(app.getPath('userData'), app.getVersion());
   if (process.env.LANCHAT_PORT) config.set({ servicePort: Number(process.env.LANCHAT_PORT) });
   if (process.env.LANCHAT_DISCOVERY_PORT)
     config.set({ discoveryPort: Number(process.env.LANCHAT_DISCOVERY_PORT) });

@@ -334,13 +334,13 @@ The right panel has no latency to chart for an agent, so it uses that space to s
 
 ### Music while it works
 
-**Settings → Sounds** offers a bed of music that fades in when an agent starts working and fades out when it finishes. It sits with the ringtone and message-sound pickers and works the same way — a dropdown of the tracks bundled into the build, a **Custom file…** option for one of your own, a preview button, and its own volume. It is separate from message sounds, and **off until you turn it on**.
+**Settings → Sounds** offers a bed of music that fades in when an agent starts working and fades out when it finishes. It sits with the ringtone and message-sound pickers and works the same way — a dropdown of the tracks bundled into the build, a **Custom file…** option for one of your own, a preview button, and its own volume. It is separate from message sounds: **on out of the box**, playing **Universe** at half volume, and one toggle turns the whole thing off.
 
 Switching conversations mid-run does not interrupt it, a call silences it until the call ends, and an agent that finishes and is asked something else a second later never restarts the track — the fade simply turns around where it stands.
 
 A custom file must be **Ogg Vorbis or Opus**: both stay small over a loop long enough to work to, and both repeat without a seam, where MP3's encoder padding becomes a small gap every time round.
 
-Building from source, the bundled list is yours: drop audio files into `src/renderer/assets/music/` and rebuild. The file name becomes the name in Settings — `sleepy-island.opus` is listed as "Sleepy island" — so adding a track needs no code change at all. With the folder empty the setting says so and the build is otherwise unchanged.
+Building from source, the bundled list is yours: drop audio files into `src/renderer/assets/music/` and rebuild. The file name becomes the name in Settings — `sleepy-island.opus` is listed as "Sleepy island" — so adding a track needs no code change at all. Which one plays by default is the one named thing, `PREFERRED_DEFAULT` in `src/renderer/lib/agentMusicTrack.js`; if that file is absent the first track stands in. With the folder empty the setting says so and the build is otherwise unchanged.
 
 ---
 

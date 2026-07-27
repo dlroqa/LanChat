@@ -1,5 +1,7 @@
 // The music an agent works to. Adding one is dropping a file into
-// src/renderer/assets/music/ and rebuilding — nothing here needs editing.
+// src/renderer/assets/music/ and rebuilding — nothing here needs editing unless
+// the new track is meant to be the one that plays by default, which is the sole
+// thing named here (PREFERRED_DEFAULT, below).
 //
 // The file name becomes the name in Settings: `sleepy-island.opus` is listed as
 // "Sleepy island". That is the whole convention, and it is why this is a folder
@@ -53,7 +55,17 @@ export const TRACKS = Object.fromEntries(
 
 export const TRACK_KEYS = Object.keys(TRACKS);
 export const HAS_TRACK = TRACK_KEYS.length > 0;
-export const DEFAULT_TRACK = TRACK_KEYS[0] || null;
+
+// What plays when the user has not picked anything. Named rather than "whichever
+// sorts first" so that dropping in a track called "Aurora" does not quietly
+// change what every agent works to. Matched case-insensitively against the file
+// names, and if that file is not in the build — a clone without the audio, or a
+// library curated differently — the first track stands in, so a build with music
+// always has something to play.
+const PREFERRED_DEFAULT = 'universe';
+
+export const DEFAULT_TRACK =
+  TRACK_KEYS.find((k) => k.toLowerCase() === PREFERRED_DEFAULT) || TRACK_KEYS[0] || null;
 
 // The URL to actually play, given what is saved in config. `customUrl` is the
 // user's own file, already served by the local preview endpoint. Null means

@@ -29,10 +29,15 @@ const DEFAULTS = Object.freeze({
   // Music while an agent is working (see renderer lib/agentMusic.js). Its own
   // pair of keys rather than riding on muteNotifications: a message ping is an
   // interruption you may want silenced, and a bed you work to is not the same
-  // decision. Off until asked for — a loop that started playing by itself the
-  // first time you asked an agent something would be a surprise, not a feature.
-  agentMusicEnabled: false,
-  agentMusic: null, // null = the first bundled track; or a track name, or 'custom'
+  // decision. On by default: the music is bundled and the volume is half, so the
+  // feature arrives working; one toggle in Settings → Sounds silences it.
+  agentMusicEnabled: true,
+  // The build that last turned the music on. A version this file has not seen
+  // yet switches it back on once (see load()), so an update lands the same way a
+  // fresh install does — with music — while switching it off between updates
+  // sticks. Internal: not in the renderer's settable keys.
+  agentMusicVersion: null,
+  agentMusic: null, // null = the default bundled track ("Universe"); or a track name, or 'custom'
   agentMusicVolume: 0.5,
   customAgentMusicPath: null,
   pttEnabled: true,
@@ -49,8 +54,11 @@ const DEFAULTS = Object.freeze({
 });
 
 class Config {
-  constructor(userDataDir) {
+  // `appVersion` is app.getVersion(); omitted (tests, tools) it simply means no
+  // upgrade is being noticed and the stored settings are left exactly as they are.
+  constructor(userDataDir, appVersion = null) {
     this.dir = userDataDir;
+    this.appVersion = appVersion;
     this.file = path.join(userDataDir, 'config.json');
     this.data = { ...DEFAULTS };
     this.load();
@@ -67,6 +75,14 @@ class Config {
     let dirty = false;
     if (!this.data.id) {
       this.data.id = crypto.randomUUID();
+      dirty = true;
+    }
+    // Music while an agent works comes back on with every new build, not just on
+    // a fresh install: it is part of what the app is, and one toggle in
+    // Settings → Sounds silences it again until the next update.
+    if (this.appVersion && this.data.agentMusicVersion !== this.appVersion) {
+      this.data.agentMusicVersion = this.appVersion;
+      this.data.agentMusicEnabled = true;
       dirty = true;
     }
     if (dirty) this.save();
