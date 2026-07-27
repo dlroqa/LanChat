@@ -28,6 +28,8 @@ A simple, peer-to-peer **LAN & Tailscale chat** app — text, voice, video, and 
 | 📺 **Docked call panel** | Video plays portrait in the right panel; one button expands it full screen. |
 | 🪟 **Picture-in-picture** | Minimise during a video call and it shrinks to a floating tile in the top-right corner, always on top. |
 | 📶 **Live connection graphs** | When not in a call, the panel charts real round-trip latency and link quality. |
+| 🤖 **Agents** | Add an AI agent in **Settings → Agents** and it becomes just another thread. Four ways to connect one — **HTTP API** (recommended), **ACP** over stdio, a **local command**, or an **SSH command** on another host. Share yours with people on your network and they reach it *through* you: approvals stay on your machine and are never handed to a peer, and everyone sharing it takes turns. A new agent is local-only until you grant reach, peer by peer. |
+| ✨ **Living agent status** | An agent has no latency worth charting, so it gets the graph's slot to say what it is *doing* — and the row moves while it does. The phrase types itself in under a block cursor, which then sweeps back across the finished word; the pip beside it throws a small firework in a fresh neon colour every burst; and light trails race the width of the row, timed so they fall back into step each time the phrase changes. The moment it finishes, a firework goes off from the middle of the row — neon rays spreading outward and fading away over a couple of seconds — and then it settles to a slow green-to-cyan wave running from the pip through the word. Behind the text the trails are damped down, so the word stays easily readable while they pass, and **reduce motion** removes the animation entirely rather than freezing it — the words still say everything. |
 | 🔊 **Sound choices** | 6 ringtones + 8 message sounds, each with volume control and a custom-file option. |
 | 📎 **File sharing** | Send any file, photo, or video — images & clips preview inline. Drag-and-drop supported. |
 | 🔗 **Links** | Links in messages are clickable and open in your own browser, never inside LanChat. LanChat also unfurls the first link in a message into a small card with the page's title, description, and picture — fetched by the app itself (there is no server to do it for you), only for a message you have actually scrolled to, and switched off in **Settings → Privacy** if you would rather nothing left your machine. |
@@ -279,6 +281,56 @@ If discovery is blocked, use the **+** button in the sidebar and enter a peer's 
 ```bash
 tailscale ip -4
 ```
+
+---
+
+## Agents
+
+An agent is an AI assistant that appears in LanChat as an ordinary chat thread — its own section at the top of the sidebar, its own conversation, its own status. You can keep one to yourself, or share it with people on your network so they can ask it things without installing or configuring anything themselves.
+
+### Adding one
+
+**Settings → Agents → Add agent.** Give it a name and pick how LanChat should reach it:
+
+| Transport | What it is | What it needs |
+|---|---|---|
+| **HTTP API** *(recommended)* | Talks to an agent server over HTTP. The default points at a Hermes server on this machine. | Base URL (default `http://127.0.0.1:8642`), optionally a model and a Hermes profile |
+| **ACP** | Agent Client Protocol over stdio. Keeps conversation context across messages. | Command to run, arguments, working directory |
+| **Local command** | Runs a CLI on this machine, once per message. | Command, arguments (use `{prompt}` where the message goes), working directory |
+| **SSH command** | Runs the agent on another host over SSH. | Host, user, port, identity file, remote command. The host must already be in your `known_hosts` |
+
+The on/off toggle is a full kill switch: it stops the transport but keeps the configuration, so you can turn an agent back on without re-entering a key. Removing an agent deletes the record outright.
+
+### Keys stay on your machine
+
+If the agent needs an API key you can either store it encrypted on this device — sealed with your OS keychain (Keychain, libsecret, or DPAPI), so only ciphertext is written to disk — or have LanChat read it from an environment variable, in which case only the variable *name* is stored and the key never touches disk at all. Either way the key is never sent to the app's UI layer, and never leaves your machine.
+
+### Approvals
+
+**Only HTTP and ACP can ask you to approve a tool call.** When the agent wants to run something, a prompt appears on *your* machine and waits for you.
+
+Local command and SSH have no approval step — they run a non-interactive command and return its output — so only point them at something you are content to have run unattended.
+
+This matters most when sharing. A peer using your agent never gets the approval prompt: it stays with you, the owner, on the machine the agent actually runs on. Sharing an agent means letting someone ask it things, not handing them the keys to your computer.
+
+### Sharing it
+
+A new agent is **local-only** until you say otherwise. Reach is granted per peer, and you can also:
+
+- **Anyone on the network** — the broadest grant in the app, and the one thing here that asks for confirmation before it takes effect. Narrowing reach never asks.
+- **Show in their contact list** — the agent appears in that peer's sidebar rather than having to be addressed deliberately.
+
+Each peer's conversation with your agent lives in its own thread, so their questions never land in your ordinary chat with them. Agent threads are also purely local constructs: LanChat drops any message arriving off the network that claims to be from one, so a peer cannot impersonate your agent to you.
+
+### Taking turns
+
+When several people share one agent, they queue for it. Whoever holds the turn gets **5 queries**, then it passes to the next person waiting.
+
+Ask while someone else is holding the turn and your question is **kept**, not refused — it is read the moment your turn arrives, and it does not spend one of your five. The right-hand panel shows where you stand: whether you are waiting, about to receive the turn, holding it, or about to hand it on.
+
+### Watching it work
+
+The right panel has no latency to chart for an agent, so it uses that space to say what the agent is *doing* — and it animates while it does. See **Living agent status** in [Features](#features).
 
 ---
 
