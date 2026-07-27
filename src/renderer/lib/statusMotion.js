@@ -141,15 +141,17 @@ export function readyBurstDelay(len) {
   return typedTick(len) * STEP_MS + READY_BURST_PAD_MS;
 }
 
-// How far a ray at this angle may travel. The row is far wider than it is tall,
-// so a circular burst would be a stripe with its top and bottom sliced off by
-// the border; reaching along an ellipse instead lets every ray run its full
-// length and fade out in open space, whichever way it is pointed.
-export function rayReach(angleDeg, rx, ry) {
+// How far a ray at this angle may travel: the distance from the middle of the
+// row to its border, along that angle. The burst is meant to fill the box it is
+// thrown in, and the box is a rectangle roughly six times wider than it is tall
+// — an inscribed circle or ellipse would leave the two wide ends of the row dark
+// and crowd every ray into a narrow fan around the horizontal.
+export function boxReach(angleDeg, halfW, halfH) {
   const t = (angleDeg * Math.PI) / 180;
-  const x = ry * Math.cos(t);
-  const y = rx * Math.sin(t);
-  return (rx * ry) / Math.sqrt(x * x + y * y);
+  const x = Math.abs(Math.cos(t));
+  const y = Math.abs(Math.sin(t));
+  // Whichever edge this ray meets first, side or top.
+  return Math.min(x < 1e-6 ? Infinity : halfW / x, y < 1e-6 ? Infinity : halfH / y);
 }
 
 // Raises a new burst id once the word is typed, then drops it again when the

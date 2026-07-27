@@ -14,10 +14,10 @@ const path = require('node:path');
 // the `export` keywords and evaluate it — the hooks are only *defined* here, not
 // called, so React never has to exist.
 const SRC = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'lib', 'statusMotion.js'), 'utf8');
-const { sweepFrame, typedTick, nextHue, BURST_HUES, HOLD_TICKS, burstOnEdge, readyBurstDelay, rayReach } =
+const { sweepFrame, typedTick, nextHue, BURST_HUES, HOLD_TICKS, burstOnEdge, readyBurstDelay, boxReach } =
   new Function(
     `${SRC.replace(/^import[^;]+;$/gm, '').replace(/^export\s+/gm, '')}
-   return { sweepFrame, typedTick, nextHue, BURST_HUES, HOLD_TICKS, burstOnEdge, readyBurstDelay, rayReach };`
+   return { sweepFrame, typedTick, nextHue, BURST_HUES, HOLD_TICKS, burstOnEdge, readyBurstDelay, boxReach };`
   )();
 
 test('the first pass types the word in, hiding what has not been reached', () => {
@@ -98,21 +98,31 @@ test('the burst waits for the word to finish typing itself in', () => {
   );
 });
 
-test('rays reach the ellipse, not a circle', () => {
-  const rx = 300;
-  const ry = 38;
-  // Sideways they run the long axis, up and down the short one.
-  assert.strictEqual(Math.round(rayReach(0, rx, ry)), rx);
-  assert.strictEqual(Math.round(rayReach(180, rx, ry)), rx);
-  assert.strictEqual(Math.round(rayReach(90, rx, ry)), ry);
-  assert.strictEqual(Math.round(rayReach(270, rx, ry)), ry);
+test('rays reach the border of the row, not an inscribed circle', () => {
+  const halfW = 264;
+  const halfH = 45;
+  // Sideways they run the full half-width; up and down they stop at the top and
+  // bottom edges.
+  assert.strictEqual(Math.round(boxReach(0, halfW, halfH)), halfW);
+  assert.strictEqual(Math.round(boxReach(180, halfW, halfH)), halfW);
+  assert.strictEqual(Math.round(boxReach(90, halfW, halfH)), halfH);
+  assert.strictEqual(Math.round(boxReach(270, halfW, halfH)), halfH);
 });
 
-test('every other angle lands between the two axes', () => {
-  const rx = 300;
-  const ry = 38;
-  for (let a = 0; a < 360; a += 7) {
-    const d = rayReach(a, rx, ry);
-    assert.ok(d >= ry - 0.001 && d <= rx + 0.001, `${a}deg reached ${d}`);
+test('a ray at the corner angle lands exactly in the corner', () => {
+  const halfW = 264;
+  const halfH = 45;
+  const corner = (Math.atan2(halfH, halfW) * 180) / Math.PI;
+  const d = boxReach(corner, halfW, halfH);
+  assert.strictEqual(Math.round(Math.hypot(halfW, halfH)), Math.round(d));
+});
+
+test('no ray stops before the border or flies past the far corner', () => {
+  const halfW = 264;
+  const halfH = 45;
+  const diagonal = Math.hypot(halfW, halfH);
+  for (let a = 0; a < 360; a += 3) {
+    const d = boxReach(a, halfW, halfH);
+    assert.ok(d >= halfH - 0.001 && d <= diagonal + 0.001, `${a}deg reached ${d}`);
   }
 });
