@@ -85,6 +85,11 @@ export default function ConnectionPanel({ peer, stats, agentStatus, awaiting }) 
   );
 }
 
+// Past this many characters the label is small enough, and close enough to the
+// three-line cut, that the row is worth being able to hover. Short phrases get
+// no tooltip, because a tooltip repeating a word you can already read is noise.
+const CUT_RISK = 80;
+
 function AgentPanel({ peer, status, awaiting }) {
   // Three sources, all of them real: the bus for an agent hosted here, the
   // owner's relay for a shared one, and simply having asked and not yet heard
@@ -124,21 +129,33 @@ function AgentPanel({ peer, status, awaiting }) {
 
       {/* Where a human peer gets a latency graph, an agent says what it is
           doing. Same slot, information that actually applies. */}
-      <div className={`agent-state agent-tone-${state.tone}`}>
-        <SparkPip active={state.tone === 'busy'} />
-        <span className="agent-state-label">
-          <TypedLabel text={state.label} sweeping={state.tone === 'busy'} />
-          {state.tone === 'busy' && (
-            <span className="agent-dots" aria-hidden="true">
-              <i />
-              <i />
-              <i />
-            </span>
-          )}
-        </span>
-        {/* Last child, so `flex: 1` hands it exactly the space the word leaves
-            over — however long the phrase happens to be. */}
+      <div
+        className={`agent-state agent-tone-${state.tone}`}
+        // A tool name long enough to be cut is the one case where the row
+        // cannot say everything it knows, so it offers the rest on hover.
+        title={state.label.length > CUT_RISK ? state.label : undefined}
+      >
+        {/* Behind everything, spanning the whole row. */}
         <SpeedStreaks active={state.tone === 'busy'} />
+        {/* Pip and word travel together in a content-sized box, which is what
+            lets the veil behind them size itself to the phrase. */}
+        <span className="agent-state-front">
+          <SparkPip active={state.tone === 'busy'} />
+          {/* The row is a fixed size and the phrase is not, so the label is set
+              from its own length: the type shrinks as the phrase grows, and the
+              phrase fills the row instead of running out of it. One number is
+              all CSS needs to do that — see --len in styles.css. */}
+          <span className="agent-state-label" style={{ '--len': state.label.length }}>
+            <TypedLabel text={state.label} sweeping={state.tone === 'busy'} />
+            {state.tone === 'busy' && (
+              <span className="agent-dots" aria-hidden="true">
+                <i />
+                <i />
+                <i />
+              </span>
+            )}
+          </span>
+        </span>
       </div>
 
       {/* Status says where this thread stands in the queue whenever it stands
@@ -186,10 +203,15 @@ function AgentPanel({ peer, status, awaiting }) {
 // than a bar of its own: it is then exactly as wide as the glyph underneath, at
 // any font size, without measuring anything. Characters not yet typed keep their
 // space (`visibility`, not `display`), so the row never reflows mid-word.
+//
+// A tool name is not a phrase we chose, so the label has to be able to wrap. But
+// every character being its own inline-block means a line would otherwise break
+// between any two of them, which reads as nonsense; grouping the characters into
+// words puts the break opportunities back where a reader expects to find them.
 function TypedLabel({ text, sweeping }) {
   const reduced = useReducedMotion();
   const { head, typed } = useSweep(text, sweeping, !reduced);
-  const chars = Array.from(text || '');
+  const words = wordsOf(text);
 
   return (
     <span className="typed">
@@ -197,27 +219,60 @@ function TypedLabel({ text, sweeping }) {
           would otherwise be announced letter by letter. */}
       <span className="sr-only">{text}</span>
       <span className="typed-run" aria-hidden="true">
-        {chars.map((ch, i) => {
-          const cursor = i === head;
-          const pending = !typed && head != null && i > head;
-          return (
-            <span
-              key={`${i}-${ch}`}
-              className={cursor ? 'typed-char typed-cursor' : 'typed-char'}
-              // `--pos` is the character's place in the row, counting the pip
-              // ahead of it as 0. Only the Ready state reads it, to lag each
-              // letter behind the one before it so the colour wave travels.
-              style={{ '--pos': i + 1, ...(pending ? { visibility: 'hidden' } : null) }}
-            >
-              {/* A space under the cursor has no glyph to fill, so it borrows
-                  the width of an en-space and blocks that instead. */}
-              {ch === ' ' && cursor ? ' ' : ch}
-            </span>
-          );
-        })}
+        {words.map((word, w) => (
+          <span
+            key={w}
+            // A word too long to fit a line whole is no longer worth keeping
+            // whole — a path or an identifier that long has to be allowed to
+            // break inside itself, and dropping it back to plain inline text
+            // hands the break opportunities back to its characters.
+            className={word.length > LONE_WORD_MAX ? 'typed-word typed-word-long' : 'typed-word'}
+          >
+            {word.map(({ ch, i }) => {
+              const cursor = i === head;
+              const pending = !typed && head != null && i > head;
+              return (
+                <span
+                  key={`${i}-${ch}`}
+                  className={cursor ? 'typed-char typed-cursor' : 'typed-char'}
+                  // `--pos` is the character's place in the row, counting the pip
+                  // ahead of it as 0. Only the Ready state reads it, to lag each
+                  // letter behind the one before it so the colour wave travels.
+                  // It counts through the whole label, not through this word.
+                  style={{ '--pos': i + 1, ...(pending ? { visibility: 'hidden' } : null) }}
+                >
+                  {/* A space under the cursor has no glyph to fill, so it borrows
+                      the width of an en-space and blocks that instead. */}
+                  {ch === ' ' && cursor ? ' ' : ch}
+                </span>
+              );
+            })}
+          </span>
+        ))}
       </span>
     </span>
   );
+}
+
+// Longer than this and a word may break inside itself. Roughly what fits on one
+// line at the smallest size the label ever takes, so the only words that break
+// are the ones that could not have been kept whole anyway.
+const LONE_WORD_MAX = 24;
+
+// The label's characters grouped into words, each keeping its index in the whole
+// label so the cursor and the colour wave never notice the grouping. A word
+// carries the space that ends it, which is what keeps that space from being
+// dropped at a line end and closing the gap between two words.
+function wordsOf(text) {
+  const words = [];
+  let word = null;
+  Array.from(text || '').forEach((ch, i) => {
+    if (!word) words.push((word = []));
+    word.push({ ch, i });
+    // A space ends the word it follows; the next character opens a new one.
+    if (ch === ' ') word = null;
+  });
+  return words;
 }
 
 // What used to be a stationary dot. While the agent is working it throws a small

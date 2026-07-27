@@ -140,6 +140,14 @@ textarea {
   .app {
     grid-template-columns: 300px minmax(0, 1fr) 300px;
   }
+  /* The status row loses 80px of width here, so the phrase inside it has to
+     start shrinking sooner. Not simply scaled by the width: shorter lines waste
+     more of themselves on ragged wrapping, so the capacity falls faster than
+     the column does. 860 is where the cut stays out at the far end, measured
+     the same way as the constant above. */
+  .agent-state {
+    --label-fit: 860px;
+  }
 }
 @media (max-width: 980px) {
   .app {
@@ -1695,37 +1703,102 @@ input[type='range']:disabled::-webkit-slider-thumb {
   align-items: center;
   gap: 12px;
   min-height: 90px;
-  padding: 0 16px;
+  /* Vertical padding is the room a wrapped phrase stacks into. Three lines at
+     the largest size the label ever takes come to 63px, which leaves 5px in
+     hand and is why the row still measures exactly 90px whatever the agent is
+     doing: the type shrinks to fit the box rather than the box growing to fit
+     the type, so the stats below never move while a tool name arrives. */
+  padding: 11px 16px;
+  /* How much text the row can hold, as a single number: the width one line has,
+     times the three lines it may take, divided by the ~0.52em an Inter 600
+     character averages — all folded into one constant so the size below is a
+     division rather than a table of breakpoints. Set by measurement rather than
+     by that arithmetic alone (1660 on paper), because wrapping leaves lines
+     ragged: 1550 is the largest value at which no phrase reaches the three-line
+     cut before the type has finished shrinking. */
+  --label-fit: 1550px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
   background: var(--surface);
-  /* Deliberately no `overflow` here. Clipping lives on the streak layer alone,
-     so the firework keeps throwing sparks past the pip as it always has. */
   position: relative;
+  /* The veil below is deliberately drawn larger than the row so its own left,
+     top and bottom edges fall outside and are cut off here — an edge you cannot
+     see is an edge that cannot look like a rectangle. The firework is safe: its
+     sparks reach 13px from a pip centred 27px in and 45px down, so they never
+     come near this boundary. */
+  overflow: hidden;
 }
 
 /* ---- Speed-light streaks ----
-   Long-exposure light trails in the empty half of the row, on only while the
-   agent is working. Laid out as the last flex child with `flex: 1`, which hands
-   it precisely the space the word leaves over — "Thinking" and "Piecing it
-   together" both work, with no measuring and no magic numbers. Nothing else in
-   the row grows, so the pip and the label do not move by a pixel.
+   Long-exposure light trails crossing the whole row, on only while the agent is
+   working. The layer sits behind everything at `inset: 0`, so trails run edge to
+   edge and pass behind the pip and the word rather than stopping short of them.
 
-   The mask is what keeps this cheap: trails fade in over the first 44px, so
-   there is never a streak behind a glyph and the text keeps the 10.9:1 it has
-   without them. */
+   Trails fade in and out at the two side edges instead of being sliced off by
+   the corner — each trail already fades to nothing at its own ends, and this
+   keeps that true where it meets the border. */
 .agent-streaks {
-  flex: 1;
-  align-self: stretch;
-  position: relative;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
   overflow: hidden;
-  /* Bleed back out through the row's padding so the trails run to the edge and
-     are clipped by the corner rather than stopping short of it. */
-  margin-right: -16px;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  mask-image: linear-gradient(90deg, transparent 0, #000 44px);
-  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 44px);
+  border-radius: var(--radius-sm);
+  mask-image: linear-gradient(90deg, transparent 0, #000 22px, #000 calc(100% - 22px), transparent 100%);
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    transparent 0,
+    #000 22px,
+    #000 calc(100% - 22px),
+    transparent 100%
+  );
   pointer-events: none;
+}
+
+/* Pip and word ride above the trails in a box that hugs its own content, which
+   is the whole trick: the veil below is hung off this box, so it resizes itself
+   to the phrase — "Thinking" and "Piecing it together" alike — with nothing
+   measured and no magic numbers. */
+.agent-state-front {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* The veil. Surface colour at ~88% right under the glyphs, falling away to
+   nothing well outside them, so trails stay visible but heavily damped where
+   the word is and run at full strength everywhere else. An ellipse rather than
+   a hard band, so there is no edge anywhere — the damping simply stops being
+   true as you move away from the text.
+
+   z-index: -1 keeps it inside this box's stacking context: below the word,
+   above the trails. */
+.agent-state-front::before {
+  content: '';
+  position: absolute;
+  /* Overhangs the row on three sides so only the right-hand falloff is ever
+     visible — that is the one direction the veil should be seen to end, because
+     it is the direction the trails run out into open space. */
+  inset: -46px -58px -46px -54px;
+  z-index: -1;
+  pointer-events: none;
+  /* Sized to hug the word and nothing more: the ellipse reaches nothing well
+     inside its own box on every side, which is what keeps it edgeless, but it
+     is tight enough vertically that trails along the top and bottom of the row
+     stay at full strength. Only the band the glyphs actually occupy is damped. */
+  background: radial-gradient(
+    ellipse 46% 32% at 47% 50%,
+    color-mix(in srgb, var(--surface) 91%, transparent) 0%,
+    /* Held almost flat out to 60%, because the damping has to still be true at
+       the *end* of the word, not just under its middle. A gradient that starts
+       falling away immediately lets a trail resurface under the last few
+       letters, which measured 3.8:1 there while the word's centre was fine. */
+    color-mix(in srgb, var(--surface) 90%, transparent) 66%,
+    color-mix(in srgb, var(--surface) 45%, transparent) 84%,
+    transparent 100%
+  );
 }
 
 /* A hot white core with colour bleeding off both ends — that shape *is* the
@@ -1785,15 +1858,38 @@ input[type='range']:disabled::-webkit-slider-thumb {
 
 /* ---- Status label ----
    Set heavier and a shade larger than the panel around it, with the tracking
-   pulled in: this is the one line in the panel meant to be read at a glance
+   pulled in: this is the one thing in the panel meant to be read at a glance
    rather than studied, and Inter at 600 is what carries that weight. */
 .agent-state-label {
-  font-size: 17px;
+  /* 17px for anything we wrote ourselves, and smaller the longer the phrase
+     runs — a tool name arrives at whatever length it happens to be, and the row
+     it has to fit in is a fixed size. Dividing the row's capacity by the
+     character count is the whole fit: the type is as large as the phrase allows
+     and never larger, so a long name fills the box in the same proportion a
+     short one does. `--len` comes in from ConnectionPanel.jsx.
+
+     The 11px floor is where the line stops being worth reading at all; past it
+     the clamp below cuts instead of shrinking further. */
+  font-size: clamp(11px, calc(var(--label-fit) / var(--len, 6)), 17px);
   font-weight: 600;
   letter-spacing: -0.012em;
-  display: inline-flex;
-  align-items: baseline;
-  gap: 3px;
+  /* Tighter than the 1.5 the body sets, because these lines are one phrase
+     rather than prose, and three of them have to sit inside 68px at full size. */
+  line-height: 1.24;
+  /* A block of text rather than a flex row, so the word wraps and the dots
+     follow the last character onto whichever line it lands on. -webkit-box is
+     what makes `-webkit-line-clamp` work; Chromium is the only engine this
+     renderer runs in. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  /* The backstop, for a tool title carrying a whole file path: at the floor
+     size a phrase that still cannot fit is cut here, with an ellipsis, and the
+     row offers the rest on hover. Nothing crosses the border either way. */
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  /* Lets the block shrink to the room the pip leaves rather than pushing the
+     front box wider than the row. */
+  min-width: 0;
   /* Glow only ever adds light, so the text keeps the contrast it had without
      it — the neon look never costs legibility. Scoped to this row so the
      subtitle above, which shares the tone classes, stays flat. */
@@ -1803,7 +1899,24 @@ input[type='range']:disabled::-webkit-slider-thumb {
 /* The word types itself in beneath a travelling block cursor. Characters are
    laid out as one run so nothing shifts as the cursor passes over them. */
 .typed-run {
+  /* Wrapping happens here, between words. */
+  white-space: normal;
+}
+/* Each word is one box, so a line can only break between two of them. Without
+   this the run breaks between any two characters, because every character is an
+   inline-block of its own — necessary for the cursor, and ruinous for wrapping.
+   `pre` holds the space a word ends with, which would otherwise be dropped at a
+   line end and run two words together when the label is read aloud from the
+   screen or copied. */
+.typed-word {
+  display: inline-block;
   white-space: pre;
+}
+/* A word longer than a line gets to break inside itself instead of hanging off
+   the edge: as plain inline text its characters are break opportunities again. */
+.typed-word-long {
+  display: inline;
+  white-space: normal;
 }
 .typed-char {
   display: inline-block;
@@ -2031,14 +2144,19 @@ input[type='range']:disabled::-webkit-slider-thumb {
   }
 }
 
+/* Sized in em rather than px, so the dots shrink with the word they trail. At
+   17px they measure what they always did; at the floor size they stay in
+   proportion instead of growing into three bullets beside small type. */
 .agent-dots {
   display: inline-flex;
-  gap: 2px;
-  margin-left: 1px;
+  gap: 0.12em;
+  /* The gap the label's flex `gap` used to open, now that the label is a text
+     block and the dots simply follow the last character. */
+  margin-left: 0.18em;
 }
 .agent-dots i {
-  width: 3px;
-  height: 3px;
+  width: 0.18em;
+  height: 0.18em;
   border-radius: 50%;
   background: currentColor;
   animation: agent-dot 1.2s ease-in-out infinite;
