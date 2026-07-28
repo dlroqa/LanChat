@@ -48,6 +48,20 @@ export default function MessageBubble({
   return (
     <div className={`bubble-row ${out ? 'out' : 'in'} ${grouped ? 'grouped' : ''}`}>
       <div className={`bubble ${queued ? 'queued' : ''} ${rejected ? 'rejected' : ''}`}>
+        {/* Documents handed to an agent. The bubble names them rather than
+            reproducing them: what the agent read was a whole PDF, and a
+            transcript that quoted it back would be unreadable. */}
+        {msg.docs?.length > 0 && (
+          <div className="bubble-docs">
+            {msg.docs.map((doc, i) => (
+              <span className="bubble-doc" key={`${doc.name}-${i}`}>
+                <FileIcon size={13} />
+                {doc.name}
+                <span className="bubble-doc-size">{formatBytes(doc.bytes)}</span>
+              </span>
+            ))}
+          </div>
+        )}
         {body}
         {firstLink && linkPreview && (
           <LinkPreview

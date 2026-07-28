@@ -23,6 +23,9 @@ export default function ChatPane({
   showAddresses,
   // Text handed back after a refused send, for the composer to pick up again.
   draft,
+  // Documents staged against the next message to an agent.
+  docs,
+  onRemoveDoc,
   // Links in messages: how one is opened, and how one is unfurled (undefined
   // when the user has previews turned off).
   onOpenLink,
@@ -186,7 +189,11 @@ export default function ChatPane({
       </div>
 
       {/* Text can be composed while a peer is offline and is queued until they
-          return. Files and voice need a live connection, so those stay gated. */}
+          return. Files and voice need a live connection, so those stay gated.
+          The attach button means two different things either side of that line:
+          to a person it sends a file, to an agent it hands over something to
+          read — same gesture, and the tooltip says which. A delegate thread is
+          somebody else's conversation, so nothing is attached there. */}
       <Composer
         draft={draft}
         onSend={onSend}
@@ -195,7 +202,11 @@ export default function ChatPane({
         onVoice={peer.kind === 'agent' || !peer.online ? undefined : onVoice}
         disabled={peer.kind === 'agent' && !peer.online}
         offline={!peer.online}
-        canAttach={peer.kind !== 'agent' && peer.online}
+        canAttach={peer.online && !peer.delegate}
+        attachTitle={isAgent ? 'Attach a document for the agent to read' : 'Send file, photo or video'}
+        placeholder={isAgent ? 'Ask the agent…  (Enter to send, Shift+Enter for newline)' : undefined}
+        docs={docs}
+        onRemoveDoc={onRemoveDoc}
       />
     </div>
   );

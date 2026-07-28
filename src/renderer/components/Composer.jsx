@@ -1,9 +1,25 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Send, Paperclip, Mic } from '../lib/icons.jsx';
+import { Send, Paperclip, Mic, FileIcon, X } from '../lib/icons.jsx';
 import { startRecording, pickFormat, formatDuration } from '../lib/voice.js';
+import { formatBytes } from '../lib/util.js';
 
 // Message composer: auto-growing textarea, Enter to send, attach and voice.
-export default function Composer({ draft, onSend, onAttach, onTyping, onVoice, disabled, offline = false, canAttach = true }) {
+export default function Composer({
+  draft,
+  onSend,
+  onAttach,
+  onTyping,
+  onVoice,
+  disabled,
+  offline = false,
+  canAttach = true,
+  attachTitle = 'Send file, photo or video',
+  // Documents staged against the next message. Held by App rather than here,
+  // because a file can also arrive by being dropped anywhere on the window.
+  docs = [],
+  onRemoveDoc,
+  placeholder,
+}) {
   // Recording needs MediaRecorder with an Opus-capable container; hide the
   // affordance entirely where that is missing rather than failing on press.
   const canRecord = Boolean(onVoice) && Boolean(pickFormat());
@@ -45,10 +61,13 @@ export default function Composer({ draft, onSend, onAttach, onTyping, onVoice, d
     typingTimer.current = setTimeout(() => signalTyping(false), 1500);
   }
 
+  // A document on its own is a complete thing to send — "here, read this" — so
+  // the send is allowed with no words, but never with neither.
+  const canSend = Boolean(text.trim() || docs.length);
+
   function submit() {
-    const t = text.trim();
-    if (!t) return;
-    onSend(t);
+    if (!canSend) return;
+    onSend(text.trim());
     setText('');
     signalTyping(false);
     clearTimeout(typingTimer.current);
@@ -62,37 +81,60 @@ export default function Composer({ draft, onSend, onAttach, onTyping, onVoice, d
   }
 
   return (
-    <div className="composer">
-      {canAttach && (
-        <button className="icon-btn" onClick={onAttach} disabled={disabled} title="Send file, photo or video">
-          <Paperclip size={20} />
-        </button>
+    <div className="composer-wrap">
+      {/* Staged documents sit above the input rather than inside it: they are
+          part of the message being written, and stay visible while it is. */}
+      {docs.length > 0 && (
+        <div className="composer-docs">
+          {docs.map((doc) => (
+            <span key={doc.path} className="composer-doc" title={doc.path}>
+              <FileIcon size={14} />
+              <span className="composer-doc-name">{doc.name}</span>
+              <span className="composer-doc-size">{formatBytes(doc.bytes)}</span>
+              <button
+                className="composer-doc-remove"
+                onClick={() => onRemoveDoc(doc.path)}
+                title={`Remove ${doc.name}`}
+                aria-label={`Remove ${doc.name}`}
+              >
+                <X size={13} />
+              </button>
+            </span>
+          ))}
+        </div>
       )}
-      <textarea
-        ref={ref}
-        rows={1}
-        value={text}
-        placeholder={
-          disabled
-            ? 'Unavailable'
-            : offline
-              ? 'They are offline — your message will send when they are back'
-              : 'Type a message…  (Enter to send, Shift+Enter for newline)'
-        }
-        onChange={handleChange}
-        onKeyDown={onKeyDown}
-        disabled={disabled}
-        aria-label="Message"
-      />
-      {/* The mic replaces Send until there is text to send, so the primary
-          action stays unambiguous rather than two buttons competing. */}
-      {canRecord && !text.trim() ? (
-        <VoiceButton disabled={disabled} onRecorded={onVoice} />
-      ) : (
-        <button className="send-btn" onClick={submit} disabled={!text.trim()} title="Send">
-          <Send size={20} />
-        </button>
-      )}
+      <div className="composer">
+        {canAttach && (
+          <button className="icon-btn" onClick={onAttach} disabled={disabled} title={attachTitle}>
+            <Paperclip size={20} />
+          </button>
+        )}
+        <textarea
+          ref={ref}
+          rows={1}
+          value={text}
+          placeholder={
+            disabled
+              ? 'Unavailable'
+              : offline
+                ? 'They are offline — your message will send when they are back'
+                : placeholder || 'Type a message…  (Enter to send, Shift+Enter for newline)'
+          }
+          onChange={handleChange}
+          onKeyDown={onKeyDown}
+          disabled={disabled}
+          aria-label="Message"
+        />
+        {/* The mic replaces Send until there is something to send, so the
+            primary action stays unambiguous rather than two buttons competing. */}
+        {canRecord && !canSend ? (
+          <VoiceButton disabled={disabled} onRecorded={onVoice} />
+        ) : (
+          <button className="send-btn" onClick={submit} disabled={!canSend} title="Send">
+            <Send size={20} />
+          </button>
+        )}
+      </div>
     </div>
   );
 }

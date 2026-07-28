@@ -36,6 +36,10 @@ const NOTICE_TTL_MS = 60000;
 // render at all.
 const REJECT_LINGER_MS = 900;
 
+// One shared empty list for threads with nothing attached, so the composer is
+// not handed a brand-new array on every render of a conversation.
+const EMPTY_DOCS = [];
+
 // Ids for bubbles that only ever exist in this window. Counted rather than
 // randomised because nothing outside this process will ever see one, and a
 // counter cannot collide with itself the way two calls in the same millisecond
@@ -75,6 +79,10 @@ export default function App() {
   // costs somebody the sentence they wrote. The nonce is what makes asking twice
   // with the same words restore twice.
   const [draft, setDraft] = useState(null); // { threadId, text, nonce }
+  // Documents staged against the next message to an agent. Keyed by thread, so
+  // switching away and back finds what you had queued up still waiting — and so
+  // a file dropped on one agent never goes to another.
+  const [attachments, setAttachments] = useState({}); // threadId -> [{ path, name, bytes }]
 
   const configRef = useRef(config);
   const laterDismissedRef = useRef(null); // update version dismissed with "Later" this session
@@ -521,7 +529,16 @@ export default function App() {
     // round trip. Relying only on the owner's relay left the far side reading
     // "Ready" while it was plainly working.
     if (isAgentThread(selectedId)) setAwaiting((a) => ({ ...a, [selectedId]: true }));
-    const msg = await api.sendChat(selectedId, text);
+    // Cleared before the round trip, so the chips go the moment Send is pressed
+    // rather than lingering while a slow agent is reached. A refusal puts them
+    // back below, alongside the words.
+    const staged = attachments[selectedId] || [];
+    if (staged.length) setAttachments((a) => ({ ...a, [selectedId]: [] }));
+    const msg = await api.sendChat(
+      selectedId,
+      text,
+      staged.map((d) => d.path)
+    );
     // Refused: a question of ours is already waiting to be read, and this one
     // would not be answered any sooner. Shown and then taken away rather than
     // never shown, so what is refused is visibly *this* message — and the words
@@ -545,6 +562,11 @@ export default function App() {
       }
       setTimeout(() => removeMessage(selectedId, ghost.id), REJECT_LINGER_MS);
       setDraft({ threadId: selectedId, text: msg.text, nonce: Date.now() });
+      // The documents come back with the words. Being told to wait should not
+      // cost somebody the file they went and found.
+      if (msg.docs?.length || staged.length) {
+        setAttachments((a) => ({ ...a, [selectedId]: msg.docs?.length ? msg.docs : staged }));
+      }
       return;
     }
     appendMessage(selectedId, msg);
@@ -553,9 +575,37 @@ export default function App() {
     if (!msg.delivered) toast('Saved — it will send when they are back online', 'info');
   }
 
+  // The attach button. To a person it sends a file; to an agent it stages a
+  // document for the agent to read, which goes with whatever you type next.
   async function attach() {
     if (!selectedId) return;
-    await api.pickAndSendFile(selectedId);
+    if (!isAgentThread(selectedId)) {
+      await api.pickAndSendFile(selectedId);
+      return;
+    }
+    stageDocuments(selectedId, await api.pickDocuments());
+  }
+
+  // Files chosen or dropped have already been checked in main, so each arrives
+  // either readable or with the reason it is not. The reasons are said out loud
+  // once each; the readable ones become chips.
+  function stageDocuments(threadId, results) {
+    if (!results || !results.length) return;
+    const good = results.filter((r) => r.ok);
+    for (const bad of results.filter((r) => !r.ok)) toast(bad.error, 'error');
+    if (!good.length) return;
+    setAttachments((a) => {
+      const existing = a[threadId] || [];
+      // Attaching the same file twice would send it twice; the second time is
+      // almost always somebody making sure the first one landed.
+      const seen = new Set(existing.map((d) => d.path));
+      const added = good.filter((d) => !seen.has(d.path)).map((d) => ({ path: d.path, name: d.name, bytes: d.bytes }));
+      return added.length ? { ...a, [threadId]: [...existing, ...added] } : a;
+    });
+  }
+
+  function removeAttachment(threadId, docPath) {
+    setAttachments((a) => ({ ...a, [threadId]: (a[threadId] || []).filter((d) => d.path !== docPath) }));
   }
 
   // A recorded voice message travels as bytes; main writes it to disk and then
@@ -603,12 +653,30 @@ export default function App() {
   }
 
   // --- Drag & drop files ---
-  function onDrop(e) {
+  //
+  // Where a dropped file goes depends on who is on the other side. A person
+  // receives it: same file transfer as the paperclip. An agent reads it: the
+  // drop stages it as a document, so you can say what you want done with it
+  // before it goes, rather than handing over a file with no question attached.
+  async function onDrop(e) {
     e.preventDefault();
     setDragOver(false);
     if (!selectedId) return;
-    const paths = [...e.dataTransfer.files].map((f) => f.path).filter(Boolean);
-    if (paths.length) api.sendFilePaths(selectedId, paths);
+    // `file.path` was removed in Electron 32; main resolves it now. The old
+    // property is still read as a fallback so a drop cannot silently do
+    // nothing if this ever runs somewhere that still has it.
+    const paths = [...e.dataTransfer.files].map((f) => api.getPathForFile?.(f) || f.path).filter(Boolean);
+    if (!paths.length) return;
+    if (!isAgentThread(selectedId)) {
+      api.sendFilePaths(selectedId, paths);
+      return;
+    }
+    if (!selectedPeer?.online) {
+      toast('That agent is off — turn it on to give it something to read', 'error');
+      return;
+    }
+    if (selectedPeer.delegate) return; // somebody else's conversation
+    stageDocuments(selectedId, await api.readDocuments(paths));
   }
 
   const inCall = ['outgoing', 'connecting', 'in-call'].includes(call.status);
@@ -723,6 +791,8 @@ export default function App() {
           onOpenLink={openLink}
           linkPreview={fetchLinkPreview}
           draft={draft && draft.threadId === selectedId ? draft : null}
+          docs={attachments[selectedId] || EMPTY_DOCS}
+          onRemoveDoc={(docPath) => removeAttachment(selectedId, docPath)}
           onSend={sendText}
           onAttach={attach}
           onVoice={sendVoice}
@@ -734,7 +804,11 @@ export default function App() {
           onVoiceCall={() => startCall(false)}
           onVideoCall={() => startCall(true)}
         />
-        {dragOver && <div className="drop-overlay">Drop to send</div>}
+        {dragOver && (
+          <div className="drop-overlay">
+            {isAgentThread(selectedId) ? `Drop to give ${selectedPeer?.name || 'the agent'} a document` : 'Drop to send'}
+          </div>
+        )}
       </div>
 
       {/* Incoming push-to-talk audio. Hidden: playback only, no controls. */}

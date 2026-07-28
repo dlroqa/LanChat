@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { ipcMain, dialog, shell } = require('electron');
 const { guessMime } = require('./fileTransfer');
+const { readDocument, composePrompt } = require('./documents');
 const { LOCAL_ORIGIN: AGENT_LOCAL_ORIGIN } = require('./agents');
 const { createRemoteAgents } = require('./agents/remote');
 const { normalizeWebUrl } = require('./webLinks');
@@ -403,18 +404,31 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     return { ok: cleared };
   });
 
-  ipcMain.handle('lanchat:sendChat', (_e, { peerId, text }) => {
+  ipcMain.handle('lanchat:sendChat', (_e, { peerId, text, docPaths }) => {
+    // Attached documents become part of the prompt, because there is nowhere
+    // else for them to go: no agent transport carries attachments. What is sent
+    // and what is remembered therefore differ, and deliberately so — `prompt`
+    // holds the documents' text and goes to the agent, while `text` stays what
+    // the person actually typed and is what the transcript keeps. Storing the
+    // prompt instead would put a whole PDF in the message list and in history.
+    const { docs, prompt } = withDocuments(peerId, text, docPaths);
+
     // Talking to an agent somebody else shared: the frame goes to its owner, and
     // our copy is filed under the agent's thread rather than under the chat with
     // them.
     const remote = remoteAgents.resolveThread(peerId);
-    if (remote) return remoteAgents.send(remote.ownerPeerId, remote.entry, text);
+    if (remote) return remoteAgents.send(remote.ownerPeerId, remote.entry, text, { prompt, docs });
     // `@Hermes …` typed in the chat with the agent's owner is the same
     // conversation reached a different way, so it goes to the same place. This
     // is what makes the agent's thread appear without it having to be shared for
     // direct chat.
     const mention = remoteAgents.matchMention(peerId, text);
-    if (mention && mention.text) return remoteAgents.send(peerId, mention.entry, mention.text);
+    if (mention && mention.text) {
+      return remoteAgents.send(peerId, mention.entry, mention.text, {
+        prompt: composePrompt(mention.text, docs),
+        docs,
+      });
+    }
 
     const message = {
       id: crypto.randomUUID(),
@@ -423,13 +437,16 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       kind: 'text',
       text,
       ts: Date.now(),
+      ...(docs.length && { docs: docs.map((d) => ({ name: d.name, bytes: d.bytes })) }),
     };
-    const ok = hub.send(peerId, { type: 'chat', id: message.id, text, ts: message.ts });
+    const ok = hub.send(peerId, { type: 'chat', id: message.id, text: prompt, ts: message.ts });
     // Undelivered messages are held and retried when the peer reconnects, so
-    // the bubble is stored as pending rather than silently lost.
+    // the bubble is stored as pending rather than silently lost. The queue gets
+    // the prompt, not the stored text: a retry must carry the documents too, or
+    // the agent would eventually be asked about a file it was never given.
     if (!ok) {
       message.pending = true;
-      outbox.enqueue(peerId, message);
+      outbox.enqueue(peerId, { ...message, text: prompt });
     }
     store.append(peerId, message);
     return { ...message, delivered: ok };
@@ -604,12 +621,80 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     return linkPreview.get(rawUrl);
   });
 
+  function isAgentThread(peerId) {
+    return Boolean((agentHub && agentHub.isAgent(peerId)) || remoteAgents.isRemoteAgentId(peerId));
+  }
+
+  // Reads the documents staged against a message and folds them into the prompt.
+  //
+  // A file that cannot be read is reported and dropped rather than failing the
+  // whole send: if two are attached and one is a scan, the question should still
+  // go, with the reason the other did not attached to it.
+  function withDocuments(peerId, text, docPaths) {
+    if (!docPaths || !docPaths.length) return { docs: [], prompt: text };
+    // Documents are for agents. A peer gets files the way they always have —
+    // over the file-transfer endpoint — so this refuses rather than quietly
+    // pasting somebody's PDF into a chat message.
+    if (!isAgentThread(peerId)) {
+      emit('toast', { level: 'error', text: 'Documents can only be attached to an agent.' });
+      return { docs: [], prompt: text };
+    }
+    const docs = [];
+    for (const p of docPaths) {
+      try {
+        docs.push(readDocument(p));
+      } catch (err) {
+        emit('toast', { level: 'error', text: err.message });
+      }
+    }
+    return { docs, prompt: composePrompt(text, docs) };
+  }
+
+  // Checks paths without reading them into a prompt, so the composer can stage a
+  // chip it knows will work — and say why straight away when it will not. Only
+  // the verdict crosses back; the text itself never leaves main.
+  ipcMain.handle('lanchat:readDocuments', (_e, { paths }) =>
+    (paths || []).map((p) => {
+      try {
+        const doc = readDocument(p);
+        return { ok: true, path: doc.path, name: doc.name, bytes: doc.bytes, chars: doc.text.length };
+      } catch (err) {
+        return { ok: false, path: p, name: path.basename(p), error: err.message };
+      }
+    })
+  );
+
+  ipcMain.handle('lanchat:pickDocuments', async () => {
+    const win = getWindow();
+    const result = await dialog.showOpenDialog(win, {
+      title: 'Choose a document for the agent to read',
+      filters: [
+        { name: 'Documents', extensions: ['txt', 'md', 'pdf', 'markdown', 'rst', 'json', 'csv', 'tsv', 'log', 'yml', 'yaml', 'xml', 'html'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+      properties: ['openFile', 'multiSelections'],
+    });
+    if (result.canceled) return [];
+    return result.filePaths.map((p) => {
+      try {
+        const doc = readDocument(p);
+        return { ok: true, path: doc.path, name: doc.name, bytes: doc.bytes, chars: doc.text.length };
+      } catch (err) {
+        return { ok: false, path: p, name: path.basename(p), error: err.message };
+      }
+    });
+  });
+
   async function sendFiles(peerId, paths) {
     const sent = [];
-    // Agents are text-only participants — there is no endpoint to upload to.
-    // True of a remotely-shared agent as much as a local one.
-    if ((agentHub && agentHub.isAgent(peerId)) || remoteAgents.isRemoteAgentId(peerId)) {
-      emit('toast', { level: 'error', text: 'Agents cannot receive files.' });
+    // Agents have no endpoint to upload to: a document reaches one as text in
+    // the prompt, which is what the composer's attach button does. True of a
+    // remotely-shared agent as much as a local one.
+    if (isAgentThread(peerId)) {
+      emit('toast', {
+        level: 'error',
+        text: 'Agents cannot receive files — attach a document for it to read instead.',
+      });
       return { sent };
     }
     for (const p of paths) {

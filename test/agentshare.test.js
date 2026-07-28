@@ -928,3 +928,149 @@ test('withdrawing a shared agent removes it from the peer roster', async (t) => 
   // With the agent gone the mention is just text, so it belongs in the chat again.
   assert.equal(B.store.read(idA).length, 1, 'the message falls back to the human thread');
 });
+
+// ---- documents ----
+//
+// A document reaches an agent as text in the prompt, because no transport
+// carries attachments. That makes the split between what is sent and what is
+// remembered the thing to prove: the agent must get the document's contents,
+// and the transcript must not — a chat history that quoted every attached PDF
+// back at you would be unusable.
+
+test('a document attached to a local agent reaches it, without landing in the transcript', async (t) => {
+  const A = makeNode('docs-local', await freePort());
+  await A.server.start();
+  t.after(() => {
+    A.hub.close();
+    A.server.stop();
+  });
+
+  const file = path.join(A.dir, 'brief.md');
+  fs.writeFileSync(file, '# Brief\n\nShip the thing by Friday.\n');
+
+  const { agent } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  const message = A.call('lanchat:sendChat', {
+    peerId: agent.id,
+    text: 'when is this due?',
+    docPaths: [file],
+  });
+
+  await waitFor(() => A.log.length === 1, 5000, 'the agent to be asked');
+  const prompt = A.log[0];
+  assert.match(prompt, /Ship the thing by Friday\./, 'the agent is given the document');
+  assert.match(prompt, /\[Attached document: brief\.md/);
+  assert.ok(prompt.includes(file), 'and told where the whole file is');
+  assert.ok(prompt.trimEnd().endsWith('when is this due?'), 'with the question last');
+
+  // What is remembered is what was typed, plus the fact a document went with it.
+  assert.equal(message.text, 'when is this due?');
+  assert.deepEqual(
+    message.docs.map((d) => d.name),
+    ['brief.md']
+  );
+  // Only the asking side is checked: this stub agent echoes the prompt back, so
+  // the document's words legitimately appear in its *reply*, which is its answer
+  // and belongs in the thread like any other.
+  const stored = A.store.read(agent.id).filter((m) => m.direction === 'out');
+  assert.equal(stored[0].text, 'when is this due?');
+  assert.ok(!/Ship the thing by Friday/.test(JSON.stringify(stored)), 'the body is not written into what we asked');
+});
+
+test("a document reaches somebody else's shared agent over the wire", async (t) => {
+  const A = makeNode('docs-owner', await freePort());
+  const B = makeNode('docs-peer', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idA = A.getIdentity().id;
+  const { agent } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  await A.agentHub.setSharing(agent.id, { networkWide: true, directChat: true });
+  await connect(A, B);
+  const remoteId = await waitFor(() => remoteIdOn(B, idA, agent.id), 5000, "B to see A's agent");
+
+  // The document lives on B's machine; only its text crosses to A.
+  const file = path.join(B.dir, 'minutes.txt');
+  fs.writeFileSync(file, 'Decision: we go with the blue one.\n');
+
+  B.call('lanchat:sendChat', { peerId: remoteId, text: 'what did we decide?', docPaths: [file] });
+
+  await waitFor(() => A.log.length === 1, 5000, 'the request to reach the agent');
+  assert.match(A.log[0], /Decision: we go with the blue one\./, "the far agent is given the document's text");
+  assert.ok(A.log[0].trimEnd().endsWith('what did we decide?'));
+
+  await waitFor(() => B.store.read(remoteId).some((m) => m.direction === 'in'), 5000, 'the answer');
+
+  // B's own transcript keeps the short form; the document is named, not quoted.
+  const asked = B.store.read(remoteId).find((m) => m.direction === 'out');
+  assert.equal(asked.text, 'what did we decide?');
+  assert.deepEqual(
+    asked.docs.map((d) => d.name),
+    ['minutes.txt']
+  );
+  assert.ok(!/blue one/.test(JSON.stringify(asked)), "B's transcript does not hold the document");
+});
+
+test('a document that cannot be read is reported, and the question still goes', async (t) => {
+  const A = makeNode('docs-bad', await freePort());
+  await A.server.start();
+  t.after(() => {
+    A.hub.close();
+    A.server.stop();
+  });
+
+  const good = path.join(A.dir, 'good.txt');
+  fs.writeFileSync(good, 'readable content');
+  const bad = path.join(A.dir, 'photo.png');
+  fs.writeFileSync(bad, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00]));
+
+  const { agent } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  const message = A.call('lanchat:sendChat', {
+    peerId: agent.id,
+    text: 'have a look',
+    docPaths: [good, bad],
+  });
+
+  await waitFor(() => A.log.length === 1, 5000, 'the agent to be asked');
+  assert.match(A.log[0], /readable content/, 'the file that could be read still went');
+  assert.ok(!/photo\.png\]/.test(A.log[0]), 'and the one that could not did not');
+  assert.deepEqual(
+    message.docs.map((d) => d.name),
+    ['good.txt']
+  );
+  // The reason is said out loud rather than swallowed.
+  const toast = A.events.find((e) => e.type === 'toast' && /photo\.png/.test(e.payload?.text || ''));
+  assert.ok(toast, 'the user is told why one file did not go');
+  assert.equal(toast.payload.level, 'error');
+});
+
+test('documents cannot be smuggled into a chat with a person', async (t) => {
+  const A = makeNode('docs-guard-a', await freePort());
+  const B = makeNode('docs-guard-b', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  await connect(A, B);
+  const idB = B.getIdentity().id;
+  const file = path.join(A.dir, 'private.txt');
+  fs.writeFileSync(file, 'SECRET CONTENTS');
+
+  const message = A.call('lanchat:sendChat', { peerId: idB, text: 'hello', docPaths: [file] });
+
+  assert.equal(message.text, 'hello');
+  assert.equal(message.docs, undefined);
+  await waitFor(() => B.store.read(A.getIdentity().id).length === 1, 5000, 'the message to arrive');
+  assert.equal(B.store.read(A.getIdentity().id)[0].text, 'hello', 'and it is only the message');
+  assert.ok(A.events.some((e) => e.type === 'toast' && /only be attached to an agent/i.test(e.payload?.text || '')));
+});

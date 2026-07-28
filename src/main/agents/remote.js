@@ -135,7 +135,11 @@ function createRemoteAgents({ hub, store }) {
   // Send to a remote agent, whether reached by @name or by opening its thread.
   // Using it reveals the contact, which is how a "dummy chat" appears for an
   // agent the owner shared without direct chat switched on.
-  function send(ownerPeerId, entry, text) {
+  // `prompt` is what the agent is asked; `text` is what the person typed. They
+  // differ only when documents are attached, and the split is the point: the
+  // documents' text has to travel to the owner's machine to reach the agent,
+  // but a transcript that kept it would be a transcript of a PDF.
+  function send(ownerPeerId, entry, text, { prompt, docs = [] } = {}) {
     // Asking again while the question we already sent is still waiting to be
     // read. It would not be answered any sooner, so it is refused here rather
     // than sent: never written down, never on the wire, and the text goes back
@@ -150,8 +154,12 @@ function createRemoteAgents({ hub, store }) {
       return {
         rejected: true,
         // Handed back so the composer can be refilled — a refusal must not cost
-        // somebody the sentence they wrote.
+        // somebody the sentence they wrote, nor the documents they attached to
+        // it, which they would otherwise have to find and drag in again.
         text,
+        // Paths only. The extracted text stays in main; the composer needs no
+        // more than enough to put the chips back.
+        docs: docs.map((d) => ({ path: d.path, name: d.name, bytes: d.bytes })),
         notice: {
           id: crypto.randomUUID(),
           peerId: entry.id,
@@ -172,8 +180,9 @@ function createRemoteAgents({ hub, store }) {
       kind: 'text',
       text,
       ts: Date.now(),
+      ...(docs.length && { docs: docs.map((d) => ({ name: d.name, bytes: d.bytes })) }),
     };
-    const ok = hub.send(ownerPeerId, { type: 'agent-chat', agentId: entry.agentId, text });
+    const ok = hub.send(ownerPeerId, { type: 'agent-chat', agentId: entry.agentId, text: prompt ?? text });
     store.append(entry.id, message);
     return { ...message, delivered: ok };
   }

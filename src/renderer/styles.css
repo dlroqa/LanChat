@@ -877,13 +877,112 @@ input:focus-visible {
 }
 
 /* ---------------- Composer ---------------- */
+/* The panel is the wrapper, not the input row: staged documents sit above the
+   textarea and have to share its background and its top rule, or the composer
+   reads as two stacked bars instead of one place where a message is written. */
+.composer-wrap {
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+}
 .composer {
   display: flex;
   align-items: flex-end;
   gap: 8px;
   padding: 12px 16px 16px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-2);
+}
+
+/* Documents staged against the next message to an agent. */
+.composer-docs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 16px 0;
+}
+.composer-doc {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 260px;
+  padding: 5px 6px 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 12.5px;
+  color: var(--fg);
+  animation: doc-chip-in 0.16s ease both;
+}
+.composer-doc svg {
+  flex: none;
+  opacity: 0.75;
+}
+/* The name is what identifies the file, so it is the part allowed to shrink —
+   truncated from the end, with the full path in the tooltip. */
+.composer-doc-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-doc-size {
+  flex: none;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.composer-doc-remove {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  color: var(--fg-muted);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.composer-doc-remove:hover {
+  background: var(--border);
+  color: var(--fg);
+}
+@keyframes doc-chip-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-doc {
+    animation: none;
+  }
+}
+
+/* The same document, named again inside the bubble it went with. */
+.bubble-docs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.bubble-doc {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 9px;
+  border-radius: 999px;
+  /* Tinted from the bubble's own text colour so this works on both the sent and
+     received sides without knowing which one it is on. */
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bubble-doc svg {
+  flex: none;
+  opacity: 0.8;
+}
+.bubble-doc-size {
+  opacity: 0.65;
+  font-variant-numeric: tabular-nums;
 }
 .composer textarea {
   flex: 1;

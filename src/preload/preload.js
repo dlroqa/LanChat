@@ -1,6 +1,6 @@
 'use strict';
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 // Minimal, explicit API surface exposed to the renderer. No Node globals leak.
 const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
@@ -30,13 +30,30 @@ contextBridge.exposeInMainWorld('lanchat', {
   getHistory: (peerId) => invoke('lanchat:getHistory', peerId),
   clearHistory: (peerId) => invoke('lanchat:clearHistory', { peerId }),
   exportHistory: (peerId, name) => invoke('lanchat:exportHistory', { peerId, name }),
-  sendChat: (peerId, text) => invoke('lanchat:sendChat', { peerId, text }),
+  sendChat: (peerId, text, docPaths) => invoke('lanchat:sendChat', { peerId, text, docPaths }),
   sendTyping: (peerId, isTyping) => invoke('lanchat:sendTyping', { peerId, isTyping }),
   sendSignal: (peerId, signal) => invoke('lanchat:sendSignal', { peerId, signal }),
 
   pickAndSendFile: (peerId) => invoke('lanchat:pickAndSendFile', { peerId }),
   sendFilePaths: (peerId, paths) => invoke('lanchat:sendFilePaths', { peerId, paths }),
   sendVoice: (peerId, data, ext) => invoke('lanchat:sendVoice', { peerId, data, ext }),
+
+  // Documents an agent is asked to read. Both return a verdict per file — name,
+  // size and either `ok` or the reason — never the text, which is read in main
+  // when the message is sent and never travels through the window.
+  pickDocuments: () => invoke('lanchat:pickDocuments'),
+  readDocuments: (paths) => invoke('lanchat:readDocuments', { paths }),
+
+  // The path behind a dropped file. Electron 32 removed the `path` property
+  // that used to be stapled onto File objects, and this is what replaced it;
+  // without it every drop looks like a file with no location on disk.
+  getPathForFile: (file) => {
+    try {
+      return webUtils.getPathForFile(file) || null;
+    } catch {
+      return null;
+    }
+  },
 
   setUnread: (count) => invoke('lanchat:setUnread', count),
 
