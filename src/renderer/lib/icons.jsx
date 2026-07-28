@@ -177,3 +177,10 @@ export const Users = (p) => (
     <path d="M16 3.13a4 4 0 0 1 0 7.75" />
   </S>
 );
+// Code brackets, for the developer panel.
+export const Code = (p) => (
+  <S {...p}>
+    <polyline points="16 18 22 12 16 6" />
+    <polyline points="8 6 2 12 8 18" />
+  </S>
+);

@@ -9,11 +9,18 @@ export default function IncomingCall({ call, onAccept, onDecline }) {
   const [cameraOff, setCameraOff] = useState(false);
 
   return (
-    <div className="incoming" role="alertdialog" aria-label="Incoming call">
+    <div className={`incoming ${call.support ? 'support' : ''}`} role="alertdialog" aria-label="Incoming call">
       <Avatar name={call.peerName} id={call.peerId} />
       <div className="meta">
-        <div className="name">{call.peerName || 'Peer'}</div>
-        <div className="sub">Incoming {call.withVideo ? 'video' : 'voice'} call…</div>
+        <div className="name">
+          {call.peerName || 'Peer'}
+          {call.support && <span className="tag">developer</span>}
+        </div>
+        <div className="sub">
+          {call.support
+            ? 'Wants a support session — share your camera & mic to get help'
+            : `Incoming ${call.withVideo ? 'video' : 'voice'} call…`}
+        </div>
       </div>
 
       <div className="pre-toggles">

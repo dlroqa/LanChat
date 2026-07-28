@@ -104,7 +104,22 @@ export default function CallOverlay({
         <div className="call-status">
           <div style={{ fontWeight: 600 }}>{call.peerName || 'Peer'}</div>
           <div className="t">{statusText}</div>
+          {call.support && (
+            <span className="support-badge">
+              {call.role === 'caller' ? `Assisting ${call.peerName || 'peer'}` : `Being assisted by ${call.peerName || 'peer'}`}
+            </span>
+          )}
         </div>
+
+        {/* Read-only device readout for the developer's side of a support
+            session — never a control for the client's settings, just labels
+            they already shared by accepting. */}
+        {!pip && call.support && call.role === 'caller' && call.remoteDeviceInfo && (
+          <div className="support-info">
+            <div>Client's mic: {call.remoteDeviceInfo.mic || 'unknown'}</div>
+            <div>Client's camera: {call.remoteDeviceInfo.camera || 'unknown'}</div>
+          </div>
+        )}
 
         {/* Remote audio always plays here, independent of any video element. */}
         <audio ref={remoteAudioRef} autoPlay />

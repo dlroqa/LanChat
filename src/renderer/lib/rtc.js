@@ -4,13 +4,29 @@
 
 import { serializeCandidate, serializeDescription } from './signal.js';
 
+// Pure helpers for the `support` flag threaded through offer/answer signals,
+// kept separate from CallManager so they're testable without a DOM. A support
+// session is not a new signaling channel — it's a plain 1:1 offer/answer with
+// one added field, so it goes through the exact same consent-gated
+// accept/decline path (IncomingCall.jsx) as every other call.
+export function offerPayload({ callId, withVideo, name, sdp, support }) {
+  return { kind: 'offer', callId, withVideo, name, sdp, support: Boolean(support) };
+}
+
+// `deviceInfo` (mic/camera labels) is only ever attached when the callee is
+// accepting a support session — an ordinary call's answer shape is unchanged.
+export function answerPayload({ callId, sdp, support, deviceInfo }) {
+  return support && deviceInfo ? { kind: 'answer', callId, sdp, deviceInfo } : { kind: 'answer', callId, sdp };
+}
+
 export class CallManager {
-  constructor({ sendSignal, onState, getIceServers, getSelfName, getDevices, onError, onPeerLeft }) {
+  constructor({ sendSignal, onState, getIceServers, getSelfName, getDevices, getDeviceLabels, onError, onPeerLeft }) {
     this.sendSignal = sendSignal;
     this.onState = onState;
     this.getIceServers = getIceServers || (() => []);
     this.getSelfName = getSelfName || (() => null);
     this.getDevices = getDevices || (() => ({ audioInputId: null, videoInputId: null }));
+    this.getDeviceLabels = getDeviceLabels || null;
     this.onError = onError || ((m) => console.error('[call]', m));
     this.onPeerLeft = onPeerLeft || (() => {});
     this.reset();
@@ -29,6 +45,11 @@ export class CallManager {
     this.muted = false;
     this.cameraOff = false;
     this.peerName = null;
+    // Support-session state. `role` distinguishes which side requested it, for
+    // the "Assisting X" / "Being assisted by X" badge in CallOverlay.
+    this.support = false;
+    this.role = null; // 'caller' | 'callee'
+    this.remoteDeviceInfo = null; // { mic, camera } labels, read-only display
   }
 
   // All signaling goes through here so a transport failure can never be silent
@@ -59,6 +80,9 @@ export class CallManager {
       remoteStream: this.remoteStream,
       muted: this.muted,
       cameraOff: this.cameraOff,
+      support: this.support,
+      role: this.role,
+      remoteDeviceInfo: this.remoteDeviceInfo,
     });
   }
 
@@ -158,13 +182,19 @@ export class CallManager {
   }
 
   // ---- outgoing ----
-  async start(peer, withVideo) {
+  // `opts.support` marks this as a developer-initiated support session rather
+  // than an ordinary call. It changes nothing about the transport or consent
+  // flow — the callee still sees an explicit accept/decline (IncomingCall.jsx
+  // just shows different copy for it).
+  async start(peer, withVideo, opts = {}) {
     if (this.status !== 'idle') return;
     this.peerId = peer.id;
     this.peerName = peer.name;
     this.withVideo = withVideo;
     this.callId = this.makeId();
     this.status = 'outgoing';
+    this.role = 'caller';
+    this.support = Boolean(opts.support);
     this.emit();
     try {
       this.localStream = await this.getMedia(withVideo);
@@ -177,13 +207,15 @@ export class CallManager {
     const offer = await this.pc.createOffer();
     await this.pc.setLocalDescription(offer);
     // Carry our display name so the callee can label the incoming call.
-    this.send({
-      kind: 'offer',
-      callId: this.callId,
-      withVideo,
-      name: this.getSelfName(),
-      sdp: serializeDescription(this.pc.localDescription || offer),
-    });
+    this.send(
+      offerPayload({
+        callId: this.callId,
+        withVideo,
+        name: this.getSelfName(),
+        sdp: serializeDescription(this.pc.localDescription || offer),
+        support: this.support,
+      })
+    );
     this.emit();
   }
 
@@ -203,6 +235,8 @@ export class CallManager {
         this.peerName = signal.name || null;
         this.pendingOffer = signal.sdp;
         this.status = 'incoming';
+        this.role = 'callee';
+        this.support = Boolean(signal.support);
         this.emit();
         break;
       }
@@ -210,6 +244,7 @@ export class CallManager {
         if (!this.pc) return;
         await this.pc.setRemoteDescription(signal.sdp);
         await this.flushCandidates();
+        this.remoteDeviceInfo = signal.deviceInfo || null;
         this.status = 'in-call';
         this.emit();
         break;
@@ -278,7 +313,26 @@ export class CallManager {
     await this.flushCandidates();
     const answer = await this.pc.createAnswer();
     await this.pc.setLocalDescription(answer);
-    this.send({ kind: 'answer', callId: this.callId, sdp: serializeDescription(this.pc.localDescription || answer) });
+    // Sharing device labels back is scoped to a support session and is
+    // read-only display for the developer (see CallOverlay) — it never lets
+    // the other side change this device's settings. A failure to read labels
+    // must never block accepting the call itself.
+    let deviceInfo = null;
+    if (this.support && this.getDeviceLabels) {
+      try {
+        deviceInfo = await this.getDeviceLabels();
+      } catch {
+        deviceInfo = null;
+      }
+    }
+    this.send(
+      answerPayload({
+        callId: this.callId,
+        sdp: serializeDescription(this.pc.localDescription || answer),
+        support: this.support,
+        deviceInfo,
+      })
+    );
     this.emit();
   }
 

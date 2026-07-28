@@ -42,7 +42,7 @@ const SOUND_KINDS = Object.freeze({
 //   - bus events -> webContents 'lanchat:event' : main -> renderer notifications
 // The renderer only ever sees the small, explicit surface exposed in preload.js.
 
-function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, updater, linkStats, pip, agentHub, outbox, downloadsDir, getWindow, revealWindow, applyLoginItem, onUnread }) {
+function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, updater, linkStats, pip, agentHub, outbox, devGate, downloadsDir, getWindow, revealWindow, applyLoginItem, onUnread }) {
   function emit(type, payload) {
     const win = getWindow();
     if (win && !win.isDestroyed()) win.webContents.send('lanchat:event', { type, payload });
@@ -335,6 +335,25 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   );
 
   ipcMain.handle('lanchat:stopAgentRun', (_e, { agentId }) => agentHub.stopRun(agentId));
+
+  // Developer panel gate. Verification and the password hash both stay in main
+  // — the renderer only ever sees { ok, lockedMs? } back, never the hash itself,
+  // and this deliberately never touches config.js/publicConfig().
+  ipcMain.handle('lanchat:verifyDevPassword', (_e, password) => devGate.verify(password));
+
+  ipcMain.handle('lanchat:setDevPassword', (_e, { newPassword } = {}) => {
+    try {
+      devGate.setPassword(newPassword);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('lanchat:lockDevGate', () => {
+    devGate.lock();
+    return true;
+  });
 
   // Where conversations and received files live, so the UI can point at them.
   ipcMain.handle('lanchat:getPaths', () => ({

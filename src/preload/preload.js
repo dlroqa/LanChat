@@ -26,6 +26,12 @@ contextBridge.exposeInMainWorld('lanchat', {
     invoke('lanchat:answerAgentApproval', { agentId, runId, choice }),
   stopAgentRun: (agentId) => invoke('lanchat:stopAgentRun', { agentId }),
 
+  // Developer panel gate. Only a boolean verdict ever comes back — the hash
+  // and password never leave the main process.
+  verifyDevPassword: (password) => invoke('lanchat:verifyDevPassword', password),
+  setDevPassword: (newPassword) => invoke('lanchat:setDevPassword', { newPassword }),
+  lockDevGate: () => invoke('lanchat:lockDevGate'),
+
   getPaths: () => invoke('lanchat:getPaths'),
   getHistory: (peerId) => invoke('lanchat:getHistory', peerId),
   clearHistory: (peerId) => invoke('lanchat:clearHistory', { peerId }),

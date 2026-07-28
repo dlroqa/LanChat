@@ -5,6 +5,8 @@ import CallOverlay from './components/CallOverlay.jsx';
 import IncomingCall from './components/IncomingCall.jsx';
 import ProfileModal from './components/ProfileModal.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
+import DevPasswordModal from './components/DevPasswordModal.jsx';
+import DevPanel from './components/DevPanel.jsx';
 import AddPeerModal from './components/AddPeerModal.jsx';
 import UpdatePrompt from './components/UpdatePrompt.jsx';
 import UpdateBanner from './components/UpdateBanner.jsx';
@@ -17,6 +19,7 @@ import GroupCallView from './components/GroupCallView.jsx';
 import GroupInvite from './components/GroupInvite.jsx';
 import NewGroupCallModal from './components/NewGroupCallModal.jsx';
 import { GroupCallManager } from './lib/groupCall.js';
+import { listDevices, labelFor } from './lib/devices.js';
 import { isAgentThread } from './lib/agentPhrase.js';
 import { useAgentMusic } from './lib/agentMusic.js';
 import { trackUrl, DEFAULT_TRACK } from './lib/agentMusicTrack.js';
@@ -60,7 +63,7 @@ export default function App() {
   const [unread, setUnread] = useState({});
   const [progress, setProgress] = useState({});
   const [toasts, setToasts] = useState([]);
-  const [modal, setModal] = useState(null); // 'profile' | 'settings' | 'addpeer'
+  const [modal, setModal] = useState(null); // 'profile' | 'devgate' | 'devpanel' | 'settings' | 'addpeer'
   const [firstRun, setFirstRun] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [call, setCall] = useState({ status: 'idle' });
@@ -118,6 +121,18 @@ export default function App() {
         audioInputId: configRef.current.audioInputId || null,
         videoInputId: configRef.current.videoInputId || null,
       }),
+      // Only read for a support session's answer (see rtc.js accept()) — a
+      // read-only label readout for the developer, never a way to change the
+      // other side's settings remotely.
+      getDeviceLabels: async () => {
+        const { audioInputs, videoInputs } = await listDevices();
+        const mic = audioInputs.find((d) => d.deviceId === configRef.current.audioInputId) || audioInputs[0];
+        const camera = videoInputs.find((d) => d.deviceId === configRef.current.videoInputId) || videoInputs[0];
+        return {
+          mic: mic ? labelFor(mic, audioInputs.indexOf(mic), 'Microphone') : null,
+          camera: camera ? labelFor(camera, videoInputs.indexOf(camera), 'Camera') : null,
+        };
+      },
     });
   }
   if (!ringerRef.current) ringerRef.current = new Ringer();
@@ -652,6 +667,22 @@ export default function App() {
     callRef.current.start(selectedPeer, withVideo).catch((err) => toast(`Cannot start call: ${err.message}`, 'error'));
   }
 
+  // Developer panel → "Request support session". This is not a silent path to
+  // a peer's camera/mic: it starts an ordinary outgoing call tagged
+  // `support: true`, which the peer sees as an explicit accept/decline prompt
+  // in IncomingCall.jsx — exactly the same consent gate any other call goes
+  // through.
+  function requestSupportSession(peer) {
+    setModal(null);
+    if (call.status !== 'idle') {
+      toast('Finish your current call first', 'error');
+      return;
+    }
+    callRef.current
+      .start(peer, true, { support: true })
+      .catch((err) => toast(`Cannot start session: ${err.message}`, 'error'));
+  }
+
   // --- Drag & drop files ---
   //
   // Where a dropped file goes depends on who is on the other side. A person
@@ -764,6 +795,7 @@ export default function App() {
         showAddresses={config.showAddresses}
         onSelect={setSelectedId}
         onOpenProfile={() => setModal('profile')}
+        onOpenDev={() => setModal('devgate')}
         onOpenSettings={() => setModal('settings')}
         onAddPeer={() => setModal('addpeer')}
         onNewGroupCall={() => setModal('newgroup')}
@@ -852,6 +884,12 @@ export default function App() {
 
       {modal === 'profile' && (
         <ProfileModal self={self} firstRun={firstRun} onSave={saveProfile} onClose={() => setModal(null)} />
+      )}
+      {modal === 'devgate' && (
+        <DevPasswordModal onUnlock={() => setModal('devpanel')} onClose={() => setModal(null)} />
+      )}
+      {modal === 'devpanel' && (
+        <DevPanel peers={peers} onRequestSupport={requestSupportSession} onClose={() => setModal(null)} />
       )}
       {modal === 'settings' && (
         <SettingsModal

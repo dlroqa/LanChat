@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import Avatar from './Avatar.jsx';
 import QueueBadge from './QueueBadge.jsx';
-import { Settings, Plus, Search, Refresh, Users, GroupCall } from '../lib/icons.jsx';
+import { Settings, Plus, Search, Refresh, Users, GroupCall, Code } from '../lib/icons.jsx';
 import { platformLabel } from '../lib/util.js';
 
 export default function Sidebar({
@@ -15,6 +15,7 @@ export default function Sidebar({
   showAddresses,
   onSelect,
   onOpenProfile,
+  onOpenDev,
   onOpenSettings,
   onAddPeer,
   onRefresh,
@@ -101,6 +102,9 @@ export default function Sidebar({
         </div>
         <button className="icon-btn" onClick={onOpenProfile} title="Edit profile">
           <Users size={18} />
+        </button>
+        <button className="icon-btn" onClick={onOpenDev} title="Developer">
+          <Code size={18} />
         </button>
         <button className="icon-btn" onClick={onOpenSettings} title="Settings">
           <Settings size={18} />

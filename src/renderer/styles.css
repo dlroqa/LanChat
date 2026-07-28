@@ -1359,6 +1359,11 @@ input:focus-visible {
   color: var(--fg-faint);
   margin-top: 5px;
 }
+.field-error {
+  font-size: 12px;
+  color: var(--danger);
+  margin-top: 6px;
+}
 .modal-actions {
   display: flex;
   gap: 10px;
@@ -1487,6 +1492,33 @@ input:focus-visible {
   color: var(--fg-muted);
   margin-top: 2px;
 }
+/* Marks a support session as distinct from an ordinary call — reuses the
+   .tag.good "go" colour since being in one is an active, sanctioned state. */
+.support-badge {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--online) 18%, transparent);
+  color: var(--online);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+/* Read-only device-label readout, shown only to the developer's side of a
+   support session once the client has accepted and shared it. */
+.support-info {
+  position: absolute;
+  top: 22px;
+  left: 22px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.4);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: left;
+}
 .call-bar {
   display: flex;
   align-items: center;
@@ -1586,6 +1618,12 @@ input:focus-visible {
   z-index: 300;
   animation: dropin 0.2s ease;
   min-width: 340px;
+}
+/* A support request has to say what is being asked for, which is a longer
+   sentence than "Incoming video call…" — give it the room to read on one line
+   rather than wrapping the consent copy into a narrow column. */
+.incoming.support {
+  min-width: 520px;
 }
 .incoming .meta {
   flex: 1;
@@ -3093,6 +3131,42 @@ kbd {
 .discovered-row .sub {
   font-size: 12px;
   color: var(--fg-faint);
+}
+
+/* ---- developer panel — online contacts -------------------------------------- */
+
+.dev-contacts {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.dev-contact-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.dev-contact-row:last-child {
+  border-bottom: none;
+}
+
+.dev-contact-row .meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.dev-contact-row .name {
+  font-weight: 500;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Filesystem paths: monospace and selectable, since they exist to be copied. */

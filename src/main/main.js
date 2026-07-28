@@ -17,6 +17,7 @@ const { createUpdater } = require('./updater');
 const { createLinkStats } = require('./linkStats');
 const { createPip } = require('./pip');
 const { createAgentHub } = require('./agents');
+const { DevGate } = require('./devgate');
 const { Outbox } = require('./outbox');
 const { normalizeWebUrl } = require('./webLinks');
 const { createSplash, closeSplash, splashIsOpen, createGate } = require('./splash');
@@ -205,6 +206,7 @@ async function startServices() {
   const fileSender = createFileSender({ hub, getIdentity, bus });
 
   const outbox = new Outbox(app.getPath('userData'), { hub, bus, store });
+  const devGate = new DevGate(app.getPath('userData'));
   const updater = createUpdater({ bus });
   const linkStats = createLinkStats({ hub, bus });
   pip = createPip({ getWindow, onChange: (on) => bus.emit('pip', on) });
@@ -229,6 +231,7 @@ async function startServices() {
     pip,
     agentHub,
     outbox,
+    devGate,
     downloadsDir,
     getWindow,
     revealWindow: showWindow,
