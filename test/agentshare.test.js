@@ -937,6 +937,122 @@ test('withdrawing a shared agent removes it from the peer roster', async (t) => 
   assert.equal(B.store.read(idA).length, 1, 'the message falls back to the human thread');
 });
 
+test('switching direct chat off takes the contact off the peer roster, even after they used it', async (t) => {
+  const A = makeNode('owner5', await freePort());
+  const B = makeNode('peer5', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idA = A.getIdentity().id;
+  const { agent } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  await A.agentHub.setSharing(agent.id, { networkWide: true, directChat: true });
+
+  await connect(A, B);
+  const remoteId = await waitFor(() => remoteIdOn(B, idA, agent.id), 5000, 'B to see the agent');
+
+  // Having talked to it is exactly the case that used to pin the contact in
+  // place: the roster entry outlived the grant that put it there.
+  B.call('lanchat:sendChat', { peerId: remoteId, text: 'hello' });
+  await waitFor(() => B.store.read(remoteId).some((m) => m.direction === 'in'), 5000, 'an answer');
+
+  await A.agentHub.setSharing(agent.id, { directChat: false });
+  await waitFor(() => !B.hub.identities.has(remoteId), 5000, 'the contact to go away');
+  assert.equal(B.hub.presenceList().find((p) => p.id === remoteId), undefined);
+
+  // Off means "not in their list", not "revoked": it is still reachable by name,
+  // and using it brings the contact back — with the transcript intact.
+  await waitFor(
+    () => {
+      B.call('lanchat:sendChat', { peerId: idA, text: '@Hermes still there?' });
+      return A.log.length > 1;
+    },
+    5000,
+    'the mention to reach the agent'
+  );
+  await waitFor(() => B.hub.identities.has(remoteId), 5000, 'the contact to come back');
+  assert.ok(
+    B.store.read(remoteId).some((m) => m.text === 'hello'),
+    'and what was said before it was hidden is still there'
+  );
+  assert.deepEqual(B.store.read(idA), [], 'the mention never entered the chat with A');
+});
+
+test('a retraction that never landed is finished on the next handshake', async (t) => {
+  const A = makeNode('owner6', await freePort());
+  const B = makeNode('peer6', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idA = A.getIdentity().id;
+  const idB = B.getIdentity().id;
+  const { agent } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  await A.agentHub.setSharing(agent.id, { networkWide: true, directChat: true });
+
+  await connect(A, B);
+  const remoteId = await waitFor(() => remoteIdOn(B, idA, agent.id), 5000, 'B to see the agent');
+
+  // The frame is lost — a dropped link at the wrong moment, which is precisely
+  // when a stale grant would otherwise survive on the far machine.
+  const realSend = A.hub.send.bind(A.hub);
+  A.hub.send = (peerId, obj) => (obj.type === 'agent-withdraw' ? false : realSend(peerId, obj));
+  await A.agentHub.setSharing(agent.id, { networkWide: false });
+  await new Promise((r) => setTimeout(r, 200));
+  assert.ok(B.hub.identities.has(remoteId), 'the retraction did not land');
+
+  // Reconnecting is what finishes it: the handshake re-sends the whole picture,
+  // withdrawals included.
+  A.hub.send = realSend;
+  A.bus.emit('peer-hello', { peerId: idB });
+  await waitFor(() => !B.hub.identities.has(remoteId), 5000, 'the contact to disappear');
+});
+
+test('a peer is never told about agents it was not given', async (t) => {
+  const A = makeNode('owner7', await freePort());
+  const B = makeNode('peer7', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idB = B.getIdentity().id;
+  const { agent: shared } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  const { agent: privateOne } = await A.agentHub.add({ name: 'Scribe', kind: 'http', config: {} });
+  await A.agentHub.setSharing(shared.id, { networkWide: true, directChat: true });
+
+  const sent = [];
+  const realSend = A.hub.send.bind(A.hub);
+  A.hub.send = (peerId, obj) => {
+    sent.push(obj);
+    return realSend(peerId, obj);
+  };
+
+  await connect(A, B);
+  await waitFor(() => sent.some((f) => f.type === 'agent-advert'), 5000, 'the advert for the shared one');
+  A.bus.emit('peer-hello', { peerId: idB });
+  await new Promise((r) => setTimeout(r, 200));
+
+  assert.ok(
+    !sent.some((f) => f.agentId === privateOne.id),
+    'the local-only agent is not mentioned at all, not even to be withdrawn'
+  );
+});
+
 // ---- documents ----
 //
 // A document reaches an agent as text in the prompt, because no transport

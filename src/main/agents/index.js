@@ -97,14 +97,6 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     return (record.allowedPeers || []).includes(peerId);
   }
 
-  // Every peer entitled to reach the agent right now, among those connected.
-  function entitledPeers(record) {
-    return hub
-      .presenceList()
-      .filter((p) => p.online && p.kind !== 'agent' && peerMayReach(record, p.id))
-      .map((p) => p.id);
-  }
-
   // ---- fair-share turns ----
 
   // agentId -> { holder, used, queue: [peerId], last, warned, quiet, held }
@@ -693,14 +685,48 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     };
   }
 
+  // What each peer was last told about: peerId -> Set<agentId>. It is what makes
+  // a withdrawal something we can be sure of rather than something we fire and
+  // forget — an agent stays on this list until the peer has actually been told
+  // to let go of it, so the next handshake finishes the job if the frame never
+  // landed. It also keeps the retraction quiet: a peer is only ever told about
+  // agents it was given, never about the ones it was not.
+  const advertised = new Map();
+
+  // What one peer should be holding for one agent right now: the card, or
+  // nothing at all. Every announcement goes through here, so switching a grant
+  // off travels by exactly the same path — and at the same speed — as switching
+  // it on.
+  function sendShare(peerId, record) {
+    const held = advertised.get(peerId) || new Set();
+    if (record.enabled !== false && peerMayReach(record, peerId)) {
+      if (!hub.send(peerId, advertFor(record))) return;
+      held.add(record.id);
+      advertised.set(peerId, held);
+      return;
+    }
+    // Nothing to take back — say nothing, rather than telling a peer about an
+    // agent it was never offered.
+    if (!held.has(record.id)) return;
+    if (!hub.send(peerId, { type: 'agent-withdraw', agentId: record.id })) return;
+    held.delete(record.id);
+    if (held.size === 0) advertised.delete(peerId);
+  }
+
   function announce(record) {
-    if (!record || record.enabled === false) return withdraw(record);
-    const entitled = new Set(entitledPeers(record));
+    if (!record) return;
     for (const peer of hub.presenceList()) {
       if (!peer.online || peer.kind === 'agent') continue;
-      if (entitled.has(peer.id)) hub.send(peer.id, advertFor(record));
-      else hub.send(peer.id, { type: 'agent-withdraw', agentId: record.id });
+      sendShare(peer.id, record);
     }
+  }
+
+  // Everything this peer should know about our agents, in one pass. Used on
+  // handshake, where the withdrawals matter as much as the adverts: a peer that
+  // was away — or that missed the frame — when a grant was taken back would
+  // otherwise come back still holding a contact we revoked.
+  function announceAllTo(peerId) {
+    for (const record of registry.list()) sendShare(peerId, record);
   }
 
   // Unconditional retraction — used when the agent is disabled or removed, where
@@ -708,20 +734,23 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   function withdraw(record) {
     if (!record) return;
     hub.broadcast({ type: 'agent-withdraw', agentId: record.id });
+    // The record is going away, so there is nothing left to re-send later; drop
+    // it from the bookkeeping rather than leaving an id no peer can be told about.
+    for (const [peerId, held] of advertised) {
+      held.delete(record.id);
+      if (held.size === 0) advertised.delete(peerId);
+    }
   }
 
   function announceAll() {
     for (const record of registry.list()) announce(record);
   }
 
-  // A peer that was offline when sharing changed never got the frame, so
-  // re-announce whenever one completes a handshake.
+  // A peer that was offline when sharing changed never got the frame, so the
+  // whole picture is re-sent whenever one completes a handshake.
   bus.on('peer-hello', ({ peerId }) => {
     if (!peerId) return;
-    for (const record of registry.list()) {
-      if (record.enabled === false) continue;
-      if (peerMayReach(record, peerId)) hub.send(peerId, advertFor(record));
-    }
+    announceAllTo(peerId);
   });
 
   // ---- public API ----

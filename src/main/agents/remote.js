@@ -68,6 +68,16 @@ function createRemoteAgents({ hub, store }) {
     entry.socket = null;
   }
 
+  // Take the contact off the roster while keeping what we know about the agent.
+  // This is the other half of show(): the entry stays, so `@name` still files
+  // locally and the transcript stays on disk, but nothing about it is left in
+  // the roster. The next message in either direction shows it again.
+  function conceal(entry) {
+    hide(entry);
+    hub.identities.delete(entry.id);
+    hub.emitPresence();
+  }
+
   // An owner is telling us about one of their agents.
   function adopt(ownerPeerId, msg) {
     if (!ownerPeerId || !msg || !msg.agentId || !msg.name) return null;
@@ -83,10 +93,15 @@ function createRemoteAgents({ hub, store }) {
     entry.agentKind = msg.agentKind || 'http';
     entry.directChat = msg.directChat === true;
     agents.set(msg.agentId, entry);
-    // Known either way — that is what lets `@name` be filed locally — but only
-    // put in the roster up front when the owner opted into direct chat.
-    if (entry.directChat || entry.socket) show(ownerPeerId, entry);
-    else hub.emitPresence();
+    // Known either way — that is what lets `@name` be filed locally — but the
+    // roster follows the owner's switch in *both* directions. Switching direct
+    // chat off has to take the contact away as promptly as switching it on put
+    // it there; leaving it because we happen to have used the agent already
+    // would make "off" mean nothing on the machine it was meant to affect.
+    // Nothing is lost by it: the thread stays on disk, `@name` still reaches the
+    // agent, and either an answer or a question brings the contact back.
+    if (entry.directChat) show(ownerPeerId, entry);
+    else conceal(entry);
     return entry;
   }
 
@@ -94,11 +109,9 @@ function createRemoteAgents({ hub, store }) {
     const agents = byOwner.get(ownerPeerId);
     const entry = agents && agents.get(agentId);
     if (!entry) return false;
-    hide(entry);
-    hub.identities.delete(entry.id);
+    conceal(entry); // emits presence, so the roster loses it in the same tick
     agents.delete(agentId);
     if (agents.size === 0) byOwner.delete(ownerPeerId);
-    hub.emitPresence();
     return true;
   }
 
