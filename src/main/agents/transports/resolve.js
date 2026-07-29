@@ -134,6 +134,35 @@ function resolveExecutable(file) {
   return findIn(extra, name) || name;
 }
 
+// The environment for a spawned agent, with the directories we had to go
+// looking in added to its PATH.
+//
+// Resolving the executable is only half the problem: an agent that shells out
+// to its own tools inherits our environment, so one started from a desktop
+// session can connect and then fail at tool-call time — a failure that looks
+// nothing like a PATH problem and is far harder to diagnose than the ENOENT it
+// replaces.
+//
+// Deliberately additive. The existing PATH keeps its order and its precedence,
+// nothing is removed or reordered, and no other variable is touched — an agent
+// must resolve the same tools it would have, plus the ones it was missing.
+function childEnv(base) {
+  const env = { ...(base || process.env) };
+  const current = splitPath(env.PATH);
+  const known = new Set(current);
+  const extra = [...shellPath(), ...FALLBACK_DIRS].filter((dir) => {
+    if (known.has(dir)) return false;
+    known.add(dir);
+    try {
+      return fs.statSync(dir).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+  if (extra.length) env.PATH = [...current, ...extra].join(path.delimiter);
+  return env;
+}
+
 // Shared wording for a command that could not be found. The absolute-path
 // suggestion is the actual fix when a GUI-launched app cannot see the user's
 // PATH, so it belongs in the message rather than in documentation nobody is
@@ -162,4 +191,4 @@ function localError(peerSafeMessage, detail) {
   return err;
 }
 
-module.exports = { resolveExecutable, shellPath, notFoundMessage, localError, FALLBACK_DIRS };
+module.exports = { resolveExecutable, shellPath, childEnv, notFoundMessage, localError, FALLBACK_DIRS };

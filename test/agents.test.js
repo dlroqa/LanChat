@@ -1597,3 +1597,308 @@ test('a real ACP agent starts from a PATH that does not contain it', { skip: !pr
     await transport.stop();
   }
 });
+
+// ---- ACP against a scripted agent ----
+
+// A stand-in ACP agent, so the paths that only appear when an agent behaves
+// unusually — a protocol version we do not speak, a session that will not open,
+// a run that stops without producing anything — can be driven on demand. The
+// real Hermes cannot be asked to do any of these.
+const FAKE_ACP = `
+const cfg = JSON.parse(process.argv[2] || '{}');
+if (cfg.stderr) process.stderr.write(cfg.stderr + '\\n');
+if (cfg.exitImmediately) process.exit(3);
+let buf = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (c) => {
+  buf += c;
+  const lines = buf.split('\\n');
+  buf = lines.pop() || '';
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const msg = JSON.parse(line);
+    const send = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+    if (msg.method === 'initialize') {
+      send({ jsonrpc: '2.0', id: msg.id, result: {
+        protocolVersion: cfg.protocolVersion === undefined ? 1 : cfg.protocolVersion,
+        agentInfo: { name: 'fake-agent', version: '0' },
+        authMethods: cfg.authMethods || [],
+      } });
+    } else if (msg.method === 'session/new') {
+      if (cfg.sessionFails) send({ jsonrpc: '2.0', id: msg.id, error: { message: 'not configured' } });
+      else send({ jsonrpc: '2.0', id: msg.id, result: { sessionId: 's1' } });
+    } else if (msg.method === 'session/prompt') {
+      // An update kind this client has never modelled. Ignoring it must stay
+      // harmless — a future agent will send kinds we have not seen.
+      send({ jsonrpc: '2.0', method: 'session/update', params: { update: { sessionUpdate: 'usage_update', used: 1 } } });
+      for (const t of cfg.chunks || []) {
+        send({ jsonrpc: '2.0', method: 'session/update', params: { update: { sessionUpdate: 'agent_message_chunk', content: { text: t } } } });
+      }
+      send({ jsonrpc: '2.0', id: msg.id, result: { stopReason: cfg.stopReason || 'end_turn' } });
+    }
+  }
+});
+`;
+
+function fakeAcp(cfg = {}) {
+  const dir = tmpdir('fakeacp');
+  const file = path.join(dir, 'fake-acp.js');
+  fs.writeFileSync(file, FAKE_ACP);
+  const { createAcpTransport } = require('../src/main/agents/transports/acp.js');
+  const transport = createAcpTransport({
+    id: 'agent:fake',
+    name: 'Fake',
+    config: { command: process.execPath, args: [file, JSON.stringify(cfg)] },
+    timeoutMs: 8000,
+  });
+  return { transport, dir };
+}
+
+test('an agent speaking a newer ACP than we do is refused rather than misunderstood', async () => {
+  const { transport } = fakeAcp({ protocolVersion: 99 });
+  await assert.rejects(
+    () => transport.start(),
+    (err) => {
+      assert.match(err.message, /newer version of ACP/);
+      assert.match(err.detail, /v99/, 'and the detail names both versions');
+      return true;
+    }
+  );
+  await transport.stop();
+});
+
+test('an agent that answers with no protocol version, or an older one, still works', async () => {
+  for (const protocolVersion of [undefined, 0]) {
+    const { transport } = fakeAcp({ protocolVersion });
+    const info = await transport.start();
+    assert.match(info.detail, /ACP session with fake-agent/);
+    await transport.stop();
+  }
+});
+
+test('a session that will not open names the ways the agent says it can be set up', async () => {
+  const { transport } = fakeAcp({
+    sessionFails: true,
+    authMethods: [
+      { id: 'hermes-setup', name: 'Configure Hermes provider', description: 'secret prose about providers' },
+    ],
+  });
+  await assert.rejects(
+    () => transport.start(),
+    (err) => {
+      assert.match(err.message, /did not start a session/);
+      assert.match(err.detail, /Configure Hermes provider/, 'the method is named');
+      assert.doesNotMatch(err.detail, /secret prose/, 'but its description is not repeated');
+      return true;
+    }
+  );
+  await transport.stop();
+});
+
+test('an agent that dies on startup explains itself instead of timing out', async () => {
+  const { transport } = fakeAcp({ exitImmediately: true, stderr: 'config file is unreadable' });
+  await assert.rejects(
+    () => transport.start(),
+    (err) => {
+      assert.match(err.message, /stopped unexpectedly/);
+      assert.match(err.detail, /config file is unreadable/, 'stderr is kept for the owner');
+      return true;
+    }
+  );
+  await transport.stop();
+});
+
+test('a run that stops without answering says why, and one that answers is left alone', async () => {
+  const refused = fakeAcp({ stopReason: 'refusal' });
+  await refused.transport.start();
+  await new Promise((resolve) => {
+    refused.transport.send({ text: 'hi' }, { onDone: resolve, onError: resolve });
+  }).then((r) => assert.match(r.text, /declined to answer/));
+  await refused.transport.stop();
+
+  // An unknown reason is reported rather than swallowed.
+  const odd = fakeAcp({ stopReason: 'something_new' });
+  await odd.transport.start();
+  await new Promise((resolve) => {
+    odd.transport.send({ text: 'hi' }, { onDone: resolve, onError: resolve });
+  }).then((r) => assert.match(r.text, /stopped early \(something_new\)/));
+  await odd.transport.stop();
+
+  // A real answer is never second-guessed by the reason the run ended, and the
+  // unmodelled `usage_update` the agent also sent is simply ignored.
+  const answered = fakeAcp({ stopReason: 'max_tokens', chunks: ['the ', 'answer'] });
+  await answered.transport.start();
+  await new Promise((resolve) => {
+    answered.transport.send({ text: 'hi' }, { onDone: resolve, onError: resolve });
+  }).then((r) => assert.equal(r.text, 'the answer'));
+  await answered.transport.stop();
+});
+
+// ---- Hermes profiles ----
+
+test('a profile becomes a leading flag, and only for Hermes', () => {
+  const { hermesLaunchArgs } = require('../src/main/agents/profiles.js');
+  assert.deepEqual(
+    hermesLaunchArgs({ command: 'hermes', args: ['acp'], profile: 'lanchat' }),
+    ['--profile', 'lanchat', 'acp']
+  );
+  assert.deepEqual(
+    hermesLaunchArgs({ command: '/home/me/.local/bin/hermes', args: [], profile: 'lanchat' }),
+    ['--profile', 'lanchat', 'acp'],
+    'and the subcommand is supplied when Arguments was left blank'
+  );
+  assert.deepEqual(
+    hermesLaunchArgs({ command: 'hermes', args: ['acp'], profile: '' }),
+    ['acp'],
+    'no profile, no flag'
+  );
+  // The stale-config case: the profile outlives a command that was changed.
+  assert.deepEqual(
+    hermesLaunchArgs({ command: 'claude-code-acp', args: [], profile: 'lanchat' }),
+    [],
+    'a leftover profile is never handed to an agent that would choke on it'
+  );
+});
+
+test('a profile name that could be read as another flag is refused', () => {
+  const { hermesLaunchArgs } = require('../src/main/agents/profiles.js');
+  for (const bad of ['--yolo', '-p', 'has space', 'UPPER', '../etc', 'x'.repeat(65)]) {
+    assert.throws(
+      () => hermesLaunchArgs({ command: 'hermes', args: ['acp'], profile: bad }),
+      /not a valid Hermes profile name/,
+      `${bad} must not reach argv`
+    );
+  }
+});
+
+test('ACP profiles are discovered from this machine, but only for Hermes', () => {
+  const { discoverProfiles } = require('../src/main/agents/profiles.js');
+  const home = tmpdir('hermeshome');
+  fs.mkdirSync(path.join(home, 'profiles', 'iris'), { recursive: true });
+  fs.mkdirSync(path.join(home, 'profiles', 'tessie'), { recursive: true });
+  const old = process.env.HERMES_HOME;
+  process.env.HERMES_HOME = home;
+  try {
+    assert.deepEqual(discoverProfiles({ kind: 'acp', command: 'hermes' }), ['iris', 'tessie']);
+    assert.deepEqual(
+      discoverProfiles({ kind: 'acp', command: 'claude-code-acp' }),
+      [],
+      'another ACP agent is offered nothing, because --profile would break it'
+    );
+    // An ACP agent is a child process here, so no localhost question applies.
+    assert.deepEqual(discoverProfiles({ kind: 'acp', command: 'hermes', baseUrl: undefined }), ['iris', 'tessie']);
+  } finally {
+    if (old === undefined) delete process.env.HERMES_HOME;
+    else process.env.HERMES_HOME = old;
+  }
+});
+
+// ---- the row badge ----
+
+test('the agent row shows the profile without pretending it is uppercase', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'lib', 'agentBadge.js'), 'utf8');
+  const { agentTag } = new Function(`${src.replace(/^export\s+/gm, '')}\nreturn { agentTag };`)();
+
+  const plain = agentTag({ kind: 'acp', config: {} });
+  assert.equal(plain.profile, null, 'an agent with no profile gets no second half');
+
+  const withProfile = agentTag({ kind: 'acp', config: { profile: 'lanchat' } });
+  assert.equal(withProfile.kind, 'acp');
+  assert.equal(withProfile.profile, 'lanchat', 'kept exactly as the user chose it');
+  assert.match(withProfile.title, /Hermes profile: lanchat/, 'and explained on hover');
+
+  // The same field exists on an HTTP agent and was never surfaced before.
+  assert.equal(agentTag({ kind: 'http', config: { profile: 'iris' } }).profile, 'iris');
+
+  const long = agentTag({ kind: 'acp', config: { profile: 'a'.repeat(64) } });
+  assert.equal(long.truncated, true, 'a name too long for the row is marked for cutting');
+  assert.match(long.title, /a{64}/, 'but the whole of it stays on the title');
+});
+
+test('sharing an agent tells the peer it exists and nothing about how it is run', async () => {
+  const dir = tmpdir('advert');
+  const bus = new EventEmitter();
+  const hub = new PeerHub({ getIdentity: () => ({ id: 'me', name: 'Me' }), bus });
+  const agentHub = createAgentHub({
+    userDataDir: dir,
+    hub,
+    bus,
+    store: new MessageStore(dir),
+    safeStorage: fakeSafeStorage,
+    transports: {
+      acp: ({ id, name }) => ({
+        id,
+        name,
+        kind: 'acp',
+        start: async () => ({ detail: 'ready' }),
+        send: async () => {},
+        stop: async () => {},
+      }),
+    },
+  });
+  const { agent } = await agentHub.add({
+    name: 'Hermes',
+    kind: 'acp',
+    config: { command: '/home/me/.local/bin/hermes', args: ['acp'], cwd: '/home/me/secrets', profile: 'lanchat' },
+    allowedPeers: ['friend'],
+  });
+
+  const sent = [];
+  // An entitled peer that is present, so the advert has somewhere to go.
+  hub.presenceList = () => [{ id: 'friend', online: true, kind: 'peer' }];
+  hub.send = (peerId, obj) => {
+    sent.push(obj);
+    return true;
+  };
+  agentHub.announceAll();
+
+  const advert = sent.find((o) => o.type === 'agent-advert');
+  assert.ok(advert, 'the peer is told the agent exists');
+  assert.deepEqual(
+    Object.keys(advert).sort(),
+    ['agentId', 'agentKind', 'directChat', 'name', 'type'],
+    'and is told exactly that — no command, no working directory, no profile'
+  );
+  const wire = JSON.stringify(advert);
+  assert.doesNotMatch(wire, /lanchat/, 'the profile never crosses');
+  assert.doesNotMatch(wire, /secrets/, 'nor the working directory');
+});
+
+// Profiles against the real Hermes. Off by default for the same reasons as the
+// launch test above; run with LANCHAT_ACP_LIVE=1.
+test('a real ACP agent starts under a named profile, and says so when the name is wrong', { skip: !process.env.LANCHAT_ACP_LIVE }, async () => {
+  const { createAcpTransport } = require('../src/main/agents/transports/acp.js');
+  const { hermesLaunchArgs, localProfiles } = require('../src/main/agents/profiles.js');
+  const available = localProfiles();
+  assert.ok(available.length, 'this machine has at least one Hermes profile to test with');
+
+  const build = (profile) =>
+    createAcpTransport({
+      id: 'agent:live-profile',
+      name: 'Hermes',
+      config: { command: 'hermes', args: hermesLaunchArgs({ command: 'hermes', args: ['acp'], profile }) },
+      timeoutMs: 90000,
+    });
+
+  const good = build(available[0]);
+  try {
+    assert.match((await good.start()).detail, /ACP session with/);
+  } finally {
+    await good.stop();
+  }
+
+  // Unlike HTTP, a name Hermes does not know is an error rather than a silent
+  // fallback — and it is only legible because stderr is kept.
+  const bad = build('nosuchprofilehere');
+  try {
+    await assert.rejects(
+      () => bad.start(),
+      (err) => {
+        assert.match(err.detail || '', /does not exist/);
+        return true;
+      }
+    );
+  } finally {
+    await bad.stop();
+  }
+});

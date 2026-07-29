@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const { AgentRegistry, isAgentId, delegateIdFor, isDelegateId, parseDelegateId, KINDS } = require('./registry');
 const { createVirtualSocket } = require('./virtualSocket');
 const { createHttpTransport } = require('./transports/http');
-const { discoverProfiles } = require('./profiles');
+const { discoverProfiles, hermesLaunchArgs } = require('./profiles');
 const { createCommandTransport } = require('./transports/command');
 const { createAcpTransport } = require('./transports/acp');
 const { createSshTransport } = require('./transports/ssh');
@@ -470,11 +470,15 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   function buildTransport(record) {
     const factory = transports[record.kind];
     if (!factory) throw new Error(`Unknown agent transport: ${record.kind}`);
+    const config = record.config || {};
     return factory({
       id: record.id,
       name: record.name,
-      config: record.config || {},
-      timeoutMs: record.config?.timeoutMs,
+      // A Hermes profile is chosen with a launch flag, so it has to become argv
+      // before the transport sees it. Translating here keeps the ACP transport
+      // a generic ACP client: it knows a protocol, not a vendor.
+      config: record.kind === 'acp' ? { ...config, args: hermesLaunchArgs(config) } : config,
+      timeoutMs: config.timeoutMs,
       getSecret: () => registry.secretFor(record.id),
     });
   }
@@ -796,8 +800,10 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   function profilesFor(agentId, draft) {
     const record = registry.get(agentId);
     const kind = record ? record.kind : draft && draft.kind;
-    const baseUrl = (record ? record.config : (draft && draft.config) || {}).baseUrl;
-    return discoverProfiles({ kind, baseUrl });
+    const config = (record ? record.config : (draft && draft.config)) || {};
+    // ACP picks its profile by command rather than by URL, so both are offered
+    // and discoverProfiles decides which one applies.
+    return discoverProfiles({ kind, baseUrl: config.baseUrl, command: config.command });
   }
 
   async function test(agentId) {

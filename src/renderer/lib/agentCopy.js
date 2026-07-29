@@ -28,6 +28,32 @@ export const ARGUMENT_PLACEHOLDERS = {
   acp: 'acp',
 };
 
+// The profile picker serves both transports that can choose one, and the two
+// differ in a way the copy must not blur. Over HTTP an unrecognised name is
+// quietly served as the server's default, so the form promises a fallback. Over
+// ACP the name is a launch flag and a wrong one stops the agent starting, so
+// the same promise would be a lie.
+export const PROFILE_COPY = {
+  http: {
+    defaultOption: 'Server default',
+    placeholder: 'Leave blank for the server default',
+    unasked: 'One server can host several profiles. Leave blank for its default.',
+    found: 'Found on this machine. A name the server does not know falls back to its default.',
+    none: 'None found here — type a name, or leave blank for the default.',
+  },
+  acp: {
+    defaultOption: 'Default profile',
+    placeholder: 'Leave blank for the default profile',
+    unasked: 'Hermes can hold several profiles. Leave blank to use its default.',
+    found: 'Read from the Hermes install on this machine. A name it does not know will stop the agent starting.',
+    none: 'None found here — type a name, or leave blank for the default.',
+  },
+};
+
+export function profileCopy(kind) {
+  return PROFILE_COPY[kind] || PROFILE_COPY.http;
+}
+
 export function argumentHint(kind) {
   return ARGUMENT_HINTS[kind] || ARGUMENT_HINTS.command;
 }

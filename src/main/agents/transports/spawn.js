@@ -1,7 +1,7 @@
 'use strict';
 
 const { spawn } = require('node:child_process');
-const { resolveExecutable, notFoundMessage, localError } = require('./resolve');
+const { resolveExecutable, childEnv, notFoundMessage, localError } = require('./resolve');
 
 // Shared child-process runner for the `command` and `ssh` transports.
 //
@@ -33,7 +33,7 @@ function runProcess({ file, args, cwd, env, timeoutMs, onDelta, onChild }) {
     try {
       child = spawn(resolved, args, {
         cwd: cwd || undefined,
-        env: env || process.env,
+        env: childEnv(env),
         shell: false, // never — see the note above
         stdio: ['ignore', 'pipe', 'pipe'],
       });

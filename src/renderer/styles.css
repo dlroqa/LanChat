@@ -370,6 +370,22 @@ input:focus-visible {
   vertical-align: middle;
 }
 
+/* An identifier inside a tag — currently the Hermes profile an agent runs
+   under. The surrounding .tag uppercases its contents, which is right for a
+   word we chose ("ACP", "OFF") and wrong for a name the user did not: a Hermes
+   profile is lowercase by rule, so "LANCHAT" is a string that cannot exist.
+   Long names are cut here rather than pushing the row's buttons out of reach;
+   the whole value stays on the tag's title. */
+.tag-ident {
+  display: inline-block;
+  max-width: 12ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 /* For a state the user should notice at a glance without it reading as an
    error — currently "this agent is shared with the whole network". */
 .tag.warn {

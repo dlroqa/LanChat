@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { argumentHint, argumentPlaceholder } from '../lib/agentCopy';
+import { argumentHint, argumentPlaceholder, profileCopy } from '../lib/agentCopy';
+import { agentTag } from '../lib/agentBadge';
 
 // Agents settings: connect an agent over one of four transports, toggle it on or
 // off, choose which peers may address it, and remove it completely.
@@ -178,7 +179,7 @@ export default function AgentSection({ peers = [] }) {
             <span className={`presence ${agent.enabled ? 'online' : ''}`} />
             <div>
               <div className="agent-name">
-                {agent.name} <span className="tag">{agent.kind}</span>
+                {agent.name} <AgentTag agent={agent} />
                 {!agent.enabled && <span className="tag">off</span>}
                 {/* The widest grant in the app must never be a silent state. */}
                 {agent.networkWide && (
@@ -321,6 +322,10 @@ export default function AgentSection({ peers = [] }) {
                 onChange={(v) => setCfg({ args: v })}
               />
               <Field label="Working directory (optional)" value={draft.config.cwd} onChange={(v) => setCfg({ cwd: v })} />
+              {/* Only Hermes understands --profile; the picker offers nothing
+                  for any other ACP agent rather than suggesting a flag that
+                  would stop it starting. */}
+              {draft.kind === 'acp' && <ProfileField draft={draft} setCfg={setCfg} />}
             </>
           )}
 
@@ -368,14 +373,15 @@ export default function AgentSection({ peers = [] }) {
   );
 }
 
-// Which Hermes profile on the agent's server to talk to. One server can host
-// several behind a `/p/<name>/` prefix. The server cannot list them and does not
-// reject an unknown one — it quietly serves its default instead — so the names
-// come from the Hermes install on this machine, and the copy says plainly that
-// an unrecognised name falls back rather than pretending it was checked.
+// Which Hermes profile to run under. Both transports that can choose one share
+// this field, but not its copy: over HTTP an unknown name is quietly served as
+// the server's default, while over ACP it is a launch flag that stops the agent
+// starting. The names come from the Hermes install on this machine either way —
+// authoritative for a local child process, a best guess for a server.
 function ProfileField({ draft, setCfg }) {
   const [profiles, setProfiles] = useState(null); // null = not looked yet
   const [busy, setBusy] = useState(false);
+  const copy = profileCopy(draft.kind);
 
   async function look() {
     setBusy(true);
@@ -397,7 +403,7 @@ function ProfileField({ draft, setCfg }) {
           value={draft.config.profile || ''}
           onChange={(e) => setCfg({ profile: e.target.value })}
         >
-          <option value="">Server default</option>
+          <option value="">{copy.defaultOption}</option>
           {profiles.map((name) => (
             <option key={name} value={name}>
               {name}
@@ -408,7 +414,7 @@ function ProfileField({ draft, setCfg }) {
         <input
           id="agent-profile"
           value={draft.config.profile || ''}
-          placeholder="Leave blank for the server default"
+          placeholder={copy.placeholder}
           onChange={(e) => setCfg({ profile: e.target.value })}
         />
       )}
@@ -417,14 +423,27 @@ function ProfileField({ draft, setCfg }) {
           {busy ? 'Looking…' : 'Find profiles'}
         </button>
         <span className="hint" style={{ margin: 0 }}>
-          {profiles === null
-            ? 'One server can host several profiles. Leave blank for its default.'
-            : profiles.length
-              ? 'Found on this machine. A name the server does not know falls back to its default.'
-              : 'None found here — type a name, or leave blank for the default.'}
+          {profiles === null ? copy.unasked : profiles.length ? copy.found : copy.none}
         </span>
       </div>
     </div>
+  );
+}
+
+// Transport, and the profile it runs under when there is one. See agentBadge.js
+// for why the two share a badge and why only one half is uppercased.
+function AgentTag({ agent }) {
+  const tag = agentTag(agent);
+  return (
+    <span className="tag" title={tag.title}>
+      {tag.kind}
+      {tag.profile && (
+        <>
+          {' · '}
+          <span className="tag-ident">{tag.profile}</span>
+        </>
+      )}
+    </span>
   );
 }
 
