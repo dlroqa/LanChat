@@ -74,8 +74,12 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   let onlinePeers = new Set();
   bus.on('presence', (list) => {
     const nowOnline = new Set(list.filter((p) => p.online && p.kind !== 'agent').map((p) => p.id));
-    for (const id of onlinePeers) if (!nowOnline.has(id)) remoteAgents.dropOwner(id);
+    const gone = [...onlinePeers].filter((id) => !nowOnline.has(id));
+    // Recorded before the drops rather than after them: dropping emits presence
+    // and re-enters this listener, and a record still naming the owner we are
+    // part-way through dropping would ask for them to be dropped all over again.
     onlinePeers = nowOnline;
+    for (const id of gone) remoteAgents.dropOwner(id);
   });
 
   // ---- main -> renderer event forwarding ----

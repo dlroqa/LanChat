@@ -109,9 +109,15 @@ function createRemoteAgents({ hub, store }) {
     const agents = byOwner.get(ownerPeerId);
     const entry = agents && agents.get(agentId);
     if (!entry) return false;
-    conceal(entry); // emits presence, so the roster loses it in the same tick
+    // Off the books first, then off the roster. conceal() emits presence, and a
+    // presence listener answers an owner going offline by dropping their agents
+    // — so the emit lands back here. Concealing while the entry was still in
+    // `agents` meant that re-entrant drop found the same entry and concealed it
+    // again, recursing until the stack gave out and took the main process with
+    // it. Deleting first makes the second visit a no-op.
     agents.delete(agentId);
     if (agents.size === 0) byOwner.delete(ownerPeerId);
+    conceal(entry); // emits presence, so the roster loses it in the same tick
     return true;
   }
 

@@ -1239,3 +1239,51 @@ test('a failing agent tells the peer what happened without telling them about th
   const kept = A.store.read(delegate).map((m) => m.text).join('\n');
   assert.match(kept, /Command not found: \/home\/owner\/\.local\/bin\/hermes/, 'A keeps the detail');
 });
+
+test('an owner going offline takes their agents with them, without a runaway presence loop', async (t) => {
+  const A = makeNode('owner9', await freePort());
+  const B = makeNode('peer9', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idA = A.getIdentity().id;
+  // Two agents, because dropping them is a loop: the second one is what proves
+  // the first one's departure did not leave the loop walking a mutated map.
+  const { agent: one } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  const { agent: two } = await A.agentHub.add({ name: 'Mercury', kind: 'http', config: {} });
+  await A.agentHub.setSharing(one.id, { networkWide: true, directChat: true });
+  await A.agentHub.setSharing(two.id, { networkWide: true, directChat: true });
+
+  await connect(A, B);
+  const remoteOne = await waitFor(() => remoteIdOn(B, idA, one.id), 5000, 'B to see Hermes');
+  const remoteTwo = await waitFor(() => remoteIdOn(B, idA, two.id), 5000, 'B to see Mercury');
+
+  // Dropping an owner runs inside a presence listener and emits presence itself.
+  // Re-entering that listener with the entry still on the books recursed until
+  // the stack gave out, which took the whole main process down with it.
+  const blewUp = [];
+  const onCrash = (err) => blewUp.push(err);
+  process.on('uncaughtException', onCrash);
+  t.after(() => process.off('uncaughtException', onCrash));
+
+  A.hub.close();
+  await A.server.stop();
+
+  await waitFor(() => !B.hub.isConnected(idA), 5000, 'B to notice A is gone');
+  await waitFor(
+    () => !B.hub.identities.has(remoteOne) && !B.hub.identities.has(remoteTwo),
+    5000,
+    "A's agents to leave B's roster"
+  );
+
+  assert.deepEqual(blewUp.map((e) => e.message), [], 'and nothing blew the stack on the way');
+  const ids = B.hub.presenceList().map((p) => p.id);
+  assert.equal(ids.includes(remoteOne), false);
+  assert.equal(ids.includes(remoteTwo), false);
+});
