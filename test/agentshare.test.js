@@ -76,6 +76,14 @@ function echoTransports(log) {
         log.push(text);
         // A prompt that makes the run fail, so the error path can be driven
         // without a second transport stub.
+        if (text.startsWith('faildetail:')) {
+          // The shape a real transport failure has: a message safe to relay,
+          // and detail that names something on the owner's machine.
+          const err = new Error('The agent could not be started.');
+          err.detail = 'Command not found: /home/owner/.local/bin/hermes.';
+          h.onError?.(err);
+          return;
+        }
         if (text.startsWith('fail:')) {
           h.onError?.(new Error('transport is down'));
           return;
@@ -1073,4 +1081,45 @@ test('documents cannot be smuggled into a chat with a person', async (t) => {
   await waitFor(() => B.store.read(A.getIdentity().id).length === 1, 5000, 'the message to arrive');
   assert.equal(B.store.read(A.getIdentity().id)[0].text, 'hello', 'and it is only the message');
   assert.ok(A.events.some((e) => e.type === 'toast' && /only be attached to an agent/i.test(e.payload?.text || '')));
+});
+
+test('a failing agent tells the peer what happened without telling them about this machine', async (t) => {
+  const A = makeNode('owner11', await freePort());
+  const B = makeNode('peer11', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idA = A.getIdentity().id;
+  const idB = B.getIdentity().id;
+
+  const { agent } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  await A.agentHub.setSharing(agent.id, { networkWide: true, directChat: true });
+  await connect(A, B);
+
+  const remoteId = await waitFor(() => remoteIdOn(B, idA, agent.id), 5000, "B to see A's agent");
+  B.call('lanchat:sendChat', { peerId: remoteId, text: 'faildetail:now' });
+
+  const seen = await waitFor(
+    () => B.store.read(remoteId).find((m) => m.direction === 'in'),
+    5000,
+    'the failure to reach B over the wire'
+  );
+
+  // B is told the run failed — an unanswered question would be worse than a
+  // vague answer — but the failure is described in terms of the agent, not of
+  // the machine it runs on.
+  assert.match(seen.text, /could not be started/, 'B learns the agent failed');
+  assert.doesNotMatch(seen.text, /home\/owner/, 'but never sees a path on A');
+  assert.doesNotMatch(seen.text, /Command not found/, 'nor which command A is missing');
+
+  // The owner, on the same failure, gets the part that says how to fix it.
+  const delegate = `${agent.id}#${idB}`;
+  const kept = A.store.read(delegate).map((m) => m.text).join('\n');
+  assert.match(kept, /Command not found: \/home\/owner\/\.local\/bin\/hermes/, 'A keeps the detail');
 });

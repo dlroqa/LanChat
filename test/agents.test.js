@@ -1401,3 +1401,199 @@ test('the local-origin marker is a Symbol, so JSON from the wire cannot forge it
   const forged = JSON.parse('{"from":"agent:evil","type":"chat","text":"x","lanchat.agent.localOrigin":true}');
   assert.equal(forged[LOCAL_ORIGIN], undefined, 'a parsed frame can never carry the Symbol');
 });
+
+// ---- finding the agent's executable ----
+
+// A GUI-launched Electron process does not see the PATH a shell would give it,
+// so a bare `hermes` fails with ENOENT on a machine where `hermes` is installed
+// and on the user's own PATH. These pin the fallback that fixes it — and, just
+// as importantly, that it stays a *fallback* and never rewrites what the user
+// typed.
+function freshResolve() {
+  const id = require.resolve('../src/main/agents/transports/resolve.js');
+  delete require.cache[id];
+  return require(id);
+}
+
+// A temp dir holding an executable, plus a stand-in login shell that reports
+// that dir as the user's PATH — the shape of the real problem, where the
+// binary exists somewhere only the shell knows about.
+function fakeShellEnv() {
+  const dir = tmpdir('resolve');
+  const bin = path.join(dir, 'fakeagent');
+  fs.writeFileSync(bin, '#!/bin/sh\nexit 0\n');
+  fs.chmodSync(bin, 0o755);
+
+  const shell = path.join(dir, 'fakeshell');
+  // Prints a banner first: rc files do that, and the PATH must still be read
+  // off the last line rather than the first.
+  fs.writeFileSync(shell, `#!/bin/sh\necho "welcome to the shell"\necho "${dir}:/usr/bin"\n`);
+  fs.chmodSync(shell, 0o755);
+  return { dir, bin, shell };
+}
+
+test('a command already on PATH is left alone for spawn to find', () => {
+  const { resolveExecutable } = freshResolve();
+  assert.equal(resolveExecutable('sh'), 'sh');
+});
+
+test('a command the user typed as a path is honoured exactly', () => {
+  const { resolveExecutable } = freshResolve();
+  // Even one that does not exist: resolving it against anything else would run
+  // a different program than the one they named.
+  assert.equal(resolveExecutable('/opt/hermes/bin/hermes'), '/opt/hermes/bin/hermes');
+  assert.equal(resolveExecutable('./hermes'), './hermes');
+});
+
+test('a command found only on the login shell PATH resolves to an absolute path', (t) => {
+  if (process.platform === 'win32') return;
+  const { dir, bin, shell } = fakeShellEnv();
+  const oldPath = process.env.PATH;
+  const oldShell = process.env.SHELL;
+  t.after(() => {
+    process.env.PATH = oldPath;
+    process.env.SHELL = oldShell;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  process.env.PATH = '/nonexistent-lanchat-test';
+  process.env.SHELL = shell;
+  const { resolveExecutable } = freshResolve();
+  assert.equal(resolveExecutable('fakeagent'), bin);
+});
+
+test('a command that exists nowhere comes back unchanged, so the error names what was typed', (t) => {
+  const oldPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = oldPath;
+  });
+  process.env.PATH = '/nonexistent-lanchat-test';
+  const { resolveExecutable } = freshResolve();
+  assert.equal(resolveExecutable('lanchat-no-such-agent-binary'), 'lanchat-no-such-agent-binary');
+});
+
+// ---- what a failure says, and to whom ----
+
+test('a missing ACP command fails with a fix rather than with ENOENT', async () => {
+  const { createAcpTransport } = require('../src/main/agents/transports/acp.js');
+  const transport = createAcpTransport({
+    id: 'agent:x',
+    name: 'Missing',
+    config: { command: 'lanchat-no-such-agent-binary', args: ['acp'] },
+    timeoutMs: 5000,
+  });
+
+  await assert.rejects(
+    () => transport.start(),
+    (err) => {
+      assert.match(err.detail, /Command not found: lanchat-no-such-agent-binary/);
+      assert.match(err.detail, /full path/, 'and says what to do about it');
+      assert.doesNotMatch(err.message, /ENOENT/, 'Node’s own wording never reaches the user');
+      return true;
+    }
+  );
+  await transport.stop();
+});
+
+test('a peer is told the agent failed, but never what is on this machine', async () => {
+  const dir = tmpdir('detail');
+  const bus = new EventEmitter();
+  const hub = new PeerHub({ getIdentity: () => ({ id: 'me', name: 'Me' }), bus });
+  const store = new MessageStore(dir);
+
+  const SECRET = '/home/someone/.local/bin/hermes';
+  const agentHub = createAgentHub({
+    userDataDir: dir,
+    hub,
+    bus,
+    store,
+    safeStorage: fakeSafeStorage,
+    transports: {
+      http: ({ id, name }) => ({
+        id,
+        name,
+        kind: 'stub',
+        start: async () => ({ detail: 'ready' }),
+        send: async (_msg, h) => {
+          const err = new Error('The agent could not be started.');
+          err.detail = `Command not found: ${SECRET}.`;
+          h.onError?.(err);
+        },
+        stop: async () => {},
+      }),
+    },
+  });
+
+  const { agent } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {}, allowedPeers: ['friend'] });
+  assert.ok(agent);
+
+  const local = [];
+  bus.on('peer-message', (m) => local.push(m.text));
+  const relayed = [];
+  hub.send = (peerId, obj) => {
+    relayed.push({ peerId, obj });
+    return true;
+  };
+
+  agentHub.routeFromPeer('friend', '@Hermes hello');
+  await new Promise((r) => setImmediate(r));
+
+  const toPeer = relayed.filter((r) => r.obj.type === 'agent-reply').map((r) => r.obj.text);
+  assert.equal(toPeer.length, 1, 'the peer is answered');
+  assert.doesNotMatch(toPeer[0], /home\/someone/, 'but never sees a path from this machine');
+  assert.doesNotMatch(toPeer[0], /Command not found/, 'nor which command is missing');
+  assert.match(toPeer[0], /could not be started/, 'only that it failed');
+
+  assert.ok(
+    local.some((text) => text.includes(SECRET)),
+    'while the owner gets the detail that tells them how to fix it'
+  );
+});
+
+// ---- form copy ----
+
+// ESM for the renderer; drop the export keywords and evaluate it, the way
+// statusMotion.test.js does. There is no JSX transform in the test runner, so
+// this is the only way the strings can be asserted at all.
+test('the ACP arguments hint does not tell users to write {prompt}', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'lib', 'agentCopy.js'), 'utf8');
+  const { argumentHint, argumentPlaceholder } = new Function(
+    `${src.replace(/^export\s+/gm, '')}
+     return { argumentHint, argumentPlaceholder };`
+  )();
+
+  assert.match(argumentHint('command'), /\{prompt\}/, 'a local command really does take it');
+  assert.doesNotMatch(argumentHint('acp'), /\{prompt\}/, 'an ACP agent never does');
+  assert.match(argumentHint('acp'), /travels over ACP/, 'and is told where the message goes instead');
+  assert.equal(argumentPlaceholder('acp'), 'acp');
+});
+
+// The reported failure itself, against the real agent rather than a stand-in.
+// Off by default: it needs Hermes installed and configured, and the adapter
+// spends several seconds loading its environment and MCP servers before it
+// answers `initialize`. Run with LANCHAT_ACP_LIVE=1.
+test('a real ACP agent starts from a PATH that does not contain it', { skip: !process.env.LANCHAT_ACP_LIVE }, async (t) => {
+  const { createAcpTransport } = require('../src/main/agents/transports/acp.js');
+  const oldPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = oldPath;
+  });
+  // Exactly what a GUI-launched Electron process sees: no per-user bin dir.
+  process.env.PATH = (oldPath || '')
+    .split(path.delimiter)
+    .filter((d) => d && !d.includes(`${path.sep}.local${path.sep}bin`))
+    .join(path.delimiter);
+
+  const transport = createAcpTransport({
+    id: 'agent:live',
+    name: 'Hermes',
+    config: { command: 'hermes', args: ['acp'] },
+    timeoutMs: 90000,
+  });
+  try {
+    const info = await transport.start();
+    assert.match(info.detail, /ACP session with/);
+  } finally {
+    await transport.stop();
+  }
+});

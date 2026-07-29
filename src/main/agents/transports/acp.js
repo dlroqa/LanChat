@@ -1,6 +1,7 @@
 'use strict';
 
 const { spawn } = require('node:child_process');
+const { resolveExecutable, notFoundMessage, localError } = require('./resolve');
 
 // ACP (Agent Client Protocol) transport — newline-delimited JSON-RPC 2.0 over the
 // agent's stdio. Unlike the `command` transport this keeps one long-lived child
@@ -18,7 +19,7 @@ const PROTOCOL_VERSION = 1;
 const DEFAULT_TIMEOUT_MS = 180000;
 
 function createAcpTransport({ id, name, config, timeoutMs }) {
-  const file = String(config.command || 'hermes');
+  const command = String(config.command || 'hermes');
   const args = Array.isArray(config.args) && config.args.length ? config.args.map(String) : ['acp'];
   const cwd = config.cwd || process.cwd();
   const budget = timeoutMs || DEFAULT_TIMEOUT_MS;
@@ -105,13 +106,24 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
   }
 
   async function start() {
+    // Resolved per start, not once when the transport is built, so an agent
+    // installed after the record was saved is picked up on the next attempt
+    // rather than needing the whole record re-entered.
+    const file = resolveExecutable(command);
     child = spawn(file, args, { cwd, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', onStdout);
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', () => {});
     child.on('error', (err) => {
-      for (const [, entry] of pending) entry.reject(err);
+      // A missing command is the one failure with a fix the user can act on,
+      // and Node's own text ("spawn hermes ENOENT") does not hint at it. The
+      // command name is local, so it travels as detail.
+      const failure =
+        err.code === 'ENOENT'
+          ? localError('The agent could not be started.', notFoundMessage(file))
+          : err;
+      for (const [, entry] of pending) entry.reject(failure);
       pending.clear();
     });
     child.on('exit', () => {

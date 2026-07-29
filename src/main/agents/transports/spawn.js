@@ -1,6 +1,7 @@
 'use strict';
 
 const { spawn } = require('node:child_process');
+const { resolveExecutable, notFoundMessage, localError } = require('./resolve');
 
 // Shared child-process runner for the `command` and `ssh` transports.
 //
@@ -26,8 +27,11 @@ function buildArgs(template, prompt) {
 function runProcess({ file, args, cwd, env, timeoutMs, onDelta, onChild }) {
   return new Promise((resolve, reject) => {
     let child;
+    // Resolved here rather than by the callers, so every transport built on
+    // this runner gets the same lookup without having to remember to ask.
+    const resolved = resolveExecutable(file);
     try {
-      child = spawn(file, args, {
+      child = spawn(resolved, args, {
         cwd: cwd || undefined,
         env: env || process.env,
         shell: false, // never — see the note above
@@ -65,7 +69,11 @@ function runProcess({ file, args, cwd, env, timeoutMs, onDelta, onChild }) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      reject(err.code === 'ENOENT' ? new Error(`Command not found: ${file}`) : err);
+      reject(
+        err.code === 'ENOENT'
+          ? localError('The agent could not be started.', notFoundMessage(resolved))
+          : err
+      );
     });
 
     child.on('close', (code) => {
@@ -74,7 +82,13 @@ function runProcess({ file, args, cwd, env, timeoutMs, onDelta, onChild }) {
       clearTimeout(timer);
       const text = out.trim();
       if (code !== 0 && !text) {
-        reject(new Error(errOut.trim().slice(-2000) || `The agent exited with code ${code}.`));
+        // The captured stderr is the most useful thing we have and the least
+        // safe thing to forward: it is written by a program running on this
+        // machine and routinely names paths, hosts and configuration. It goes
+        // to the owner as detail; whoever asked gets only the exit code.
+        reject(
+          localError(`The agent exited with code ${code}.`, errOut.trim().slice(-2000) || null)
+        );
         return;
       }
       resolve({ text: text.slice(-MAX_OUTPUT_CHARS), code });

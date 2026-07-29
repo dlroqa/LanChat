@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { argumentHint, argumentPlaceholder } from '../lib/agentCopy';
 
 // Agents settings: connect an agent over one of four transports, toggle it on or
 // off, choose which peers may address it, and remove it completely.
@@ -315,8 +316,8 @@ export default function AgentSection({ peers = [] }) {
               <Field
                 label="Arguments"
                 value={draft.config.args}
-                placeholder={draft.kind === 'acp' ? 'acp' : '-z {prompt}'}
-                hint="{prompt} marks where the message goes. Arguments are passed separately — never through a shell."
+                placeholder={argumentPlaceholder(draft.kind)}
+                hint={argumentHint(draft.kind)}
                 onChange={(v) => setCfg({ args: v })}
               />
               <Field label="Working directory (optional)" value={draft.config.cwd} onChange={(v) => setCfg({ cwd: v })} />

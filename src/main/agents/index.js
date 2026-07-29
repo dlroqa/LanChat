@@ -538,11 +538,14 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
           entry.pendingApproval = null;
           bus.emit('agent-typing', { agentId, isTyping: false });
           relayActivity(agentId, origin, false, null);
-          emitStatus(agentId, 'error', err.message);
+          emitStatus(agentId, 'error', describeError(err));
           // Kept, like the output would have been: it is the result of a
           // question somebody asked, and a thread showing a question with no
           // reply beside it would be hiding what happened.
-          reply(agentId, `⚠️ ${err.message}`, origin, { keep: true });
+          //
+          // Only `err.message` is relayed onward — `err.detail` names things
+          // that exist on this machine and stays here. See transports/resolve.js.
+          reply(agentId, `⚠️ ${err.message}`, origin, { keep: true, detail: err.detail });
         },
       }
     );
@@ -562,13 +565,22 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   // added here in future is transient because that is the default, not because
   // somebody remembered to say so. Only the two calls carrying a result ask to be
   // kept, and they say so at the point where that is obvious.
-  function reply(agentId, text, origin, { keep = false } = {}) {
+  // The full text for the owner of this machine: the peer-safe message plus
+  // whatever local detail came with it. Never sent anywhere.
+  function describeError(err) {
+    return err && err.detail ? `${err.message} ${err.detail}` : err && err.message;
+  }
+
+  function reply(agentId, text, origin, { keep = false, detail = null } = {}) {
     // A peer's conversation with the agent belongs in its own thread, not in the
     // human chat with that peer — otherwise asking an agent something graffitis
     // two real conversations. The owner still sees everything, just filed under
     // "Agent · via <peer>" instead of smeared through their chat with them.
     const threadId = origin ? delegateIdFor(agentId, origin) : agentId;
-    const message = { from: threadId, type: 'chat', id: crypto.randomUUID(), text, ts: Date.now() };
+    // `detail` is local-only, so it is folded into the copy kept here and left
+    // out of the frame below. The two must never be built from one string.
+    const localText = detail ? `${text} ${detail}` : text;
+    const message = { from: threadId, type: 'chat', id: crypto.randomUUID(), text: localText, ts: Date.now() };
     if (!keep) message.notice = true;
     message[LOCAL_ORIGIN] = true;
     bus.emit('peer-message', message);
@@ -610,8 +622,10 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
       return { ok: true, detail: info?.detail };
     } catch (err) {
       live.delete(record.id);
-      emitStatus(record.id, 'error', err.message);
-      return { ok: false, detail: err.message };
+      // Local surfaces — the agent row and the status line — get the whole
+      // story. Both stay on this machine.
+      emitStatus(record.id, 'error', describeError(err));
+      return { ok: false, detail: describeError(err) };
     }
   }
 
@@ -795,7 +809,9 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
       await transport.stop();
       return { ok: true, detail: info?.detail || 'Reachable.' };
     } catch (err) {
-      return { ok: false, detail: err.message };
+      // Test is a local action by definition — the owner pressed the button —
+      // so it reports the detail the relayed message deliberately omits.
+      return { ok: false, detail: describeError(err) };
     }
   }
 
