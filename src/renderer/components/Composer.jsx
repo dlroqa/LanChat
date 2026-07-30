@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Send, Paperclip, Mic, FileIcon, X } from '../lib/icons.jsx';
 import { startRecording, pickFormat, formatDuration } from '../lib/voice.js';
 import { formatBytes } from '../lib/util.js';
@@ -28,12 +28,44 @@ export default function Composer({
   const typingRef = useRef(false);
   const typingTimer = useRef(null);
 
-  useEffect(() => {
+  // Grow the input to fit what is in it. No ceiling here: `max-height` in the
+  // stylesheet clamps the used height even against an inline one, and a clamped
+  // box still reports its full content in scrollHeight, so the next measurement
+  // is the same measurement. One number, in one place.
+  const fit = useCallback(() => {
     const el = ref.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-  }, [text]);
+    el.style.height = `${el.scrollHeight}px`;
+  }, []);
+
+  // One measure per keystroke and nothing else. Anything that reads geometry
+  // here reads it after a style write, which chromium can only answer by laying
+  // the document out again — and with a long conversation open that is the
+  // whole window, for every character. Measured at 2.6ms a keystroke when the
+  // width check lived here, 0.8ms once it moved into the observer below.
+  useEffect(fit, [text, fit]);
+
+  // The same words wrap onto more lines in a narrower window, so a height
+  // measured before the window was dragged would clip them. One observer for
+  // the life of the component: it is the same element and the same question
+  // every time, and rebuilding it per keystroke only resets what it knows.
+  //
+  // Width only. Fitting changes the box's height, so reacting to height would be
+  // reacting to ourselves. Reading the width in here is free — observations are
+  // delivered after layout, not before it.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver !== 'function') return undefined;
+    let seen = el.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (el.clientWidth === seen) return;
+      seen = el.clientWidth;
+      fit();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [fit]);
 
   // A refused message comes back here rather than being lost. Keyed on the nonce
   // and not the text, so asking the same thing twice restores it twice — and the
@@ -46,6 +78,10 @@ export default function Composer({
     if (!el) return;
     el.focus();
     el.setSelectionRange(draft.text.length, draft.text.length);
+    // Keyed on the nonce alone, deliberately: the whole point is that asking the
+    // same thing twice restores it twice, which a dependency on `draft` itself
+    // would not do — the object is equal and the effect would not re-run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft?.nonce]);
 
   function signalTyping(active) {

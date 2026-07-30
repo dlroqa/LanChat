@@ -61,6 +61,18 @@
      keeps them aligned no matter how the text inside either one changes. */
   --header-h: 67px;
 
+  /* The two side columns, as one expression each. They are named rather than
+     written inline because the connection panel's type scale is derived from
+     its own width further down — the panel is no longer a fixed number, so
+     anything that needs to know how wide it is has to read it from here. */
+  --sidebar-w: clamp(260px, 21vw, 340px);
+  --side-w: clamp(300px, 26vw, 380px);
+
+  /* How much of a short window the compose box may take. Applies to the input
+     and to the shelf of staged documents above it, which grow independently and
+     would otherwise each be free to fill the pane on their own. */
+  --composer-max: 22vh;
+
   --radius: 12px;
   --radius-sm: 8px;
   --radius-lg: 18px;
@@ -129,34 +141,50 @@ textarea {
 }
 
 /* ---------------- Layout ---------------- */
-/* Three columns: people | conversation | call + connection panel. */
+/* Three columns: people | conversation | call + connection panel.
+
+   The side columns are clamped percentages rather than fixed widths, so the
+   three grow together as the window is stretched and the conversation does not
+   swallow every pixel a wide screen adds. The lower bounds are the widths the
+   panels were designed at; the upper bounds are where they stop being panels.
+
+   The row is the load-bearing line. Without `grid-template-rows` the columns
+   land in a single *implicit* row, and an implicit row is `auto` — sized to its
+   items' max-content contribution, which for the chat column is the full
+   unscrolled height of every message in the conversation. The row then grows
+   past the window, and the composer, which sits below the scroller, is pushed
+   off the bottom where `body { overflow: hidden }` clips it away. `minmax(0, 1fr)`
+   and not `1fr`: a bare `1fr` still floors at the track's automatic minimum,
+   which is that same max-content height, and would not shrink either.
+
+   This works because the three panels are the only in-flow children of .app —
+   every overlay under it is `position: fixed` and the push-to-talk audio is
+   `display: none`. A plain in-flow child added here would be auto-placed into a
+   second row and bring the whole problem back. */
 .app {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr) 380px;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--side-w);
+  grid-template-rows: minmax(0, 1fr);
+  /* Belt to the above: any row this grid grows on its own is bounded too, so a
+     child added in front of the panels cannot put the composer back off the
+     bottom of the window. Nothing needs it today — it is here so that the rule
+     above does not quietly depend on nobody ever adding one. */
+  grid-auto-rows: minmax(0, 1fr);
   height: 100%;
 }
-/* Drop the side panel first, then the sidebar, on narrow windows. */
-@media (max-width: 1180px) {
-  .app {
-    grid-template-columns: 300px minmax(0, 1fr) 300px;
-  }
-  /* The status row loses 80px of width here, so the phrase inside it has to
-     start shrinking sooner. Not simply scaled by the width: shorter lines waste
-     more of themselves on ragged wrapping, so the capacity falls faster than
-     the column does. 860 is where the cut stays out at the far end, measured
-     the same way as the constant above. */
-  .agent-state {
-    --label-fit: 860px;
-  }
+
+/* Each column is bounded by the window rather than by its own contents: they all
+   hold a list that can outgrow the screen, and `overflow: hidden` is what makes
+   the scrolling happen inside the column instead of past the bottom of it. Said
+   once, here, beside the row track that is the other half of the same idea —
+   the three blocks below vary in what else they do, and this is the part that
+   has to be identical in all three. */
+:where(.sidebar, .chat-wrap, .side-panel) {
+  overflow: hidden;
 }
-@media (max-width: 980px) {
-  .app {
-    grid-template-columns: 260px minmax(0, 1fr);
-  }
-  .side-panel {
-    display: none;
-  }
-}
+
+/* The window's response to being made narrow is at the foot of this file — a
+   media query adds no specificity, so it has to come after what it overrides. */
 
 .side-panel {
   border-left: 1px solid var(--border);
@@ -164,7 +192,6 @@ textarea {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
 }
 
 /* ---------------- Sidebar ---------------- */
@@ -258,6 +285,10 @@ input:focus-visible {
 
 .peer-list {
   flex: 1;
+  /* Same rule as the message list: a scrolling flex child will not shrink below
+     its content without this, and a long list would run past the window bottom
+     instead of scrolling inside the sidebar. */
+  min-height: 0;
   overflow-y: auto;
   padding-bottom: 12px;
 }
@@ -555,7 +586,6 @@ input:focus-visible {
   position: relative;
   display: flex;
   min-width: 0;
-  overflow: hidden;
 }
 .chat-header {
   display: flex;
@@ -933,6 +963,9 @@ input:focus-visible {
 .composer-wrap {
   border-top: 1px solid var(--border);
   background: var(--bg-2);
+  /* Never the thing that gives way. On a short window the message list scrolls;
+     the place you write does not get compressed to make room for it. */
+  flex: none;
 }
 .composer {
   display: flex;
@@ -941,12 +974,16 @@ input:focus-visible {
   padding: 12px 16px 16px;
 }
 
-/* Documents staged against the next message to an agent. */
+/* Documents staged against the next message to an agent. They wrap, so enough of
+   them would stack rows into the composer until it owned the window — the cap
+   turns that into a short scrolling shelf instead. */
 .composer-docs {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   padding: 12px 16px 0;
+  max-height: var(--composer-max);
+  overflow-y: auto;
 }
 .composer-doc {
   display: inline-flex;
@@ -1034,6 +1071,11 @@ input:focus-visible {
   opacity: 0.65;
   font-variant-numeric: tabular-nums;
 }
+/* The input grows with what is typed into it, up to here. This cap is the only
+   one — Composer.jsx sets an inline height from the content and lets it be
+   clamped, rather than carrying a second copy of the number that could drift
+   away from this one. Viewport-relative as well as absolute, because 160px of a
+   740px window is an input and 160px of a 560px one is most of the pane. */
 .composer textarea {
   flex: 1;
   resize: none;
@@ -1041,7 +1083,8 @@ input:focus-visible {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 11px 14px;
-  max-height: 160px;
+  max-height: min(160px, var(--composer-max));
+  overflow-y: auto;
   outline: none;
   line-height: 1.4;
   transition: border 0.12s ease;
@@ -2087,12 +2130,20 @@ input[type='range']:disabled::-webkit-slider-thumb {
   padding: 11px 16px;
   /* How much text the row can hold, as a single number: the width one line has,
      times the three lines it may take, divided by the ~0.52em an Inter 600
-     character averages — all folded into one constant so the size below is a
+     character averages — all folded into one value so the size below is a
      division rather than a table of breakpoints. Set by measurement rather than
      by that arithmetic alone (1660 on paper), because wrapping leaves lines
-     ragged: 1550 is the largest value at which no phrase reaches the three-line
-     cut before the type has finished shrinking. */
-  --label-fit: 1550px;
+     ragged: the value is the largest at which no phrase reaches the three-line
+     cut before the type has finished shrinking.
+
+     Two widths were measured that way — 1550 at a 380px panel, 860 at 300px —
+     and the panel is now a clamp rather than one of two fixed sizes, so what
+     goes here is the line through those two points: 8.625 of capacity per pixel
+     of panel. Interpolation, not derivation; the ratio between them is what was
+     measured and it is not proportional, which is why the slope is steeper than
+     the widths are. Reading --side-w rather than the viewport means this stays
+     true if the clamp is ever retuned. */
+  --label-fit: calc(8.625 * var(--side-w) - 1727.5px);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
   background: var(--surface);
@@ -4038,6 +4089,29 @@ code.path {
 @media (prefers-reduced-motion: reduce) {
   .splash-track,
   .splash-bloom {
+    display: none;
+  }
+}
+
+/* ---------------- Responsive ---------------- */
+/* Last in the file on purpose: this overrides `.app` and `.side-panel`, both
+   defined above with a specificity a media query cannot add to, so source order
+   is the only thing that decides. Written up beside .app — where it was — the
+   rule below did nothing at all, and a narrow window kept a side panel it was
+   supposed to have dropped, wrapped onto a second grid row under the fold.
+
+   There is only one breakpoint. The columns are clamps and shrink on their own,
+   and the type inside the connection panel follows the panel's own width, so
+   the one thing left that a proportion cannot express is a panel going away. */
+
+/* Below this there is no room for three panels. The side panel goes — and the
+   grid must lose its third track with it, or the panel would be a third item
+   with only two columns to sit in and would be auto-placed into a second row. */
+@media (max-width: 980px) {
+  .app {
+    grid-template-columns: clamp(240px, 24vw, 280px) minmax(0, 1fr);
+  }
+  .side-panel {
     display: none;
   }
 }

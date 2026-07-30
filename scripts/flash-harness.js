@@ -19,23 +19,11 @@
 // so the working directory has to be somewhere ordinary.
 
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const { execFileSync, execFileSync: run } = require('node:child_process');
+const { chromiumPath, render, withScratchDir } = require('./lib/chromium.js');
 
 const ROOT = path.join(__dirname, '..');
 const SRC = path.join(ROOT, 'src', 'renderer');
-
-function chromiumPath() {
-  for (const bin of ['chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable']) {
-    try {
-      return execFileSync('which', [bin], { encoding: 'utf8' }).trim();
-    } catch {
-      /* keep looking */
-    }
-  }
-  return null;
-}
 
 // The page: real stylesheet, real component, a thread with two bubbles in it.
 function buildPage() {
@@ -111,50 +99,32 @@ function buildPage() {
 </body></html>`;
 }
 
-// One chromium run: load the page, let its script finish, and read the findings
-// back out of the dumped DOM. --dump-dom gives no return channel, so the page
-// leaves them in a <pre>.
+// This harness's own browser settings. The light is judged on colour, so the
+// profile is pinned; 4s of virtual time is what the longest play needs.
+const RUN = { width: 900, height: 700, budget: 4000, args: ['--force-color-profile=srgb'] };
+
+// Load the page, let its script finish, and read the findings back out of the
+// dumped DOM.
 function evaluate(chrome, dir, page, name, extraArgs = []) {
   const pageFile = path.join(dir, `${name}.html`);
   fs.writeFileSync(pageFile, page);
-  const out = run(
-    chrome,
-    [
-      '--headless',
-      '--disable-gpu',
-      '--no-sandbox',
-      '--force-color-profile=srgb',
-      '--window-size=900,700',
-      ...extraArgs,
-      '--virtual-time-budget=4000',
-      '--dump-dom',
-      `file://${pageFile}`,
-    ],
-    { encoding: 'utf8', cwd: dir, maxBuffer: 64 * 1024 * 1024 }
-  );
-  const m = out.match(/<pre id="result">([\s\S]*?)<\/pre>/);
-  return m ? JSON.parse(decodeEntities(m[1])) : null;
+  return render(chrome, dir, pageFile, { ...RUN, args: [...RUN.args, ...extraArgs] });
 }
 
+// Each screenshot here is a *different* page — the frames are frozen at
+// different offsets — so unlike the layout harness these cannot share a launch
+// with anything.
 function screenshot(chrome, dir, page, name, extraArgs = []) {
   const pageFile = path.join(dir, `${name}.html`);
+  const png = path.join(dir, `${name}.png`);
   fs.writeFileSync(pageFile, page);
-  run(
-    chrome,
-    [
-      '--headless',
-      '--disable-gpu',
-      '--no-sandbox',
-      '--force-color-profile=srgb',
-      '--hide-scrollbars',
-      '--window-size=900,700',
-      ...extraArgs,
-      `--screenshot=${path.join(dir, `${name}.png`)}`,
-      `file://${pageFile}`,
-    ],
-    { encoding: 'utf8', cwd: dir, maxBuffer: 64 * 1024 * 1024 }
-  );
-  return path.join(dir, `${name}.png`);
+  render(chrome, dir, pageFile, {
+    ...RUN,
+    args: [...RUN.args, '--hide-scrollbars', ...extraArgs],
+    dump: false,
+    png,
+  });
+  return png;
 }
 
 async function runFlashHarness(outDir) {
@@ -168,21 +138,7 @@ async function runFlashHarness(outDir) {
   }
   if (!esbuildOk) return { skipped: 'esbuild not installed' };
 
-  // Somewhere ordinary: snap chromium is confined and cannot write to /tmp or to
-  // a dot-directory, and it needs a writable cwd for its own profile.
-  //
-  // A run without an explicit destination is a test run, and it cleans up after
-  // itself — chromium leaves about 12MB of profile behind each time, which is not
-  // something a suite should be depositing in somebody's home directory. Pass a
-  // directory to keep the screenshots and look at them.
-  const keep = Boolean(outDir);
-  const dir = outDir || fs.mkdtempSync(path.join(os.homedir(), 'lanchat-flash-'));
-  fs.mkdirSync(dir, { recursive: true });
-  try {
-    return await measure(chrome, dir, keep ? dir : null);
-  } finally {
-    if (!keep) fs.rmSync(dir, { recursive: true, force: true });
-  }
+  return withScratchDir(outDir, 'lanchat-flash-', (dir, keep) => measure(chrome, dir, keep ? dir : null));
 }
 
 async function measure(chrome, dir, keptDir) {
@@ -340,10 +296,6 @@ async function measure(chrome, dir, keptDir) {
     result.screenshots = { withLight, without, dir };
   }
   return result;
-}
-
-function decodeEntities(s) {
-  return s.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 }
 
 // How much the text's *contrast* changed with the light behind it, as a fraction
