@@ -10,6 +10,7 @@ const { LOCAL_ORIGIN: AGENT_LOCAL_ORIGIN } = require('./agents');
 const { createRemoteAgents } = require('./agents/remote');
 const { normalizeWebUrl } = require('./webLinks');
 const { createLinkPreview } = require('./linkPreview');
+const { fingerprint } = require('./authProto');
 
 // The three kinds of user-supplied audio, and where each one is remembered. The
 // music an agent works to is offered a narrower choice than the other two on
@@ -42,7 +43,7 @@ const SOUND_KINDS = Object.freeze({
 //   - bus events -> webContents 'lanchat:event' : main -> renderer notifications
 // The renderer only ever sees the small, explicit surface exposed in preload.js.
 
-function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, updater, linkStats, pip, agentHub, outbox, devGate, downloadsDir, getWindow, revealWindow, applyLoginItem, onUnread }) {
+function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, updater, linkStats, pip, agentHub, outbox, devGate, deviceKey, pins, netScope, downloadsDir, getWindow, revealWindow, applyLoginItem, onUnread }) {
   function emit(type, payload) {
     const win = getWindow();
     if (win && !win.isDestroyed()) win.webContents.send('lanchat:event', { type, payload });
@@ -103,6 +104,29 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   // agent id because a peer's conversation with a local agent lives in its own
   // delegate thread, and that is the thread the window has to answer in.
   bus.on('agent-empty', ({ threadId }) => emit('agent-empty', { peerId: threadId }));
+
+  // A refusal, for the roster to explain. An old build and an attacker are
+  // refused identically — this only decides which sentence is shown, and it is
+  // shown here rather than sent back over the wire, which is what makes it safe
+  // to be helpful about it.
+  bus.on('peer-auth-failed', (info) => emit('peer-auth-failed', info));
+
+  // A pinned peer turned up with a different key. Held rather than acted on:
+  // accepting it is a separate, deliberate step, the way SSH makes you remove
+  // the old host key by hand. Nothing here auto-accepts and nothing times out
+  // into accepting.
+  const pendingKeyChange = new Map();
+  bus.on('peer-key-alarm', (alarm) => {
+    if (alarm.reason === 'key-changed' && alarm.offered) {
+      pendingKeyChange.set(alarm.peerId, alarm.offered);
+    }
+    emit('peer-key-alarm', {
+      ...alarm,
+      knownFingerprint: alarm.known ? fingerprint(alarm.known) : null,
+      offeredFingerprint: alarm.offered ? fingerprint(alarm.offered) : null,
+      name: (hub.identities.get(alarm.peerId) || {}).name || (pins && pins.get(alarm.peerId)?.name) || null,
+    });
+  });
 
   bus.on('file-received', (info) => {
     const message = {
@@ -221,6 +245,8 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
         break;
       }
       case 'file-offer':
+        // The permit that lets the upload through is issued by the grant issuer
+        // in grants.js, on this same bus event. This is only the chat bubble.
         emit('file-offer', { peerId: from, ...msg });
         break;
       default:
@@ -543,6 +569,56 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     }
   });
 
+  // ---- device identity and known peers ----
+
+  // Our own key, for reading out loud to somebody comparing it on their screen.
+  ipcMain.handle('lanchat:security', () => ({
+    fingerprint: deviceKey ? deviceKey.fingerprint() : null,
+    publicKey: deviceKey ? deviceKey.publicKey() : null,
+    keyMode: deviceKey ? deviceKey.mode() : null,
+    reachability: netScope ? netScope.reachability() : null,
+  }));
+
+  ipcMain.handle('lanchat:listPins', () => (pins ? pins.list() : []));
+
+  // Somebody compared fingerprints out loud. This is the only thing that makes
+  // first-use trust falsifiable, which is why it has to be reachable.
+  ipcMain.handle('lanchat:markPeerVerified', (_e, { peerId, verified = true }) => {
+    if (!pins) return null;
+    pins.markVerified(peerId, verified);
+    hub.emitPresence();
+    return pins.get(peerId);
+  });
+
+  // Accepting a changed key. Deliberate, explicit, and it revokes everything the
+  // old key had been granted — otherwise clicking through the warning hands an
+  // impostor every agent the real peer could reach, which would make the warning
+  // the only thing standing between them and the agents.
+  ipcMain.handle('lanchat:repinPeer', (_e, { peerId }) => {
+    if (!pins) return null;
+    const offered = pendingKeyChange.get(peerId);
+    if (!offered) return null;
+    pendingKeyChange.delete(peerId);
+    const record = pins.repin(peerId, offered);
+    const revoked = agentHub && agentHub.revokePeer ? agentHub.revokePeer(peerId) : [];
+    discovery.refresh();
+    return { record, revoked };
+  });
+
+  ipcMain.handle('lanchat:forgetPeer', (_e, { peerId }) => {
+    if (!pins) return false;
+    pendingKeyChange.delete(peerId);
+    return pins.forget(peerId);
+  });
+
+  // Whether we accept connections that did not arrive on the tailnet. Its own
+  // channel rather than a `setConfig` key, for the reason in publicConfig().
+  ipcMain.handle('lanchat:setAcceptLan', (_e, { on }) => {
+    config.set({ acceptLan: Boolean(on) });
+    if (netScope) netScope.refresh();
+    return publicConfig(config);
+  });
+
   ipcMain.handle('lanchat:addManualPeer', (_e, { ip, port }) => {
     const entry = `${ip}:${port || config.get('servicePort')}`;
     const list = new Set(config.get('manualPeers') || []);
@@ -852,6 +928,11 @@ function publicConfig(config) {
     pttAllowIncoming,
     skippedUpdateVersion,
     openAtLogin,
+    // Read-only to the renderer: it is shown and it drives the Settings toggle,
+    // but it is not settable through the bulk `setConfig` patch. A key that
+    // decides who may open a socket to this machine gets its own channel, so it
+    // can never be flipped as a side effect of saving unrelated preferences.
+    acceptLan,
   };
 }
 

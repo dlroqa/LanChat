@@ -57,7 +57,7 @@ function extractPdfText(buffer) {
     // content is read instead, without font maps. Less accurate, but the
     // difference between some text and none.
     for (const obj of objects.values()) {
-      const data = streamData(obj, objects);
+      const data = streamData(obj);
       if (!data) continue;
       const text = gate(scanContent(data.toString('latin1'), new Map()));
       if (text) out.push(text);
@@ -137,7 +137,7 @@ function parseObjects(buf) {
 // An object stream holds N objects: a header of `objnum offset` pairs, then the
 // objects themselves starting at `/First`.
 function expandObjectStream(obj, objects) {
-  const data = streamData(obj, objects);
+  const data = streamData(obj);
   if (!data) return;
   const n = numberValue(obj.dict, 'N');
   const first = numberValue(obj.dict, 'First');
@@ -159,7 +159,7 @@ function expandObjectStream(obj, objects) {
 // Decoded bytes of an object's stream, or null when it is not one we can or
 // should read. Image and font-program payloads are refused by their dictionary
 // so their binary is never mistaken for content.
-function streamData(obj, objects) {
+function streamData(obj) {
   if (!obj || !obj.raw) return null;
   const dict = obj.dict;
   if (/\/Subtype\s*\/(Image|Type1C|CIDFontType0C|OpenType)\b/.test(dict)) return null;
@@ -267,7 +267,7 @@ function textFromPage(page, objects) {
   const fonts = fontsForPage(page, objects);
   const chunks = [];
   for (const num of contentRefs(page.dict)) {
-    const data = streamData(objects.get(num), objects);
+    const data = streamData(objects.get(num));
     if (data) chunks.push(data.toString('latin1'));
   }
   if (!chunks.length) return '';
@@ -319,7 +319,7 @@ function cmapForFont(font, objects) {
   const simple = /\/Subtype\s*\/(TrueType|Type1|MMType1|Type3)\b/.test(font.dict);
   const toUnicode = readValue(font.dict, indexOfKey(font.dict, 'ToUnicode'));
   if (toUnicode && typeof toUnicode.ref === 'number') {
-    const data = streamData(objects.get(toUnicode.ref), objects);
+    const data = streamData(objects.get(toUnicode.ref));
     if (data) {
       const cmap = parseCMap(data.toString('latin1'));
       return simple ? { ...cmap, width: 1 } : cmap;

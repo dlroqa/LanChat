@@ -217,15 +217,60 @@ function createDiscovery({ config, getIdentity, hub, bus }) {
 
   // `extra` carries facts we know locally (e.g. the peer is shared in from
   // another tailnet) which the peer itself cannot tell us about.
+  //
+  // The probe response is an unauthenticated stranger's word, so it decides one
+  // thing only: where to dial. It used to go straight into `hub.setIdentity`,
+  // which meant a name and an avatar of somebody else's choosing appeared in the
+  // roster before a single frame had been authenticated — and appeared whether
+  // or not the dial ever succeeded. What a peer looks like now arrives with the
+  // handshake, signed. What we worked out ourselves goes in as a hint, which
+  // display treats as the weakest source.
   async function adoptPeer(ip, defaultPort, extra = {}) {
     const port = defaultPort || config.get('servicePort');
+    if (isBackedOff(`${ip}:${port}`)) return null;
     const who = await probeWhoami(ip, port);
     if (!who || !who.id || who.id === getIdentity().id) return who;
     const svcPort = who.servicePort || port;
-    hub.setIdentity(who.id, { ...who, ...extra });
+    if (Object.keys(extra).length) hub.setDiscoveryHint(who.id, extra);
     hub.connect(who.id, `${ip}:${svcPort}`);
     return who;
   }
+
+  // Addresses that failed to authenticate, and when to bother them again.
+  //
+  // This became necessary the moment the handshake did. Every online tailnet
+  // node is adopted every five seconds and the `dialing` guard clears on close,
+  // so a node that is not running LanChat — or is running a version that cannot
+  // authenticate — produced a failed handshake every five seconds, forever, with
+  // a log line and a roster entry each time. Strict refusal without backoff is a
+  // denial of service you inflict on yourself.
+  const backoff = new Map(); // "ip:port" -> { until, failures }
+  const BACKOFF_BASE_MS = 30000;
+  const BACKOFF_MAX_MS = 15 * 60 * 1000;
+
+  function isBackedOff(address) {
+    const entry = backoff.get(address);
+    if (!entry) return false;
+    if (Date.now() >= entry.until) return false;
+    return true;
+  }
+
+  function noteAuthFailure(address) {
+    if (!address) return;
+    const entry = backoff.get(address) || { failures: 0 };
+    entry.failures += 1;
+    // Doubling, capped. A peer that is simply switched off should not be waited
+    // on for an hour once they come back.
+    entry.until = Date.now() + Math.min(BACKOFF_BASE_MS * 2 ** (entry.failures - 1), BACKOFF_MAX_MS);
+    backoff.set(address, entry);
+  }
+
+  // A peer that authenticates has earned a clean slate.
+  bus.on('peer-hello', ({ peerId }) => {
+    const address = hub.addresses.get(peerId);
+    if (address) backoff.delete(address);
+  });
+  bus.on('peer-auth-failed', ({ address }) => noteAuthFailure(address));
 
   async function pollTailscale() {
     if (stopped || !config.get('enableTailscale')) return;
@@ -300,11 +345,22 @@ function createDiscovery({ config, getIdentity, hub, bus }) {
     beacon();
   }
 
+  // A manually added peer is an explicit instruction, so it is dialled whatever
+  // the discovery toggles say. It is also the one case where the inbound
+  // interface check would otherwise bite in a way nobody expects: on a plain LAN
+  // we would authenticate outbound and refuse the same peer inbound, which reads
+  // as a connection that keeps flapping. Adding an address here is taken as
+  // consent to accept from it too.
   function pollManual() {
     for (const entry of config.get('manualPeers') || []) {
       const [ip, portStr] = String(entry).split(':');
       if (ip) adoptPeer(ip.trim(), Number(portStr) || undefined);
     }
+  }
+
+  // The addresses the user asked for by hand, for netScope to consult.
+  function manualAddresses() {
+    return (config.get('manualPeers') || []).map((e) => String(e).split(':')[0].trim()).filter(Boolean);
   }
 
   function start() {
@@ -332,7 +388,7 @@ function createDiscovery({ config, getIdentity, hub, bus }) {
       } catch {}
   }
 
-  return { start, stop, refresh, probeWhoami };
+  return { start, stop, refresh, probeWhoami, manualAddresses, isBackedOff };
 }
 
 module.exports = {

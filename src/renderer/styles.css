@@ -4115,3 +4115,55 @@ code.path {
     display: none;
   }
 }
+
+/* ---------------- Security ---------------- */
+/* A key fingerprint is read aloud to somebody looking at their own screen, so it
+   is set in a monospace face at a size that survives being read over a call, and
+   grouped the way it is generated — six blocks of four. Selectable, because the
+   other half of comparing it is pasting it somewhere. */
+.fingerprint {
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  user-select: text;
+  cursor: text;
+  overflow-wrap: anywhere;
+}
+
+/* Something is wrong with reachability or with a peer's identity. Amber rather
+   than red: nothing has been lost, but nobody can talk to you until it is dealt
+   with, and that is worth interrupting for. */
+.field-warning {
+  border: 1px solid color-mix(in srgb, var(--warn, #d9a441) 55%, transparent);
+  background: color-mix(in srgb, var(--warn, #d9a441) 12%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* The key-change alarm. Deliberately not styled as a routine confirmation: the
+   two fingerprints are the content, and the accept action is not the one the eye
+   lands on. */
+.key-change-keys {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0 4px;
+}
+.key-change-key {
+  display: grid;
+  gap: 4px;
+}
+.key-change-key .label {
+  font-size: 12px;
+  color: var(--fg-faint);
+}
+.key-change-key.offered .fingerprint {
+  border-color: color-mix(in srgb, var(--warn, #d9a441) 55%, transparent);
+}

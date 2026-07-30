@@ -50,6 +50,21 @@ const DEFAULTS = Object.freeze({
   videoInputId: null, // preferred camera (null = system default)
   enableTailscale: true,
   enableLan: true,
+  // Whether we ACCEPT inbound connections that arrived on something other than
+  // the tailnet. Deliberately not `enableLan`, which is about whether we send and
+  // listen for discovery beacons: finding a laptop over Wi-Fi and letting the
+  // whole Wi-Fi network open a socket to you are different decisions, and one
+  // key for both means a user gets the second without asking for it.
+  //
+  // Off by default, and off means nobody outside the tailnet can reach this
+  // machine. On a machine with no tailnet at all that means nobody can reach it
+  // at all — see netScope.reachability(), which is what tells the window to say
+  // so rather than letting the app look broken.
+  //
+  // Main-owned, like manualPeers: present in publicConfig() so the UI can show
+  // it, absent from the setConfig allowlist so it cannot be flipped by a bulk
+  // patch. It has its own IPC channel.
+  acceptLan: false,
   manualPeers: [], // ["100.x.y.z:47100", "192.168.1.5:47100"]
 });
 

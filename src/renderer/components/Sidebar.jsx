@@ -4,6 +4,30 @@ import QueueBadge from './QueueBadge.jsx';
 import { Settings, Plus, Search, Refresh, Users, GroupCall, Code } from '../lib/icons.jsx';
 import { platformLabel } from '../lib/util.js';
 
+// Why a peer could not connect, in words rather than a code.
+//
+// Every one of these was refused identically — an attacker who simply omits the
+// proof looks exactly like a build that cannot produce one, and both are turned
+// away. This only chooses the sentence, and it is chosen here, in the window,
+// where the far end cannot read it. That is what makes it safe to be helpful:
+// the friendlier line below is the one an attacker gets, and it costs nothing.
+function refusalLabel(reason) {
+  switch (reason) {
+    case 'older-lanchat':
+      return 'Needs a newer LanChat';
+    case 'key-changed':
+      return 'Could not be verified';
+    case 'bad-signature':
+    case 'bad-hello':
+    case 'id-in-use':
+      return 'Could not be verified';
+    case 'timed-out':
+      return 'Did not respond';
+    default:
+      return 'Offline';
+  }
+}
+
 export default function Sidebar({
   self,
   peers,
@@ -12,6 +36,7 @@ export default function Sidebar({
   selectedId,
   unread,
   queued = {},
+  authFailures = {},
   showAddresses,
   onSelect,
   onOpenProfile,
@@ -79,7 +104,9 @@ export default function Sidebar({
                 : 'Agent · off'
             : p.online
               ? platformLabel(p.platform) || 'Online'
-              : 'Offline'}
+              : authFailures[p.id]
+                ? refusalLabel(authFailures[p.id])
+                : 'Offline'}
           {showAddresses && p.address ? ` · ${p.address.split(':')[0]}` : ''}
         </div>
       </div>

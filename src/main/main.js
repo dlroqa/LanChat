@@ -5,8 +5,12 @@ const { EventEmitter } = require('node:events');
 const { app, BrowserWindow, session, safeStorage, shell } = require('electron');
 
 const { Config } = require('./config');
-const { buildIdentity } = require('./identity');
+const { buildIdentity, buildPublicCard } = require('./identity');
 const { PeerHub } = require('./peers');
+const { createDeviceKey } = require('./deviceKey');
+const { createPins } = require('./pins');
+const { createNetScope } = require('./netScope');
+const { createGrants, attachGrantIssuer } = require('./grants');
 const { createServer } = require('./server');
 const { createDiscovery } = require('./discovery');
 const { createFileSender } = require('./fileTransfer');
@@ -200,17 +204,52 @@ async function startServices() {
 
   const getIdentity = () => buildIdentity(config);
 
+  // The device key and the peers we have pinned, before anything that networks.
+  // Both throw rather than repairing themselves if their file is damaged, and
+  // that has to surface here: an app that quietly minted a fresh key would
+  // present every peer it has ever met with the exact signature of an
+  // impersonation, all at once.
+  const deviceKey = createDeviceKey({ userDataDir: app.getPath('userData'), safeStorage });
+  const pins = createPins({ userDataDir: app.getPath('userData') });
+  deviceKey.load();
+  const getPublicCard = () => buildPublicCard(config, deviceKey);
+
+  // Manual peers are read lazily: discovery is built after this, and an
+  // address the user adds later must take effect without a restart.
+  let discoveryRef = null;
+  const netScope = createNetScope({
+    config,
+    manualAddresses: () => (discoveryRef ? discoveryRef.manualAddresses() : []),
+  });
+  // Upload permits, minted on the authenticated socket and redeemed over HTTP.
+  // Shared between the server (which redeems) and the ipc router (which issues).
+  const grants = createGrants();
+
   const downloadsDir = path.join(app.getPath('downloads'), 'LanChat');
   const store = new MessageStore(app.getPath('userData'));
   // Histories written before turn notices became transient still hold them, so
   // they are cleared out here rather than left to clutter the thread forever.
   store.pruneLegacyNotices();
-  const hub = new PeerHub({ getIdentity, bus });
+  const hub = new PeerHub({ getIdentity, bus, deviceKey, pins });
   // `store` is passed so previews of files already in a conversation survive a
   // restart — see the allowlist in server.js.
-  const server = createServer({ config, getIdentity, hub, bus, downloadsDir, store });
+  const server = createServer({
+    config,
+    getIdentity,
+    getPublicCard,
+    deviceKey,
+    pins,
+    grants,
+    hub,
+    bus,
+    downloadsDir,
+    store,
+    netScope,
+  });
   const discovery = createDiscovery({ config, getIdentity, hub, bus });
+  discoveryRef = discovery;
   const fileSender = createFileSender({ hub, getIdentity, bus });
+  attachGrantIssuer({ hub, bus, grants });
 
   const outbox = new Outbox(app.getPath('userData'), { hub, bus, store });
   const devGate = new DevGate(app.getPath('userData'));
@@ -237,6 +276,9 @@ async function startServices() {
     linkStats,
     pip,
     agentHub,
+    deviceKey,
+    pins,
+    netScope,
     outbox,
     devGate,
     downloadsDir,
@@ -273,9 +315,30 @@ async function startServices() {
   // notice actually surfaces (skipped/"Later" versions are suppressed there).
   setInterval(runUpdateCheck, PERIODIC_UPDATE_CHECK_INTERVAL);
 
-  services = { config, bus, hub, server, discovery, store, downloadsDir, linkStats, agentHub, outbox };
+  services = {
+    config,
+    bus,
+    hub,
+    server,
+    discovery,
+    store,
+    downloadsDir,
+    linkStats,
+    agentHub,
+    outbox,
+    deviceKey,
+    pins,
+    netScope,
+    grants,
+  };
   return ipcApi;
 }
+
+// Exported for the wiring smoke test. This file is the one place every service
+// is constructed and handed to every other, and nothing else loads it — so a
+// name typed wrong here would not fail until the app was launched by a person.
+// Nothing calls this on require; Electron still reaches it through whenReady().
+module.exports = { startServices, getServices: () => services };
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock && !process.env.LANCHAT_USERDATA) {

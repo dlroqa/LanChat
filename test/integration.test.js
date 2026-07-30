@@ -10,8 +10,11 @@ const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 
 const { Config } = require('../src/main/config.js');
-const { buildIdentity } = require('../src/main/identity.js');
+const { buildIdentity, buildPublicCard } = require('../src/main/identity.js');
 const { PeerHub } = require('../src/main/peers.js');
+const { createDeviceKey } = require('../src/main/deviceKey.js');
+const { createPins } = require('../src/main/pins.js');
+const { createGrants, attachGrantIssuer } = require('../src/main/grants.js');
 const { createServer } = require('../src/main/server.js');
 const { createFileSender } = require('../src/main/fileTransfer.js');
 const { Outbox } = require('../src/main/outbox.js');
@@ -39,10 +42,20 @@ function makeNode(name, port) {
   const bus = new EventEmitter();
   const getIdentity = () => buildIdentity(config);
   const downloadsDir = path.join(dir, 'downloads');
-  const hub = new PeerHub({ getIdentity, bus });
-  const server = createServer({ config, getIdentity, hub, bus, downloadsDir });
+  // A real key and a real pin store per node, rooted in that node's own dir —
+  // two nodes in one process must not share an identity or a set of pins, or
+  // every handshake here would be a node talking to itself.
+  const deviceKey = createDeviceKey({ userDataDir: dir });
+  const pins = createPins({ userDataDir: dir });
+  const getPublicCard = () => buildPublicCard(config, deviceKey);
+  const hub = new PeerHub({ getIdentity, bus, deviceKey, pins });
+  const grants = createGrants();
+  const server = createServer({ config, getIdentity, getPublicCard, deviceKey, pins, grants, hub, bus, downloadsDir });
   const fileSender = createFileSender({ hub, getIdentity, bus });
-  return { dir, config, bus, getIdentity, hub, server, fileSender, downloadsDir, port };
+  // The same wiring main.js does: a file offer earns a permit, and the permit is
+  // what the upload presents. Without it a node can receive nothing.
+  attachGrantIssuer({ hub, bus, grants });
+  return { dir, config, bus, getIdentity, hub, server, fileSender, downloadsDir, port, deviceKey, pins, grants };
 }
 
 function waitFor(fn, timeout = 4000) {

@@ -14,11 +14,15 @@
     "dev:renderer": "vite",
     "dev:electron": "cross-env LANCHAT_DEV=1 wait-on tcp:5273 && cross-env LANCHAT_DEV=1 electron .",
     "build:renderer": "vite build",
+    "lint": "eslint .",
+    "format": "prettier --write \"src/**/*.{js,jsx,css}\" \"test/*.js\" \"scripts/**/*.js\" \"*.js\"",
+    "format:check": "prettier --check \"src/**/*.{js,jsx,css}\" \"test/*.js\" \"scripts/**/*.js\" \"*.js\"",
     "icons": "node scripts/make-icons.js",
     "start": "electron .",
     "dist": "npm run build:renderer && electron-builder",
     "dist:linux": "npm run build:renderer && electron-builder --linux",
-    "test": "node --test --test-force-exit"
+    "test": "node --test --test-force-exit",
+    "test:coverage": "node --test --experimental-test-coverage --test-force-exit"
   },
   "dependencies": {
     "ws": "^8.18.0"
@@ -29,6 +33,11 @@
     "cross-env": "^7.0.3",
     "electron": "^33.2.1",
     "electron-builder": "^25.1.8",
+    "eslint": "^9.15.0",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^5.0.0",
+    "globals": "^15.12.0",
+    "prettier": "^3.3.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "vite": "^6.0.7",

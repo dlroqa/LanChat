@@ -77,6 +77,15 @@ contextBridge.exposeInMainWorld('lanchat', {
   downloadUpdate: () => invoke('lanchat:downloadUpdate'),
   installUpdate: () => invoke('lanchat:installUpdate'),
   addManualPeer: (ip, port) => invoke('lanchat:addManualPeer', { ip, port }),
+
+  // Device identity and the peers we have pinned. Read-mostly: the only things
+  // that change state here are deliberate acts by the person at the keyboard.
+  security: () => invoke('lanchat:security'),
+  listPins: () => invoke('lanchat:listPins'),
+  markPeerVerified: (peerId, verified) => invoke('lanchat:markPeerVerified', { peerId, verified }),
+  repinPeer: (peerId) => invoke('lanchat:repinPeer', { peerId }),
+  forgetPeer: (peerId) => invoke('lanchat:forgetPeer', { peerId }),
+  setAcceptLan: (on) => invoke('lanchat:setAcceptLan', { on }),
   refresh: () => invoke('lanchat:refresh'),
   revealFile: (filePath) => invoke('lanchat:revealFile', filePath),
   openFile: (filePath) => invoke('lanchat:openFile', filePath),

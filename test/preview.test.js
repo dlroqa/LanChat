@@ -10,7 +10,9 @@ const http = require('node:http');
 const { EventEmitter } = require('node:events');
 
 const { Config } = require('../src/main/config.js');
-const { buildIdentity } = require('../src/main/identity.js');
+const { buildIdentity, buildPublicCard } = require('../src/main/identity.js');
+const { createDeviceKey } = require('../src/main/deviceKey.js');
+const { createPins } = require('../src/main/pins.js');
 const { PeerHub } = require('../src/main/peers.js');
 const { createServer } = require('../src/main/server.js');
 const { MessageStore } = require('../src/main/store.js');
@@ -48,7 +50,7 @@ function get(port, filePath) {
   });
 }
 
-function makeNode(name, port, windows = true) {
+function makeNode(name, port, windows = true, netScope = null) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `lanchat-${name}-`));
   const config = new Config(dir);
   config.set({ displayName: name, servicePort: port });
@@ -57,8 +59,13 @@ function makeNode(name, port, windows = true) {
   const store = new MessageStore(dir);
   const hub = new PeerHub({ getIdentity, bus });
   const downloadsDir = path.join(dir, 'downloads');
-  const server = createServer({ config, getIdentity, hub, bus, downloadsDir, store, windows });
-  return { dir, config, bus, store, hub, server, downloadsDir, port };
+  const deviceKey = createDeviceKey({ userDataDir: dir });
+  const pins = createPins({ userDataDir: dir });
+  const getPublicCard = () => buildPublicCard(config, deviceKey);
+  const server = createServer({
+    config, getIdentity, getPublicCard, deviceKey, pins, hub, bus, downloadsDir, store, windows, netScope,
+  });
+  return { dir, config, bus, store, hub, server, downloadsDir, port, deviceKey, pins };
 }
 
 // A 1x1 PNG, so the endpoint is exercised on something a browser would decode.
@@ -147,4 +154,53 @@ test('a file received this session previews immediately', async (t) => {
   A.bus.emit('file-received', { path: image, name: 'incoming.png', size: PIXEL.length });
   const res = await get(port, image);
   assert.equal(res.status, 200);
+});
+
+test('a peer cannot preview anything, however well allowed the file is', async (t) => {
+  // The endpoint exists for this window fetching its own thumbnails over
+  // localhost; no peer has ever called it. It mattered because on Windows the
+  // allowlist is seeded from every file ever exchanged with anyone, so one peer
+  // could read back what a different peer had sent. The request arriving from
+  // somewhere other than this machine is the whole test — the file is allowed,
+  // it exists, and it is still refused.
+  const port = await freePort();
+  const notLocal = { isLoopback: () => false, allowInbound: () => true };
+  const A = makeNode('dave', port, true, notLocal);
+  const image = path.join(A.dir, 'private.png');
+  fs.writeFileSync(image, PIXEL);
+  await A.server.start();
+  t.after(() => A.server.stop());
+
+  A.bus.emit('file-received', { path: image, name: 'private.png', size: PIXEL.length });
+  const res = await get(port, image);
+  assert.equal(res.status, 404, 'allowed, present, and still not served off-machine');
+  assert.ok(!res.body.equals(PIXEL), 'and no bytes of it leaked');
+});
+
+test('the unauthenticated card gives away only what dialing us would', async (t) => {
+  // /lanchat/whoami answers anyone who can reach the port. It used to hand over
+  // the display name, the avatar image, the hostname, the OS and the app version
+  // — a fingerprint of the machine, for free. Discovery needs somewhere to dial
+  // and something to check a key against; it does not need any of the rest.
+  const port = await freePort();
+  const A = makeNode('erin', port);
+  await A.server.start();
+  t.after(() => A.server.stop());
+
+  const card = await new Promise((resolve, reject) => {
+    http
+      .get(`http://127.0.0.1:${port}/lanchat/whoami`, (res) => {
+        let body = '';
+        res.on('data', (c) => (body += c));
+        res.on('end', () => resolve(JSON.parse(body)));
+      })
+      .on('error', reject);
+  });
+
+  assert.equal(card.id, A.config.get('id'));
+  assert.equal(card.servicePort, port, 'discovery still learns where to dial');
+  assert.ok(card.proto >= 2, 'and what we speak');
+  for (const leaked of ['avatar', 'hostname', 'platform', 'version', 'name']) {
+    assert.ok(!(leaked in card), `${leaked} should not be handed to a stranger`);
+  }
 });

@@ -5,6 +5,7 @@ import CallOverlay from './components/CallOverlay.jsx';
 import IncomingCall from './components/IncomingCall.jsx';
 import ProfileModal from './components/ProfileModal.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
+import KeyChangeModal from './components/KeyChangeModal.jsx';
 import DevPasswordModal from './components/DevPasswordModal.jsx';
 import DevPanel from './components/DevPanel.jsx';
 import AddPeerModal from './components/AddPeerModal.jsx';
@@ -53,7 +54,7 @@ const nextLocalId = () => `local-${(localId += 1)}`;
 
 export default function App() {
   const [self, setSelf] = useState(null);
-  const [configured, setConfigured] = useState(true);
+  const [, setConfigured] = useState(true);
   const [config, setConfig] = useState({ iceServers: [], enableTailscale: true, enableLan: true });
   const [peers, setPeers] = useState([]);
   const [tailnet, setTailnet] = useState([]);
@@ -65,6 +66,10 @@ export default function App() {
   const [progress, setProgress] = useState({});
   const [toasts, setToasts] = useState([]);
   const [modal, setModal] = useState(null); // 'profile' | 'devgate' | 'devpanel' | 'settings' | 'addpeer'
+  // A pinned peer arriving with a different key, and the reasons peers were
+  // turned away. Neither is acted on automatically.
+  const [keyAlarm, setKeyAlarm] = useState(null);
+  const [authFailures, setAuthFailures] = useState({});
   const [firstRun, setFirstRun] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [call, setCall] = useState({ status: 'idle' });
@@ -438,6 +443,17 @@ export default function App() {
         case 'agent-status':
           setAgentStatus((s) => ({ ...s, [payload.agentId]: payload }));
           if (payload.status === 'error') toast(`Agent: ${payload.detail}`, 'error');
+          break;
+        case 'peer-key-alarm':
+          // Held, never acted on. Accepting a changed key is a separate,
+          // deliberate step — see KeyChangeModal for why this is not a prompt
+          // that can be dismissed into acceptance.
+          if (payload.reason === 'key-changed') setKeyAlarm(payload);
+          break;
+        case 'peer-auth-failed':
+          // The roster explains itself rather than the peer simply vanishing.
+          // Both cases below were refused identically; only the wording differs.
+          setAuthFailures((f) => ({ ...f, [payload.peerId || payload.address]: payload.reason }));
           break;
         case 'agent-approval':
           // Never auto-answered — it sits until the local user decides.
@@ -842,6 +858,7 @@ export default function App() {
         selectedId={selectedId}
         unread={unread}
         queued={queued}
+        authFailures={authFailures}
         showAddresses={config.showAddresses}
         onSelect={setSelectedId}
         onOpenProfile={() => setModal('profile')}
@@ -979,6 +996,28 @@ export default function App() {
           }}
         />
       )}
+      {keyAlarm && (
+        <KeyChangeModal
+          alarm={keyAlarm}
+          onClose={() => setKeyAlarm(null)}
+          onForget={async () => {
+            await api.forgetPeer(keyAlarm.peerId);
+            setKeyAlarm(null);
+            toast('That device was forgotten. It will be treated as new if it connects again.');
+          }}
+          onAccept={async () => {
+            const result = await api.repinPeer(keyAlarm.peerId);
+            setKeyAlarm(null);
+            const revoked = (result && result.revoked) || [];
+            toast(
+              revoked.length
+                ? `New key trusted. ${revoked.length} agent grant${revoked.length === 1 ? '' : 's'} were taken back.`
+                : 'New key trusted.'
+            );
+          }}
+        />
+      )}
+
       {modal === 'addpeer' && (
         <AddPeerModal
           defaultPort={self?.servicePort}

@@ -318,7 +318,6 @@ export function resolvePttKey(keyName, customCode) {
 export function attachPttKey({ keyName, customCode, isEnabled, onDown, onUp }) {
   const def = resolvePttKey(keyName, customCode);
   let held = false;
-  let poisoned = false; // another key was pressed during the hold
 
   const typing = () => {
     const el = document.activeElement;

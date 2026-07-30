@@ -11,6 +11,12 @@ const DEFAULT_STUN = 'stun:stun.l.google.com:19302';
 // Settings: audio/video sources, discovery toggles, optional STUN, network info.
 export default function SettingsModal({ config, self, peers, soundUrl, onSave, onClose }) {
   const [enableTailscale, setTs] = useState(config.enableTailscale);
+  // Applied immediately rather than batched into Save, like openAtLogin below:
+  // this decides who may open a socket to this machine, and a setting like that
+  // should not sit in a draft state where the window shows one thing and the
+  // listener is doing another.
+  const [acceptLan, setAcceptLan] = useState(Boolean(config.acceptLan));
+  const [security, setSecurity] = useState(null);
   const [enableLan, setLan] = useState(config.enableLan);
   const [useStun, setUseStun] = useState((config.iceServers || []).length > 0);
   const [showAddresses, setShowAddresses] = useState(Boolean(config.showAddresses));
@@ -41,6 +47,15 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
     audioInputId: config.audioInputId || null,
     videoInputId: config.videoInputId || null,
   });
+
+  // Our own fingerprint, and whether anybody can currently reach us.
+  useEffect(() => {
+    let alive = true;
+    window.lanchat.security().then((s) => alive && setSecurity(s));
+    return () => {
+      alive = false;
+    };
+  }, [acceptLan]);
 
   function save() {
     onSave({
@@ -119,6 +134,44 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
 
         <div className="section-head">Agents</div>
         <AgentSection peers={peers} />
+
+        <div className="section-head">Security</div>
+        {security && security.reachability && security.reachability.unreachable && (
+          <div className="field-warning" role="status">
+            Nobody can reach this device. LanChat only accepts connections over Tailscale, and no
+            tailnet was found — turn on the setting below to accept them over your local network
+            instead.
+          </div>
+        )}
+        <Toggle
+          label="Accept connections from the local network"
+          desc={
+            acceptLan
+              ? 'Anyone on the networks you join can open a connection. They still have to prove who they are, ' +
+                'but messages over a plain network are not encrypted in transit the way Tailscale encrypts them. ' +
+                'Prefer Tailscale on networks you do not control.'
+              : 'Only devices reaching you over Tailscale can connect, where traffic is already encrypted.'
+          }
+          on={acceptLan}
+          set={(v) => {
+            setAcceptLan(v);
+            window.lanchat.setAcceptLan(v);
+          }}
+        />
+        {security && security.fingerprint && (
+          <div className="field">
+            <label>This device's key</label>
+            <div className="fingerprint" title={security.publicKey || ''}>
+              {security.fingerprint}
+            </div>
+            <div className="hint">
+              Read this out to somebody adding you for the first time — if it matches what they see,
+              nobody is standing in between. {security.keyMode === 'sealed'
+                ? 'The key is held in your system keychain.'
+                : 'The key is stored in a file only you can read.'}
+            </div>
+          </div>
+        )}
 
         <div className="section-head">Discovery</div>
         <Toggle label="Discover peers over Tailscale" desc="Find people across your tailnet." on={enableTailscale} set={setTs} />

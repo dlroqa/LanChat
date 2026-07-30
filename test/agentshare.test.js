@@ -50,7 +50,9 @@ require.cache['estub'] = {
 };
 
 const { Config } = require('../src/main/config.js');
-const { buildIdentity } = require('../src/main/identity.js');
+const { buildIdentity, buildPublicCard } = require('../src/main/identity.js');
+const { createDeviceKey } = require('../src/main/deviceKey.js');
+const { createPins } = require('../src/main/pins.js');
 const { PeerHub } = require('../src/main/peers.js');
 const { createServer } = require('../src/main/server.js');
 const { MessageStore } = require('../src/main/store.js');
@@ -123,8 +125,24 @@ function makeNode(name, port) {
   config.set({ displayName: name, servicePort: port });
   const bus = new EventEmitter();
   const getIdentity = () => buildIdentity(config);
-  const hub = new PeerHub({ getIdentity, bus });
-  const server = createServer({ config, getIdentity, hub, bus, downloadsDir: path.join(dir, 'dl') });
+  // Its own key and its own pins, in its own dir. `fakeSafeStorage` reports no
+  // encryption available, which is exactly the case the plain-file fallback in
+  // deviceKey.js exists for — refusing there would have taken this whole suite
+  // down before a single agent test ran.
+  const deviceKey = createDeviceKey({ userDataDir: dir });
+  const pins = createPins({ userDataDir: dir });
+  const getPublicCard = () => buildPublicCard(config, deviceKey);
+  const hub = new PeerHub({ getIdentity, bus, deviceKey, pins });
+  const server = createServer({
+    config,
+    getIdentity,
+    getPublicCard,
+    deviceKey,
+    pins,
+    hub,
+    bus,
+    downloadsDir: path.join(dir, 'dl'),
+  });
   const store = new MessageStore(dir);
   const log = [];
   const agentHub = createAgentHub({
@@ -166,7 +184,7 @@ function makeNode(name, port) {
   const own = new Map(handlers);
   const call = (channel, arg) => own.get(channel)(null, arg);
 
-  return { dir, config, bus, getIdentity, hub, server, store, agentHub, log, events, call, port };
+  return { dir, config, bus, getIdentity, hub, server, store, agentHub, log, events, call, port, deviceKey, pins };
 }
 
 function waitFor(fn, timeout = 5000, what = 'condition') {

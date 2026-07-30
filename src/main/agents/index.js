@@ -1103,6 +1103,28 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     announceAll();
   }
 
+  // Everything this peer had been granted, taken back.
+  //
+  // Called when a pinned key changes and the user accepts the new one. The peer
+  // id survives a key change — it is a UUID in a file, not something derived
+  // from the key — so without this, clicking through the warning would hand the
+  // new key every agent the old one could reach. "Warn loudly" is not sufficient
+  // on its own precisely because the grant list outlives the warning.
+  function revokePeer(peerId) {
+    if (!peerId) return [];
+    const revoked = [];
+    for (const agent of registry.list()) {
+      const allowed = agent.allowedPeers || [];
+      if (!allowed.includes(peerId)) continue;
+      registry.update(agent.id, { allowedPeers: allowed.filter((p) => p !== peerId) });
+      revoked.push(agent.id);
+    }
+    // Anything that peer had shared with us goes too: it was advertised by a key
+    // we no longer recognise.
+    if (revoked.length) announceAll();
+    return revoked;
+  }
+
   async function stopAll() {
     clearInterval(idleSweep);
     // Peers should not be left holding a card for an agent that just went away
@@ -1136,6 +1158,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     announce,
     announceAll,
     startAll,
+    revokePeer,
     stopAll,
     isAgent: isAgentId,
     isDelegate: isDelegateId,

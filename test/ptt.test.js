@@ -214,6 +214,9 @@ test('the cue callback defaults to a no-op', () => {
 // Keying up plays the local "go ahead" cue while the mic is still muted, so the
 // beep is a prompt to the talker and never rides out to the peer on the hot mic.
 test('the transmit cue fires before the microphone is unmuted', async () => {
+  // Declared here and assigned below on purpose: the stream's getters close over
+  // it, so it has to exist before they are written and hold its value after.
+  // eslint-disable-next-line prefer-const
   let track;
   const stream = {
     getAudioTracks: () => [track],

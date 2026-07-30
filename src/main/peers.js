@@ -1,40 +1,83 @@
 'use strict';
 
 const WebSocket = require('ws');
+const {
+  createHandshake,
+  applyPinVerdict,
+  WIRE_REASON,
+  WIRE_CLOSE_CODE,
+  ID_IN_USE,
+  TIMED_OUT,
+} = require('./handshake');
 
 // PeerHub is the single registry of live peer connections and known identities.
 // Both inbound (server-accepted) and outbound (we dialed) sockets register here,
 // so send() can use whichever socket is open. Discovery feeds it candidate peers.
+//
+// An id in here is one a peer proved, not one it announced: every socket that
+// arrives off the network has completed the handshake in handshake.js before it
+// is registered, and the key that did so is held against the id for as long as
+// the connection lasts.
 
 // How many times a single presence burst will re-emit to let the roster settle.
 // Two is the normal ceiling — one pass for listeners to react, one to show the
 // result — so anything approaching this means a listener is not converging.
 const MAX_PRESENCE_PASSES = 10;
 
+// Matches the server's. A dial that is accepted but never answered has to fail
+// rather than hold the peer in `dialing` where nothing will retry it.
+const AUTH_TIMEOUT_MS = 8000;
+
 class PeerHub {
-  constructor({ getIdentity, bus }) {
+  constructor({ getIdentity, bus, deviceKey = null, pins = null }) {
     this.getIdentity = getIdentity;
     this.bus = bus;
+    this.deviceKey = deviceKey;
+    this.pins = pins;
+    this.keys = new Map(); // peerId -> the public key currently holding it
     this.sockets = new Map(); // peerId -> Set<ws>
-    this.identities = new Map(); // peerId -> identity card
+    this.identities = new Map(); // peerId -> identity card, as proved on the wire
+    this.discoveryHints = new Map(); // peerId -> what we noticed locally
     this.addresses = new Map(); // peerId -> "ip:port" last known
     this.dialing = new Set(); // peerId currently being dialed
     this.emittingPresence = false; // a burst is in flight; nested emits fold in
     this.presenceDirty = false; // the roster changed while that burst ran
   }
 
-  register(peerId, ws) {
+  // `publicKey` is optional, and deliberately so: local and remote agents
+  // register virtual sockets through here too (agents/index.js, agents/remote.js)
+  // and have no wire identity to prove. Only sockets that came off the network
+  // carry a key, and only those are held to one.
+  register(peerId, ws, { publicKey = null } = {}) {
     if (!peerId) return;
+    if (publicKey) this.keys.set(peerId, publicKey);
     if (!this.sockets.has(peerId)) this.sockets.set(peerId, new Set());
     this.sockets.get(peerId).add(ws);
     this.emitPresence();
+  }
+
+  // Whether a peer id is free for this key. Two live sockets for one id is
+  // ordinary — both ends dial each other and both succeed, which the agent
+  // sharing tests depend on. Two live sockets under *different* keys is one of
+  // them being somebody else, and that is what this refuses. Getting this wrong
+  // as "refuse a second socket" breaks the normal case; getting it wrong as "any
+  // socket may claim any id" is the impersonation this whole change is about.
+  keyAgrees(peerId, publicKey) {
+    const known = this.keys.get(peerId);
+    if (!known) return true;
+    return known === publicKey;
   }
 
   unregister(peerId, ws) {
     const set = this.sockets.get(peerId);
     if (!set) return;
     set.delete(ws);
-    if (set.size === 0) this.sockets.delete(peerId);
+    if (set.size === 0) {
+      this.sockets.delete(peerId);
+      // The binding lasts as long as the connection does. The durable one lives
+      // in pins.json; this is only about who currently holds the id.
+      this.keys.delete(peerId);
+    }
     this.emitPresence();
   }
 
@@ -102,9 +145,38 @@ class PeerHub {
       return;
     }
 
-    ws.on('open', () => {
-      ws.send(JSON.stringify({ type: 'hello', from: this.getIdentity().id, identity: this.getIdentity() }));
+    const dialled = peerId;
+    let authed = false;
+    const shake = createHandshake({
+      role: 'client',
+      deviceKey: this.deviceKey,
+      getIdentity: this.getIdentity,
     });
+
+    // Nothing is sent on open any more. The client cannot sign a nonce it has
+    // not received, so it waits for the server's frame — which the server has
+    // always sent first anyway. The cost is that a server which accepts the
+    // upgrade and then says nothing would leave this dial hanging forever with
+    // the peer stuck in `dialing`, so the clock below is load-bearing, not
+    // decoration.
+    let authTimer = setTimeout(() => giveUp(TIMED_OUT), AUTH_TIMEOUT_MS);
+    const clearAuthTimer = () => {
+      if (authTimer) clearTimeout(authTimer);
+      authTimer = null;
+    };
+
+    const giveUp = (reason) => {
+      clearAuthTimer();
+      if (dialled) this.dialing.delete(dialled);
+      if (peerId) this.dialing.delete(peerId);
+      this.bus.emit('peer-auth-failed', { reason, peerId: dialled || peerId, address, direction: 'out' });
+      try {
+        ws.close(WIRE_CLOSE_CODE, WIRE_REASON);
+      } catch {
+        /* already closing */
+      }
+    };
+
     ws.on('message', (raw) => {
       let msg;
       try {
@@ -112,34 +184,72 @@ class PeerHub {
       } catch {
         return;
       }
-      if (msg.type === 'hello') {
-        const id = msg.from;
-        if (peerId && id && id !== peerId) {
-          // Reconcile: we dialed an address, learned its real id.
-          this.dialing.delete(peerId);
-          peerId = id;
-        }
-        peerId = peerId || id;
-        this.register(peerId, ws);
-        if (msg.identity) this.setIdentity(peerId, msg.identity);
-        this.dialing.delete(peerId);
-        this.bus.emit('peer-hello', { peerId, identity: msg.identity, direction: 'out' });
+
+      if (msg.type === 'hello' && !authed) {
+        const answer = shake.answerServerHello(msg);
+        if (!answer.ok) return giveUp(answer.reason);
+        // We dialled an address expecting a particular peer. It answering as
+        // somebody else used to be silently accepted as "reconcile" — which
+        // meant whoever held the address decided who they were. If we had no
+        // expectation the claim is fine; if we did, it has to match.
+        if (dialled && answer.peer.id !== dialled) return giveUp(ID_IN_USE);
+        ws.send(JSON.stringify(answer.frame));
         return;
       }
+
+      if (msg.type === 'auth' && !authed) {
+        const verified = shake.verifyServerProof(msg);
+        if (!verified.ok) return giveUp(verified.reason);
+
+        const verdict = applyPinVerdict({ pins: this.pins, hub: this, claim: verified.peer });
+        if (!verdict.ok) {
+          this.bus.emit('peer-key-alarm', {
+            peerId: verified.peer.id,
+            reason: verdict.reason,
+            offered: verified.peer.key,
+            known: (this.pins.get(verified.peer.id) || {}).key || null,
+          });
+          return giveUp(verdict.reason);
+        }
+
+        // Registration waits for the far end to have proved itself, so a socket
+        // never appears online on the strength of a claim.
+        clearAuthTimer();
+        authed = true;
+        peerId = verified.peer.id;
+        this.register(peerId, ws, { publicKey: verified.peer.key });
+        this.setIdentity(peerId, verified.peer.identity);
+        this.dialing.delete(peerId);
+        if (dialled) this.dialing.delete(dialled);
+        this.bus.emit('peer-hello', {
+          peerId,
+          identity: verified.peer.identity,
+          direction: 'out',
+          firstUse: verdict.firstUse,
+        });
+        return;
+      }
+
+      if (msg.type === 'auth-fail') return giveUp(msg.reason || 'refused');
+
       // Attribution comes from the socket, never from the payload. `from` is
       // sender-supplied, so without this any peer could put someone else's id in
       // it and be stored and rendered as them. send() already stamps exactly
       // this value, so nothing legitimate changes.
-      if (!peerId) return;
+      if (!authed || !peerId) return;
       this.bus.emit('peer-message', { ...msg, from: peerId });
     });
     ws.on('close', () => {
+      clearAuthTimer();
+      if (dialled) this.dialing.delete(dialled);
       if (peerId) {
         this.dialing.delete(peerId);
         this.unregister(peerId, ws);
       }
     });
     ws.on('error', () => {
+      clearAuthTimer();
+      if (dialled) this.dialing.delete(dialled);
       if (peerId) this.dialing.delete(peerId);
     });
   }
@@ -156,13 +266,30 @@ class PeerHub {
     this.sockets.clear();
   }
 
+  // Facts discovery worked out locally about a peer — that it is shared in from
+  // another tailnet, which tailnet it belongs to. Kept apart from `identities`
+  // because those two have very different provenance: an identity is something a
+  // peer proved during the handshake, a hint is something we noticed. They are
+  // merged for display, hints underneath, so a peer can never overwrite what we
+  // observed and — the part that mattered — an unauthenticated probe response can
+  // never put a name or an avatar on the roster.
+  setDiscoveryHint(peerId, hint) {
+    if (!peerId || !hint) return;
+    this.discoveryHints.set(peerId, { ...this.discoveryHints.get(peerId), ...hint });
+  }
+
   // Snapshot of everyone we know about, with live connection state.
   presenceList() {
     const out = [];
-    const ids = new Set([...this.identities.keys(), ...this.sockets.keys()]);
+    const ids = new Set([
+      ...this.identities.keys(),
+      ...this.sockets.keys(),
+      ...this.discoveryHints.keys(),
+    ]);
     for (const id of ids) {
       if (id === this.getIdentity().id) continue;
       out.push({
+        ...this.discoveryHints.get(id),
         ...(this.identities.get(id) || { id }),
         id,
         address: this.addresses.get(id) || null,

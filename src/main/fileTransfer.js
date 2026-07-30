@@ -9,25 +9,69 @@ const crypto = require('node:crypto');
 // POST /lanchat/files endpoint, emitting progress. Metadata rides in headers so
 // the receiver can name/preview the file without a separate negotiation step.
 
-function createFileSender({ hub, getIdentity, bus }) {
-  function send(peerId, filePath) {
-    return new Promise((resolve, reject) => {
-      const address = hub.addresses.get(peerId);
-      if (!address)
-        return reject(new Error("no address known for this peer yet — try again once they're connected"));
-      let stat;
-      try {
-        stat = fs.statSync(filePath);
-      } catch (err) {
-        return reject(err);
-      }
-      const { host: ip, port: parsedPort } = parseAddress(address);
-      const port = parsedPort || getIdentity().servicePort;
-      const name = path.basename(filePath);
-      const transferId = crypto.randomUUID();
-      const mime = guessMime(name);
-      const me = getIdentity();
+// How long to wait for the far end to hand back a permit. A peer that cannot
+// issue one is either not running this version or not willing, and either way
+// the answer arrives quickly or not at all.
+const GRANT_WAIT_MS = 10000;
 
+function createFileSender({ hub, getIdentity, bus }) {
+  // Transfers waiting on a permit, by transferId.
+  const awaitingGrant = new Map();
+
+  // The permit comes back over the same authenticated socket the offer went out
+  // on, so it is picked up here rather than routed through ipc.js — nothing in
+  // the app layer has an opinion about it.
+  bus.on('peer-message', (msg) => {
+    if (!msg || msg.type !== 'file-grant') return;
+    const pending = awaitingGrant.get(msg.transferId);
+    if (!pending || pending.peerId !== msg.from) return;
+    awaitingGrant.delete(msg.transferId);
+    pending.resolve(msg);
+  });
+
+  function requestGrant(peerId, transferId, size, name, mime) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        awaitingGrant.delete(transferId);
+        reject(new Error('the other end did not accept the transfer — they may be running an older LanChat'));
+      }, GRANT_WAIT_MS);
+      awaitingGrant.set(transferId, {
+        peerId,
+        resolve: (msg) => {
+          clearTimeout(timer);
+          resolve(msg);
+        },
+      });
+      // Announce the file first and open the connection second. The order used
+      // to be the other way round, which is what made the upload independent of
+      // the conversation it belonged to.
+      const sent = hub.send(peerId, { type: 'file-offer', transferId, name, size, mime });
+      if (!sent) {
+        clearTimeout(timer);
+        awaitingGrant.delete(transferId);
+        reject(new Error("no open connection to this peer — try again once they're online"));
+      }
+    });
+  }
+
+  async function send(peerId, filePath) {
+    const address = hub.addresses.get(peerId);
+    if (!address) {
+      throw new Error("no address known for this peer yet — try again once they're connected");
+    }
+    const stat = fs.statSync(filePath);
+    const name = path.basename(filePath);
+    const transferId = crypto.randomUUID();
+    const mime = guessMime(name);
+
+    const grant = await requestGrant(peerId, transferId, stat.size, name, mime);
+    if (!grant.token) throw new Error('the other end declined the transfer');
+
+    const { host: ip, port: parsedPort } = parseAddress(address);
+    const port = parsedPort || getIdentity().servicePort;
+    const me = getIdentity();
+
+    return new Promise((resolve, reject) => {
       const req = http.request(
         {
           host: ip,
@@ -37,8 +81,12 @@ function createFileSender({ hub, getIdentity, bus }) {
           headers: {
             'Content-Type': 'application/octet-stream',
             'Content-Length': stat.size,
+            // The permit is what identifies the sender now. The two below are
+            // kept because they cost nothing and a mixed-version pair reads
+            // better with them, but the receiver does not trust either one.
             'x-lanchat-from': me.id,
             'x-lanchat-name': encodeURIComponent(me.name),
+            'x-lanchat-grant': grant.token,
             'x-lanchat-filename': encodeURIComponent(name),
             'x-lanchat-transfer': transferId,
             'x-lanchat-mime': mime,
@@ -55,9 +103,6 @@ function createFileSender({ hub, getIdentity, bus }) {
         }
       );
       req.on('error', reject);
-
-      // Announce the incoming file over the signaling channel for a chat bubble.
-      hub.send(peerId, { type: 'file-offer', transferId, name, size: stat.size, mime });
 
       const stream = fs.createReadStream(filePath);
       let sent = 0;

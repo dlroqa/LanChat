@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -31,6 +33,13 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # Before the suite, because a lint error is a second-long answer and the
+      # suite is a forty-second one. Errors only: the three exhaustive-deps
+      # warnings left in the tree are real and worth seeing, and turning them
+      # into a gate would only get them suppressed rather than fixed.
+      - name: Lint
+        run: npm run lint
 
       # `npm test` discovers its own files rather than relying on the shell to
       # expand a glob, so this is the same command, running the same tests, on

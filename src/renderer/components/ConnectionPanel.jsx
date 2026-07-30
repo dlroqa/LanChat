@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Avatar from './Avatar.jsx';
 import { useCountdown } from '../lib/useCountdown.js';
 import { useAgentPhrase } from '../lib/agentPhrase.js';

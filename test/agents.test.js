@@ -307,7 +307,7 @@ test('a message sent through PeerHub reaches the agent and the reply is stored',
 
 test('an allowlisted peer can reach the agent and the reply goes back only to them', async () => {
   const { hub, agentHub, log } = makeHub();
-  const { agent } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {}, allowedPeers: ['friend'] });
+  await agentHub.add({ name: 'Hermes', kind: 'http', config: {}, allowedPeers: ['friend'] });
 
   const relayed = [];
   hub.send = (peerId, obj) => {
@@ -497,13 +497,13 @@ test('directChat does not grant reach — it only affects discoverability', asyn
 
 test('a peer that is not allowlisted cannot reach an agent', async () => {
   const { agentHub } = makeHub();
-  const { agent } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  await agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
   assert.equal(agentHub.routeFromPeer('stranger', `@Hermes do something`), false);
 });
 
 test('an allowlisted peer must still address the agent explicitly', async () => {
   const { agentHub } = makeHub();
-  const { agent } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {}, allowedPeers: ['friend'] });
+  await agentHub.add({ name: 'Hermes', kind: 'http', config: {}, allowedPeers: ['friend'] });
   assert.equal(agentHub.routeFromPeer('friend', 'just chatting, no mention'), false);
 });
 
@@ -2060,7 +2060,7 @@ test('sharing an agent tells the peer it exists and nothing about how it is run'
       }),
     },
   });
-  const { agent } = await agentHub.add({
+  await agentHub.add({
     name: 'Hermes',
     kind: 'acp',
     config: { command: '/home/me/.local/bin/hermes', args: ['acp'], cwd: '/home/me/secrets', profile: 'lanchat' },
