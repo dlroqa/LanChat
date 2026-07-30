@@ -14,7 +14,7 @@
     "dev:renderer": "vite",
     "dev:electron": "cross-env LANCHAT_DEV=1 wait-on tcp:5273 && cross-env LANCHAT_DEV=1 electron .",
     "build:renderer": "vite build",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings=0",
     "format": "prettier --write \"src/**/*.{js,jsx,css}\" \"test/*.js\" \"scripts/**/*.js\" \"*.js\"",
     "format:check": "prettier --check \"src/**/*.{js,jsx,css}\" \"test/*.js\" \"scripts/**/*.js\" \"*.js\"",
     "icons": "node scripts/make-icons.js",

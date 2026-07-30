@@ -187,6 +187,13 @@ export default function App() {
     if (call.status === 'incoming' || group.status === 'invited') ringer.start('incoming', opts);
     else if (call.status === 'outgoing' || group.status === 'inviting') ringer.start('outgoing', opts);
     else ringer.stop();
+    // Keyed on the two statuses and nothing else, deliberately. Everything the
+    // ringer needs is read from a ref at the moment it starts, so there is
+    // nothing stale to capture — and adding `soundUrl` would re-run this on
+    // every render, restarting the ring tone under the person answering.
+    // (It is also declared below this point, so naming it here would be a
+    // temporal-dead-zone error during render, not merely noisy.)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [call.status, group.status]);
 
   useEffect(() => {
@@ -500,6 +507,12 @@ export default function App() {
       for (const timer of Object.values(noticeTimers.current)) clearTimeout(timer);
       noticeTimers.current = {};
     };
+    // Subscribed once, for the life of the window. The handlers reach state
+    // through setters and refs rather than closing over it, so there is nothing
+    // to refresh; listing them would tear down and re-establish the whole event
+    // subscription on every render, and events arriving in that gap would be
+    // dropped.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Mirror total unread onto the status-menu item and app badge.

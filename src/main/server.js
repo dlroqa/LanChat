@@ -308,6 +308,20 @@ function createServer({
         // `peerId = msg.from` — a peer's unsupported word.
         clearAuthTimer();
         peerId = result.peer.id;
+        // The proof goes out before anything else, and that order is
+        // load-bearing rather than tidy.
+        //
+        // The two ends of a three-frame handshake cannot finish at the same
+        // moment: we are satisfied here, one frame before the dialer is. Between
+        // those two points we consider the peer connected and it does not, so
+        // anything we send in reaction to `peer-hello` below — the agent
+        // adverts, most of all — would arrive at a socket that is still dropping
+        // frames, and be lost silently.
+        //
+        // Sending the proof first closes that window, because a TCP stream is
+        // ordered: whatever `peer-hello` triggers is queued behind the frame
+        // that authorises it. Move this line after the emit and the adverts go
+        // missing on exactly the fast connections nobody tests on.
         ws.send(JSON.stringify(shake.serverProof()));
         hub.register(peerId, ws, { publicKey: result.peer.key });
         hub.setIdentity(peerId, result.peer.identity);

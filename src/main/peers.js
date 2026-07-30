@@ -289,10 +289,13 @@ class PeerHub {
     for (const set of this.sockets.values()) {
       for (const ws of set) {
         try {
-          ws.close();
-        } catch {}
-        try {
+          // Destroyed rather than asked politely. Calling close() first and
+          // terminating a line later would only look considerate: the close
+          // frame would still be sitting in the send buffer when the socket went
+          // away, so the peer would see the same abrupt end and the extra call
+          // would be there to reassure the reader rather than the peer.
           if (typeof ws.terminate === 'function') ws.terminate();
+          else ws.close();
         } catch {}
       }
     }

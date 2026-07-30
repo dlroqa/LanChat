@@ -157,6 +157,22 @@ function clientHello({ serverHello, id, key, kx = proto.generateAgreementKey(), 
   };
 }
 
+// Both directions, because the two ends do not register at the same moment.
+//
+// The server registers when it has verified the client's proof — before it has
+// sent its own. The dialer registers only after verifying that proof in reply.
+// So there is a window in which the accepting side already shows the peer as
+// connected and the dialing side does not, and a test that closed the dialer's
+// hub in that window would close nothing at all and then wait forever for a
+// socket that was never told to go. That is not hypothetical: it is what failed
+// on macOS, having passed everywhere else.
+async function bothConnected(dialer, accepter, ms = 15000) {
+  const idDialer = dialer.getIdentity().id;
+  const idAccepter = accepter.getIdentity().id;
+  await waitFor(() => accepter.hub.isConnected(idDialer), ms, 'the accepting side to register');
+  await waitFor(() => dialer.hub.isConnected(idAccepter), ms, 'the dialing side to register');
+}
+
 // -------------------------------------------------------------- happy path
 
 test('two nodes authenticate each other and pin what they saw', async (t) => {
@@ -183,6 +199,49 @@ test('two nodes authenticate each other and pin what they saw', async (t) => {
   assert.equal(B.pins.get(idA).key, A.deviceKey.publicKey());
   assert.equal(A.pins.get(idB).verified, false, 'first use is trust, not verification');
   assert.deepEqual(A.failures, []);
+});
+
+test('nothing sent on the back of a completed handshake is lost to it', async (t) => {
+  // The two ends cannot finish at the same instant: the accepting side is
+  // satisfied one frame before the dialer is, and in that gap it already
+  // considers the peer connected while the dialer is still dropping frames.
+  //
+  // What saves it is that the proof is written to the socket before `peer-hello`
+  // is emitted, so anything that event triggers is queued behind the frame that
+  // authorises it. That ordering is one line in server.js and nothing about it
+  // looks important. This is what fails if somebody tidies it.
+  const pa = await freePort();
+  const pb = await freePort();
+  const A = makeNode('alice', pa);
+  const B = makeNode('bob', pb);
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idA = A.getIdentity().id;
+  const idB = B.getIdentity().id;
+
+  // Bob answers a completed handshake by immediately sending something, the way
+  // the agent hub announces its shared agents on `peer-hello`.
+  B.bus.on('peer-hello', ({ peerId }) => {
+    B.hub.send(peerId, { type: 'agent-advert', agentId: 'a1', name: 'Hermes' });
+  });
+
+  const seen = [];
+  A.bus.on('peer-message', (msg) => seen.push(msg));
+
+  A.hub.connect(idB, `127.0.0.1:${pb}`);
+  await bothConnected(A, B);
+
+  await waitFor(() => seen.some((m) => m.type === 'agent-advert'), 15000, 'the advert to arrive');
+  const advert = seen.find((m) => m.type === 'agent-advert');
+  assert.equal(advert.from, idB, 'and attributed to the socket it came in on');
+  assert.ok(B.hub.isConnected(idA));
 });
 
 // ------------------------------------------------------------ impersonation
@@ -459,7 +518,7 @@ test('a peer that goes away is seen to go away, promptly', async (t) => {
 
   const idA = A.getIdentity().id;
   A.hub.connect(B.getIdentity().id, `127.0.0.1:${pb}`);
-  await waitFor(() => B.hub.isConnected(idA), 15000, 'the handshake');
+  await bothConnected(A, B);
 
   const started = Date.now();
   A.hub.close();
@@ -572,7 +631,7 @@ test('a peer whose key changed is refused, loudly, without losing the history', 
   const idA = A.getIdentity().id;
   const idB = B.getIdentity().id;
   A.hub.connect(idB, `127.0.0.1:${pb}`);
-  await waitFor(() => B.hub.isConnected(idA), 15000, 'the first handshake');
+  await bothConnected(A, B);
   const originalKey = A.deviceKey.publicKey();
   assert.equal(B.pins.get(idA).key, originalKey);
 

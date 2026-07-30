@@ -35,9 +35,9 @@ jobs:
         run: npm ci
 
       # Before the suite, because a lint error is a second-long answer and the
-      # suite is a forty-second one. Errors only: the three exhaustive-deps
-      # warnings left in the tree are real and worth seeing, and turning them
-      # into a gate would only get them suppressed rather than fixed.
+      # suite is a forty-second one. Warnings count: every deliberate exception
+      # in the tree carries a comment saying why, so a new warning is genuinely
+      # new information rather than more of a backlog nobody reads.
       - name: Lint
         run: npm run lint
 
