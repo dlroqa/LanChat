@@ -38,6 +38,37 @@ const SOUND_KINDS = Object.freeze({
   },
 });
 
+// The preferences the renderer may write through the bulk `setConfig` patch. An
+// allowlist, so a patch can only carry what Settings actually offers.
+const SETTABLE_KEYS = Object.freeze([
+  'iceServers',
+  'enableTailscale',
+  'enableLan',
+  'servicePort',
+  'discoveryPort',
+  'audioInputId',
+  'videoInputId',
+  'showAddresses',
+  'linkPreviews',
+  'ringtone',
+  'ringtoneVolume',
+  'customRingtonePath',
+  'notificationSound',
+  'notificationVolume',
+  'customNotificationPath',
+  'muteNotifications',
+  'agentMusicEnabled',
+  'agentMusic',
+  'agentMusicVolume',
+  'customAgentMusicPath',
+  'pttEnabled',
+  'pttKey',
+  'pttCustomCode',
+  'skippedUpdateVersion',
+  'pttAllowIncoming',
+  'openAtLogin',
+]);
+
 // Bridges the main-process services to the renderer:
 //   - ipcMain.handle(...)  : renderer -> main commands (request/response)
 //   - bus events -> webContents 'lanchat:event' : main -> renderer notifications
@@ -277,35 +308,7 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
 
   ipcMain.handle('lanchat:setConfig', (_e, patch) => {
     const allowed = {};
-    const keys = [
-      'iceServers',
-      'enableTailscale',
-      'enableLan',
-      'servicePort',
-      'discoveryPort',
-      'audioInputId',
-      'videoInputId',
-      'showAddresses',
-      'linkPreviews',
-      'ringtone',
-      'ringtoneVolume',
-      'customRingtonePath',
-      'notificationSound',
-      'notificationVolume',
-      'customNotificationPath',
-      'muteNotifications',
-      'agentMusicEnabled',
-      'agentMusic',
-      'agentMusicVolume',
-      'customAgentMusicPath',
-      'pttEnabled',
-      'pttKey',
-      'pttCustomCode',
-      'skippedUpdateVersion',
-      'pttAllowIncoming',
-      'openAtLogin',
-    ];
-    for (const k of keys) {
+    for (const k of SETTABLE_KEYS) {
       if (k in patch) allowed[k] = patch[k];
     }
     config.set(allowed);
@@ -870,70 +873,31 @@ function isIncomingCallSignal(inner) {
   return inner.kind === 'offer';
 }
 
+// Everything the renderer may see. One list, read by a pick loop rather than a
+// destructure paired with an object literal: those two are free to drift, and
+// when they did — a key returned that nothing had read — every config call threw
+// and the window ran on its own seed defaults instead of the saved settings.
+const PUBLIC_KEYS = Object.freeze([
+  ...SETTABLE_KEYS,
+  'manualPeers',
+  // Read-only to the renderer: it is shown and it drives the Settings toggle,
+  // but it is not settable through the bulk `setConfig` patch. A key that
+  // decides who may open a socket to this machine gets its own channel, so it
+  // can never be flipped as a side effect of saving unrelated preferences.
+  'acceptLan',
+]);
+
 function publicConfig(config) {
-  const {
-    iceServers,
-    enableTailscale,
-    enableLan,
-    servicePort,
-    discoveryPort,
-    manualPeers,
-    audioInputId,
-    videoInputId,
-    showAddresses,
-    linkPreviews,
-    ringtone,
-    ringtoneVolume,
-    customRingtonePath,
-    notificationSound,
-    notificationVolume,
-    customNotificationPath,
-    muteNotifications,
-    agentMusicEnabled,
-    agentMusic,
-    agentMusicVolume,
-    customAgentMusicPath,
-    pttEnabled,
-    pttKey,
-    pttCustomCode,
-    pttAllowIncoming,
-    skippedUpdateVersion,
-    openAtLogin,
-  } = config.data;
-  return {
-    iceServers,
-    enableTailscale,
-    enableLan,
-    servicePort,
-    discoveryPort,
-    manualPeers,
-    audioInputId,
-    videoInputId,
-    showAddresses,
-    linkPreviews,
-    ringtone,
-    ringtoneVolume,
-    customRingtonePath,
-    notificationSound,
-    notificationVolume,
-    customNotificationPath,
-    muteNotifications,
-    agentMusicEnabled,
-    agentMusic,
-    agentMusicVolume,
-    customAgentMusicPath,
-    pttEnabled,
-    pttKey,
-    pttCustomCode,
-    pttAllowIncoming,
-    skippedUpdateVersion,
-    openAtLogin,
-    // Read-only to the renderer: it is shown and it drives the Settings toggle,
-    // but it is not settable through the bulk `setConfig` patch. A key that
-    // decides who may open a socket to this machine gets its own channel, so it
-    // can never be flipped as a side effect of saving unrelated preferences.
-    acceptLan,
-  };
+  const out = {};
+  for (const k of PUBLIC_KEYS) out[k] = config.data[k];
+  return out;
 }
 
-module.exports = { createIpc, sanitizeAvatar, MAX_AVATAR_BYTES, isIncomingCallSignal };
+module.exports = {
+  createIpc,
+  sanitizeAvatar,
+  MAX_AVATAR_BYTES,
+  isIncomingCallSignal,
+  SETTABLE_KEYS,
+  PUBLIC_KEYS,
+};

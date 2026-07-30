@@ -315,18 +315,18 @@ test('switching track while idle does not start playing', () => {
   assert.strictEqual(music.wanted, false);
 });
 
-test('the music keys are plumbed all three ways, including the return of publicConfig', () => {
+test('the music keys are plumbed both ways, and the bookkeeping key is not', () => {
   const defaults = fs.readFileSync(path.join(ROOT, 'src', 'main', 'config.js'), 'utf8');
   const ipc = fs.readFileSync(path.join(ROOT, 'src', 'main', 'ipc.js'), 'utf8');
   for (const key of ['agentMusicEnabled', 'agentMusic', 'agentMusicVolume', 'customAgentMusicPath']) {
     assert.match(defaults, new RegExp(`^\\s*${key}:`, 'm'), `${key} is missing from DEFAULTS`);
     assert.match(ipc, new RegExp(`'${key}'`), `${key} is missing from the setConfig allowlist`);
-    // Once to take it off config.data and once to put it on the wire. A key that
-    // is destructured and not returned saves correctly and reads back undefined,
-    // which looks exactly like the setting not working.
-    const mentions = ipc.split(new RegExp(`\\b${key}\\b`)).length - 1;
-    assert.ok(mentions >= 3, `${key} appears ${mentions}× in ipc.js; publicConfig needs it twice`);
   }
+  // That a key the renderer can save also comes back to it is no longer a
+  // property of how this file is written — SETTABLE_KEYS and PUBLIC_KEYS are one
+  // list feeding a pick loop — so it is checked where it can be checked
+  // honestly, by calling the ipc handlers: see test/configBridge.test.js.
+
   // The bookkeeping key is internal: the renderer must not be able to write it,
   // or turning music off would look like an upgrade and turn it back on.
   assert.doesNotMatch(ipc, /'agentMusicVersion'/, 'agentMusicVersion must stay out of setConfig');
