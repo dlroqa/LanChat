@@ -472,6 +472,87 @@ test('a peer that goes away is seen to go away, promptly', async (t) => {
   assert.equal(A.hub.keys.size, 0, 'and this side let go of the key binding too');
 });
 
+test('a reinstalled peer gets the key alarm even if its old socket is still around', async (t) => {
+  // The one Windows CI found, and it is a product bug rather than a test one.
+  //
+  // The live-socket key binding used to outlive the socket: until the old
+  // connection was reaped, a peer coming back with a new key was refused as
+  // "id in use". That is precisely the reinstall — same id, new key, innocent —
+  // and it is the case where the user most needs the alarm, because the alarm is
+  // the only thing that shows them the fingerprints and offers a re-pin. They
+  // got "could not be verified" and no way forward.
+  //
+  // Linux and macOS hid it by reaping the socket first. The binding is now
+  // checked against whether a socket is actually holding it.
+  const pb = await freePort();
+  const B = makeNode('bob', pb);
+  await B.server.start();
+  t.after(() => {
+    B.hub.close();
+    B.server.stop();
+  });
+
+  const idA = 'alice-uuid';
+  const oldKey = proto.generateSigningKey();
+  const newKey = proto.generateSigningKey();
+
+  // Alice connects and is pinned.
+  const first = attacker(pb);
+  await first.open();
+  first.send(clientHello({ serverHello: await first.serverHello(), id: idA, key: oldKey }).frame);
+  await waitFor(() => B.hub.isConnected(idA), 15000, 'the first handshake');
+  assert.equal(B.pins.get(idA).key, oldKey.publicKey);
+
+  // Her socket goes, but B has not processed the close yet — simulated exactly,
+  // rather than raced for, by dropping the socket without letting B catch up.
+  first.ws.terminate();
+  await waitFor(() => !B.hub.isConnected(idA), 15000, 'the socket to drop');
+
+  // She reinstalls and comes back with a different key.
+  const second = attacker(pb);
+  await second.open();
+  second.send(clientHello({ serverHello: await second.serverHello(), id: idA, key: newKey }).frame);
+
+  await waitFor(() => B.alarms.length > 0, 15000, 'the key-change alarm');
+  const alarm = B.alarms.at(-1);
+  assert.equal(alarm.reason, 'key-changed', 'the alarm the user can act on, not a bare refusal');
+  assert.equal(alarm.known, oldKey.publicKey);
+  assert.equal(alarm.offered, newKey.publicKey);
+  assert.equal(B.pins.get(idA).key, oldKey.publicKey, 'and the pin did not move on its own');
+  second.close();
+});
+
+test('a stale binding never lets a live impostor through', async (t) => {
+  // The other half of the same rule: while a socket IS holding an id, a second
+  // socket under a different key is still refused. Relaxing the stale case must
+  // not relax this one.
+  const pb = await freePort();
+  const B = makeNode('bob', pb);
+  await B.server.start();
+  t.after(() => {
+    B.hub.close();
+    B.server.stop();
+  });
+
+  const idA = 'alice-uuid';
+  const realKey = proto.generateSigningKey();
+  const live = attacker(pb);
+  await live.open();
+  live.send(clientHello({ serverHello: await live.serverHello(), id: idA, key: realKey }).frame);
+  await waitFor(() => B.hub.isConnected(idA), 15000, 'the honest socket');
+
+  const impostor = attacker(pb);
+  await impostor.open();
+  impostor.send(
+    clientHello({ serverHello: await impostor.serverHello(), id: idA, key: proto.generateSigningKey() }).frame
+  );
+  await waitFor(() => impostor.closed(), 15000, 'the impostor to be refused');
+  assert.ok(B.hub.isConnected(idA), 'the honest socket is untouched');
+  assert.equal(B.hub.keys.get(idA), realKey.publicKey, 'and still holds the real key');
+  live.close();
+  impostor.close();
+});
+
 // -------------------------------------------------------------- key change
 
 test('a peer whose key changed is refused, loudly, without losing the history', async (t) => {

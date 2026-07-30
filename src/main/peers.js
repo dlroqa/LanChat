@@ -65,6 +65,22 @@ class PeerHub {
   keyAgrees(peerId, publicKey) {
     const known = this.keys.get(peerId);
     if (!known) return true;
+    // A binding only means anything while a socket is actually holding it.
+    //
+    // Without this, a peer that reconnects before we noticed their old socket
+    // drop is refused as an impostor — and that is exactly the reinstall case,
+    // the one situation where a changed key is innocent and the user most needs
+    // the alarm that shows them both fingerprints and offers a way to re-pin.
+    // They would instead be told the peer could not be verified, with no route
+    // forward at all.
+    //
+    // Nothing is relaxed by this. pins.json is the durable authority and still
+    // refuses a changed key on its own; this map is only about who currently
+    // holds the id on a live connection, and a closed socket holds nothing.
+    if (!this.isConnected(peerId)) {
+      this.keys.delete(peerId);
+      return true;
+    }
     return known === publicKey;
   }
 
