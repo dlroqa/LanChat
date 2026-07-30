@@ -140,8 +140,19 @@ test('the scroller is a sibling of the light, and can still shrink', () => {
   const scrollerAt = pane.indexOf('className="messages"');
   const closeAt = pane.indexOf('</div>', pane.indexOf('<AgentApproval'));
   const flashAt = pane.indexOf('<AgentFlash');
+  const typingAt = pane.indexOf('className="typing"');
+  const composerAt = pane.indexOf('<Composer');
   assert.ok(wrapAt > 0 && scrollerAt > wrapAt, 'the scroller is inside the wrapper');
   assert.ok(flashAt > closeAt, 'and the light is outside the scroller, after it closes');
+  // The typing row belongs to the lit area too. Left outside it, the light stops
+  // short of the composer and leaves a black band — which is what v0.4.23 shipped.
+  assert.ok(typingAt > closeAt && typingAt < flashAt, 'the typing row is inside the wrapper');
+  assert.ok(composerAt > flashAt, 'and the composer is outside it, below the light');
+
+  // The column that lets the scroller and the typing row share the box.
+  assert.match(wrap, /flex-direction:\s*column/);
+  const typingCss = css.slice(css.indexOf('.typing {'), css.indexOf('.typing {') + 400);
+  assert.match(typingCss, /z-index:\s*1/, 'and the typing text sits above the light');
 });
 
 test('the light never takes pointer events, so chatting continues underneath it', () => {
@@ -227,6 +238,14 @@ test('mounted in a browser: one light, filling its box, letting everything throu
   // stops short of the edges reads as a misplaced box rather than as the room
   // lighting up.
   assert.ok(result.coversBox, `the light did not fill its box: ${JSON.stringify(result.rects)}`);
+
+  // And its box is the whole conversation area, not just the scroller. Measuring
+  // the light against its own wrapper cannot see a gap below that wrapper — both
+  // grow together and it passes. v0.4.23 shipped a black band across the bottom
+  // because the typing row sat outside the box, so the neighbours are checked too.
+  assert.equal(result.gapAbove, 0, 'a dark band between the header and the light');
+  assert.equal(result.gapBelow, 0, 'a dark band between the light and the composer');
+  assert.equal(result.typingCovered, true, 'the typing row sits inside the lit area');
   assert.equal(result.pointerEvents, 'none', 'clicks must reach the conversation underneath');
   assert.equal(result.clickReachedBelow, true, 'and they actually do');
 

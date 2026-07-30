@@ -182,6 +182,26 @@ export default function ChatPane({
 
           <AgentApproval request={approval} agentName={peer.name || 'The agent'} onAnswer={onApprove} />
         </div>
+
+        {/* Inside the wrapper, so the light behind it reaches the composer instead
+            of stopping short and leaving a black band across the bottom. This row
+            reserves its height whether or not anything is in it, and a reader sees
+            it as part of the conversation rather than as a separate strip. */}
+        <div className="typing">
+          {working && (
+            <>
+              {isAgent ? `${peer.name || 'The agent'} is ${phrase.toLowerCase()}` : `${peer.name || 'Peer'} is typing`}
+              {/* Three staggered dots. The container keeps its height whether or
+                  not this is showing, so the message list never jumps. */}
+              <span className="typing-dots" aria-hidden="true">
+                <i />
+                <i />
+                <i />
+              </span>
+            </>
+          )}
+        </div>
+
         {flash && (
           <AgentFlash
             key={flash.nonce}
@@ -190,21 +210,6 @@ export default function ChatPane({
             name={peer.name || peer.hostname}
             onDone={onFlashDone}
           />
-        )}
-      </div>
-
-      <div className="typing">
-        {working && (
-          <>
-            {isAgent ? `${peer.name || 'The agent'} is ${phrase.toLowerCase()}` : `${peer.name || 'Peer'} is typing`}
-            {/* Three staggered dots. The container keeps its height whether or
-                not this is showing, so the message list never jumps. */}
-            <span className="typing-dots" aria-hidden="true">
-              <i />
-              <i />
-              <i />
-            </span>
-          </>
         )}
       </div>
 

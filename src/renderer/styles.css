@@ -601,6 +601,12 @@ input:focus-visible {
    background rather than with the window behind it. */
 .messages-wrap {
   position: relative;
+  /* A column, because it holds the scrolling list *and* the typing row beneath it.
+     The typing row is part of the space a reader sees as the conversation, so a
+     light that stopped at the scroller left a black band above the composer. What
+     the box is has to match what the eye thinks it is. */
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
   isolation: isolate;
@@ -608,7 +614,9 @@ input:focus-visible {
 
 .messages {
   flex: 1;
-  height: 100%;
+  /* Again on the inner element: a scrolling flex child will not shrink below its
+     content without this, and the typing row below it would be pushed out. */
+  min-height: 0;
   overflow-y: auto;
   padding: 20px 22px 8px;
   display: flex;
@@ -873,6 +881,11 @@ input:focus-visible {
   font-size: 12px;
   padding: 2px 24px 6px;
   height: 20px;
+  /* Keeps its height whether or not anything is in it, so the message list never
+     jumps — and sits above the connection light, like the messages do. */
+  flex: none;
+  position: relative;
+  z-index: 1;
 }
 
 /* Animated ellipsis for the typing indicator. Each dot is offset so the group

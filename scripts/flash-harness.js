@@ -81,6 +81,10 @@ function buildPage() {
   window.__done = () => doneCount;
   window.__resetDone = () => { doneCount = 0; };
 
+  // Mirrors ChatPane's structure. It has to: the whole point of measuring in a
+  // browser is that the geometry is real, and a harness that nests things
+  // differently from the component measures a fiction. The nesting in ChatPane
+  // itself is pinned separately, in connectFlash.test.js.
   function Pane({ flash }) {
     return h('div', { className: 'chat', style: { flex: 1 } },
       h('div', { className: 'chat-header' }, 'Tessie'),
@@ -91,11 +95,11 @@ function buildPage() {
               h('div', { className: 'text', id: 'probe' }, 'Hello — Tessie here. Ask me anything.'))),
           h('div', { className: 'bubble-row out' },
             h('div', { className: 'bubble' }, h('div', { className: 'text' }, '@tessie')))),
+        h('div', { className: 'typing' }),
         flash && h(window.AgentFlash, {
           key: flash.nonce, mode: flash.mode, ms: flash.ms, name: 'Tessie',
           onDone: () => { doneCount += 1; },
         })),
-      h('div', { className: 'typing' }),
       h('div', { className: 'composer' }, h('button', { id: 'below' }, 'send')));
   }
 
@@ -206,6 +210,18 @@ async function measure(chrome, dir, keptDir) {
         Math.abs(fr.x - wr.x) <= 1 && Math.abs(fr.y - wr.y) <= 1 &&
         Math.abs(fr.width - wr.width) <= 1 && Math.abs(fr.height - wr.height) <= 1;
       out.pointerEvents = getComputedStyle(flash).pointerEvents;
+
+      // Comparing the light to its own wrapper cannot catch a gap *below* the
+      // wrapper — both grow together and it still reports a pass. v0.4.23 shipped
+      // with a black band across the bottom for exactly that reason: the typing row
+      // sat outside the box. So the neighbours are measured too. Nothing between the
+      // header and the composer may be left dark.
+      const header = document.querySelector('.chat-header').getBoundingClientRect();
+      const composer = document.querySelector('.composer').getBoundingClientRect();
+      out.gapAbove = Math.round(fr.top - header.bottom);
+      out.gapBelow = Math.round(composer.top - fr.bottom);
+      const typing = document.querySelector('.typing').getBoundingClientRect();
+      out.typingCovered = typing.top >= fr.top - 1 && typing.bottom <= fr.bottom + 1;
 
       // A click in the middle of the light must land on what is underneath it.
       const hit = document.elementFromPoint(fr.x + fr.width / 2, fr.y + fr.height / 2);
