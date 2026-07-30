@@ -51,6 +51,15 @@ const shared = {
   eqeqeq: ['error', 'smart'],
   'prefer-const': ['error', { destructuring: 'all' }],
   'no-var': 'error',
+  // A name that was never declared. Not a style opinion: in a module — every
+  // file here is either strict CommonJS or ESM — reading one throws and writing
+  // one throws, so every hit is code that cannot run. It was off, and two of
+  // them shipped in the same release: a key returned from publicConfig() that
+  // nothing had read, which made every config call throw and left Settings
+  // showing seed defaults, and a leftover `poisoned` in ptt.js that threw before
+  // push-to-talk could open the mic. Both were one word, and both were invisible
+  // to a reader and to the test suite.
+  'no-undef': 'error',
 };
 
 module.exports = [

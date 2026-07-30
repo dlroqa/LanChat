@@ -329,7 +329,6 @@ export function attachPttKey({ keyName, customCode, isEnabled, onDown, onUp }) {
   const release = () => {
     if (!held) return;
     held = false;
-    poisoned = false;
     onUp();
   };
 
@@ -337,10 +336,7 @@ export function attachPttKey({ keyName, customCode, isEnabled, onDown, onUp }) {
     if (!isEnabled()) return;
     if (held) {
       // A modifier held with another key is a shortcut (⌘C, ⌘V) — not talking.
-      if (!def.match(e)) {
-        poisoned = true;
-        release();
-      }
+      if (!def.match(e)) release();
       return;
     }
     if (!def.match(e)) return;
@@ -348,7 +344,6 @@ export function attachPttKey({ keyName, customCode, isEnabled, onDown, onUp }) {
     if (typing()) return;
     if (e.repeat) return;
     held = true;
-    poisoned = false;
     onDown();
   };
 

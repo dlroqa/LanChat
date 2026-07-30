@@ -24,13 +24,19 @@ function loadPtt({
   };
   const doc = { activeElement: { tagName: activeTag, isContentEditable: false } };
   const body = SRC.replace(/^export\s+/gm, '');
+  // Strict, because the real thing is. A `new Function` body is sloppy mode, and
+  // sloppy mode answers an assignment to an undeclared name by inventing a
+  // global instead of throwing — which is how an assignment that killed
+  // push-to-talk outright in the app passed every test in this file. Evaluating
+  // it the way the browser evaluates the module is the only honest version.
   const fn = new Function(
     'window',
     'document',
     'navigator',
     'RTCPeerConnection',
     'MediaStream',
-    `${body}
+    `'use strict';
+     ${body}
      return { PTT_KEYS, defaultPttKey, attachPttKey, resolvePttKey, describeKeyCode, PttManager };`
   );
   return { api: fn(win, doc, nav, RTCPeerConnection, MediaStream), listeners };
