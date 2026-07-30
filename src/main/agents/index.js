@@ -10,7 +10,7 @@ const { discoverProfiles, hermesLaunchArgs } = require('./profiles');
 const { createCommandTransport } = require('./transports/command');
 const { createAcpTransport } = require('./transports/acp');
 const { createSshTransport } = require('./transports/ssh');
-const { heldLine, rotatedLine, busyLine } = require('./turnCopy');
+const { heldLine, rotatedLine, busyLine, greetingLine } = require('./turnCopy');
 
 // AgentHub owns the lifecycle of connected agents.
 //
@@ -86,7 +86,7 @@ const TURN_SWEEP_MS = 5000;
 function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports = TRANSPORTS }) {
   const registry = new AgentRegistry(userDataDir, { safeStorage });
   const live = new Map(); // agentId -> { transport, socket, busy, pendingApproval }
-  const throttle = new Map(); // `${agentId}|${peerId}` -> { last, refusals, expires }
+  const throttle = new Map(); // `${agentId}|${peerId}|${scope}` -> { last, refusals, expires }
 
   // May this peer reach this agent at all? Network-wide is a widening of the
   // allowlist, never a replacement: switching it off restores whatever the
@@ -95,6 +95,19 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     if (!record || record.enabled === false || !peerId) return false;
     if (record.networkWide === true) return true;
     return (record.allowedPeers || []).includes(peerId);
+  }
+
+  // The three gates every route in from the LAN shares, in the order they matter:
+  // the toggle is a hard gate, reach is a grant, and an agent that is not running
+  // cannot answer whatever the other two say.
+  //
+  // Written once because each route used to apply them by hand, and a route that
+  // checked two of the three would not read as a bug — it would read as one of
+  // these lines being missing, which is exactly how it would get missed.
+  function reachable(record, peerId) {
+    if (!record || record.enabled === false) return false;
+    if (!peerMayReach(record, peerId)) return false;
+    return live.has(record.id);
   }
 
   // ---- fair-share turns ----
@@ -405,8 +418,13 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
 
   // Returns 'ok' | 'silent' — 'silent' means drop without replying, which is
   // what stops a looping peer turning each of its messages into a frame back.
-  function checkThrottle(agentId, peerId, busy) {
-    const key = `${agentId}|${peerId}`;
+  // `scope` keeps summons from being throttled against questions. Saying hello
+  // costs one frame and invites a question right after it, so sharing a key meant
+  // the invitation swallowed the reply to it — silently, which is the worst way to
+  // lose a message. Each scope keeps its own one-per-PEER_MIN_INTERVAL_MS ceiling,
+  // and that ceiling is the flood gate; splitting the key does not widen it.
+  function checkThrottle(agentId, peerId, busy, scope = 'ask') {
+    const key = `${agentId}|${peerId}|${scope}`;
     const now = Date.now();
     for (const [k, v] of throttle) if (v.expires <= now) throttle.delete(k);
     const entry = throttle.get(key) || { last: 0, refusals: 0, expires: 0 };
@@ -524,7 +542,20 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
           entry.pendingApproval = null;
           bus.emit('agent-typing', { agentId, isTyping: false });
           relayActivity(agentId, origin, false, null);
-          reply(agentId, output || streamed || '(no output)', origin, { keep: true });
+          // A run can finish with genuinely nothing in it: a CLI exiting 0 with an
+          // empty stdout, or an ACP session stopping for a normal reason having
+          // said nothing (see transports/spawn.js and describeStop in
+          // transports/acp.js). Both are real outcomes rather than faults.
+          //
+          // This used to be written down as the words "(no output)", which read as
+          // an error report and left one in the transcript forever. There is
+          // nothing to keep here — the question is already in the thread, and the
+          // answer to "what came back?" is "nothing". So it is signalled instead:
+          // shown once, in the space where the answer would have been, and then
+          // gone. Nothing stored, no unread, no notification sound.
+          const text = output || streamed;
+          if (text) reply(agentId, text, origin, { keep: true });
+          else signalEmptyRun(agentId, origin);
           // Hand over as soon as the last query of a turn finishes, so whoever
           // is next is told immediately rather than on their next attempt.
           if (origin) releaseIfSpent(agentId);
@@ -593,6 +624,22 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
         ...(!keep && { notice: true }),
       });
     }
+  }
+
+  // The other way a finished run reports back: it had nothing to say.
+  //
+  // Not a message, on purpose. Everything reply() sends is words somebody reads,
+  // and there are no words for this — writing some would be inventing an event
+  // ("that run finished without anything to show") out of the absence of one. So
+  // it goes out as a signal the window answers with a light in the space where
+  // the reply would have been, and nothing is written to disk either side.
+  //
+  // Both halves are addressed the same way reply() addresses its two: the local
+  // thread by id, and the asking peer alone — never everyone, never a peer who
+  // did not ask.
+  function signalEmptyRun(agentId, origin) {
+    bus.emit('agent-empty', { threadId: origin ? delegateIdFor(agentId, origin) : agentId });
+    if (origin) hub.send(origin, { type: 'agent-empty', agentId });
   }
 
   function nameOf(agentId) {
@@ -879,10 +926,17 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     for (const record of registry.list()) {
       const prefix = `@${record.name.toLowerCase()}`;
       if (!trimmed.toLowerCase().startsWith(prefix)) continue;
-      if (record.enabled === false) return false; // toggle is a hard gate
-      if (!peerMayReach(record, peerId)) return false; // allowlist, or network-wide
-      if (!live.has(record.id)) return false;
-      return accept(record, peerId, trimmed.slice(prefix.length).trim());
+      if (!reachable(record, peerId)) return false; // toggle, reach, running
+      const rest = trimmed.slice(prefix.length).trim();
+      // A bare `@name` is a summon rather than a question: it asks the agent to be
+      // here, not to do anything. Handing it to accept() spent one of the asker's
+      // queries and ran the transport on a prompt of nothing, and a run of nothing
+      // is where the words "(no output)" came from.
+      //
+      // Peers on a build that has a summon frame send one; this branch is what
+      // catches the same intent from a peer whose build sends it as ordinary chat,
+      // so an older asker stops producing an empty run too.
+      return rest ? accept(record, peerId, rest) : greet(record, peerId);
     }
     return false;
   }
@@ -893,10 +947,21 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   function routeDirect(peerId, agentId, text) {
     const record = registry.get(agentId);
     if (!record || typeof text !== 'string' || !text.trim()) return false;
-    if (record.enabled === false) return false;
-    if (!peerMayReach(record, peerId)) return false;
-    if (!live.has(record.id)) return false;
+    if (!reachable(record, peerId)) return false;
     return accept(record, peerId, text.trim());
+  }
+
+  // A peer's bare `@name`, sent as a summon rather than as chat. Nothing is asked
+  // of the agent except that it be here.
+  //
+  // It still travels to this machine, because whether the agent says anything at
+  // all is this machine's to decide — the same three gates as a question. A
+  // greeting the asker's own machine wrote would be claiming an agent spoke when
+  // it may be switched off, unreachable, or not shared with them.
+  function routeSummon(peerId, agentId) {
+    const record = registry.get(agentId);
+    if (!reachable(record, peerId)) return false;
+    return greet(record, peerId);
   }
 
   // Common tail: the request is stored in its own thread rather than in the
@@ -982,6 +1047,49 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     return true;
   }
 
+  // The other tail: a summon is answered, not run.
+  //
+  // Nothing is spent. No turn is claimed — TURN_QUOTA exists to share out whatever
+  // capacity the agent has, and saying hello uses none of it, so charging a query
+  // for it would make the introduction cost the first question. For the same
+  // reason a summon never displaces a turn-holder and never joins the held queue:
+  // there is nothing here to be answered later.
+  //
+  // And no transport runs. That is the whole point — a prompt of nothing produced
+  // a run of nothing, and the run of nothing is what used to be reported.
+  function greet(record, peerId) {
+    // Anti-flood still applies: a greeting is an outbound frame like any other and
+    // a peer must not be able to make us send one per keystroke. `busy` is false on
+    // purpose — nothing is being refused here, so this must not spend the
+    // busy-refusal budget, and the agent working for somebody else has no bearing
+    // on whether it can say hello.
+    if (checkThrottle(record.id, peerId, false, 'summon') === 'silent') return true;
+
+    const threadId = ensureDelegateIdentity(record, peerId);
+    // Noted after the throttle rather than before it, which is the opposite of
+    // accept(): what a flooding peer *asks* is worth seeing, but the same
+    // synthesised line thirty times over says nothing the first one did not.
+    //
+    // Synthesised from our own record, never relayed. The summon frame carries no
+    // text at all, so there is nothing here that a peer could have written.
+    bus.emit('agent-request', {
+      threadId,
+      agentId: record.id,
+      peerId,
+      text: `@${record.name}`,
+      ts: Date.now(),
+    });
+    // Kept rather than a notice. This is a real exchange — somebody said something
+    // and the agent answered — and a notice would be swept off their screen after
+    // NOTICE_TTL_MS, leaving a lone `@name` with nothing beside it.
+    reply(record.id, greetingLine(record.name), peerId, { keep: true });
+    // True even when the throttle swallowed it above: this message was addressed to
+    // an agent and is finished with either way. Returning false would tell
+    // ipc.js's chat branch that nobody consumed it, and the bare `@name` would land
+    // in the human chat with us — the one place agent traffic must never go.
+    return true;
+  }
+
   async function startAll() {
     for (const record of registry.list()) {
       if (record.enabled === false) {
@@ -1024,6 +1132,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     stopRun,
     routeFromPeer,
     routeDirect,
+    routeSummon,
     announce,
     announceAll,
     startAll,

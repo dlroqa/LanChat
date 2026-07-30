@@ -21,6 +21,7 @@ import NewGroupCallModal from './components/NewGroupCallModal.jsx';
 import { GroupCallManager } from './lib/groupCall.js';
 import { listDevices, labelFor } from './lib/devices.js';
 import { isAgentThread } from './lib/agentPhrase.js';
+import { flashDuration, prefersReducedMotion } from './lib/connectFlash.js';
 import { useAgentMusic } from './lib/agentMusic.js';
 import { trackUrl, DEFAULT_TRACK } from './lib/agentMusicTrack.js';
 
@@ -86,6 +87,12 @@ export default function App() {
   // switching away and back finds what you had queued up still waiting — and so
   // a file dropped on one agent never goes to another.
   const [attachments, setAttachments] = useState({}); // threadId -> [{ path, name, bytes }]
+  // The connection light, per thread: { nonce, mode, ms }. The nonce is what makes
+  // summoning twice play it twice, and what makes the second play replace the
+  // first rather than run alongside it. `ms` is resolved once, when the trigger
+  // fires — resolving it while rendering would hand the component a different
+  // number on every re-render and the light would end at an unpredictable moment.
+  const [flash, setFlash] = useState({}); // threadId -> { nonce, mode, ms }
 
   const configRef = useRef(config);
   const laterDismissedRef = useRef(null); // update version dismissed with "Later" this session
@@ -218,6 +225,18 @@ export default function App() {
     setMessages((prev) => ({ ...prev, [peerId]: (prev[peerId] || []).filter((m) => m.id !== id) }));
   }
 
+  // Play the light on a thread. Every call plays it — there is no dedupe, because
+  // summoning an agent twice is asking twice and both times deserve an answer.
+  function showFlash(threadId, mode) {
+    if (!threadId) return;
+    const ms = flashDuration(mode, prefersReducedMotion());
+    setFlash((f) => ({ ...f, [threadId]: { nonce: nextLocalId(), mode, ms } }));
+  }
+
+  function clearFlash(threadId) {
+    setFlash((f) => (f[threadId] ? { ...f, [threadId]: null } : f));
+  }
+
   function appendMessage(peerId, msg) {
     setMessages((prev) => {
       const list = prev[peerId] ? [...prev[peerId]] : [];
@@ -273,11 +292,28 @@ export default function App() {
     const off = api.onEvent((evt) => {
       const { type, payload } = evt;
       switch (type) {
-        case 'presence':
+        case 'presence': {
+          // An agent thread you are looking at coming alive — switched on, or its
+          // owner reappearing. The summon path has its own trigger; this is the
+          // same moment arrived at some other way.
+          //
+          // Only for the thread on screen, and never queued for later: a light
+          // replayed on a thread opened an hour afterwards would be claiming a
+          // connection happened just now.
+          const before = peersRef.current;
+          const open = selectedRef.current;
+          if (open) {
+            const was = before.find((p) => p.id === open);
+            const now = payload.find((p) => p.id === open);
+            if (now && now.kind === 'agent' && now.online && !(was && was.online)) {
+              showFlash(open, 'connected');
+            }
+          }
           setPeers(payload);
           peersRef.current = payload;
           payload.forEach((p) => (knownPeers.current[p.id] = p));
           break;
+        }
         case 'tailnet-peers':
           setTailnet(payload);
           break;
@@ -414,6 +450,15 @@ export default function App() {
             ...s,
             [payload.agentId]: { ...s[payload.agentId], streaming: (s[payload.agentId]?.streaming || '') + payload.delta },
           }));
+          break;
+        // A run came back with nothing in it. There is no message, so the light is
+        // the whole of what is shown — and because no 'chat' event is coming, the
+        // clears that event normally does have to happen here instead. Without
+        // them the thread would sit saying the agent was still thinking, forever.
+        case 'agent-empty':
+          setAwaiting((a) => (a[payload.peerId] ? { ...a, [payload.peerId]: false } : a));
+          setAgentStatus((s) => (s[payload.peerId]?.streaming ? { ...s, [payload.peerId]: { ...s[payload.peerId], streaming: '' } } : s));
+          showFlash(payload.peerId, 'empty');
           break;
         case 'update-available':
           // A subtle top-centre banner rather than a blocking modal, so it can
@@ -584,7 +629,12 @@ export default function App() {
       }
       return;
     }
-    appendMessage(selectedId, msg);
+    appendMessage(msg.peerId || selectedId, msg);
+    // A bare `@name` was a summon rather than a question: the agent's thread has
+    // just opened, and this is the moment the light is for. Keyed on the message's
+    // own thread rather than on what is selected, because a summon typed in the
+    // chat with the agent's owner is filed under the agent.
+    if (msg.summoned) showFlash(msg.peerId, 'connected');
     // Held locally and retried on reconnect. This machine has to still be
     // running for that to happen — there is no server to hold it for us.
     if (!msg.delivered) toast('Saved — it will send when they are back online', 'info');
@@ -811,6 +861,8 @@ export default function App() {
           progress={progress}
           approval={approvals[selectedId]}
           agentStream={agentStatus[selectedId]?.streaming}
+          flash={flash[selectedId]}
+          onFlashDone={() => clearFlash(selectedId)}
           onApprove={(choice) => {
             const req = approvals[selectedId];
             if (!req) return;

@@ -4,6 +4,7 @@ import Logo from './Logo.jsx';
 import MessageBubble from './MessageBubble.jsx';
 import Composer from './Composer.jsx';
 import AgentApproval from './AgentApproval.jsx';
+import AgentFlash from './AgentFlash.jsx';
 import { Phone, Video, Trash, Download } from '../lib/icons.jsx';
 import { useQueueLabel } from './QueueBadge.jsx';
 import { useAgentPhrase } from '../lib/agentPhrase.js';
@@ -43,6 +44,11 @@ export default function ChatPane({
   approval,
   agentStream,
   onApprove,
+  // The connection light: `{ nonce, mode, ms }` while one should be playing, and
+  // null the rest of the time. The nonce is what makes a second summon restart it
+  // rather than stack a second light on top of the first.
+  flash,
+  onFlashDone,
 }) {
   const scrollRef = useRef(null);
   // Whether the reader is at the end of the conversation. A link card arriving
@@ -142,35 +148,49 @@ export default function ChatPane({
         </div>
       </div>
 
-      <div className="messages" ref={scrollRef} onScroll={onScroll}>
-        {messages.map((m, i) => {
-          const prev = messages[i - 1];
-          const newDay = !prev || formatDay(prev.ts) !== formatDay(m.ts);
-          const grouped =
-            prev && prev.direction === m.direction && !newDay && m.ts - prev.ts < GROUP_WINDOW && m.kind === 'text';
-          return (
-            <React.Fragment key={m.id}>
-              {newDay && <div className="day-sep">{formatDay(m.ts)}</div>}
-              <MessageBubble
-                msg={m}
-                grouped={grouped}
-                previewUrl={previewUrl}
-                previewFallback={previewFallback}
-                progress={progress[m.id]}
-                onOpen={onOpenFile}
-                onReveal={onRevealFile}
-                onOpenLink={onOpenLink}
-                linkPreview={linkPreview}
-                onPreviewShown={keepAtBottom}
-              />
-            </React.Fragment>
-          );
-        })}
+      {/* The light lives beside the scroller rather than inside it. Inside, its
+          `inset: 0` would resolve against the scrolled content: it would be as
+          tall as the whole conversation and would slide away as you read. */}
+      <div className="messages-wrap">
+        <div className="messages" ref={scrollRef} onScroll={onScroll}>
+          {messages.map((m, i) => {
+            const prev = messages[i - 1];
+            const newDay = !prev || formatDay(prev.ts) !== formatDay(m.ts);
+            const grouped =
+              prev && prev.direction === m.direction && !newDay && m.ts - prev.ts < GROUP_WINDOW && m.kind === 'text';
+            return (
+              <React.Fragment key={m.id}>
+                {newDay && <div className="day-sep">{formatDay(m.ts)}</div>}
+                <MessageBubble
+                  msg={m}
+                  grouped={grouped}
+                  previewUrl={previewUrl}
+                  previewFallback={previewFallback}
+                  progress={progress[m.id]}
+                  onOpen={onOpenFile}
+                  onReveal={onRevealFile}
+                  onOpenLink={onOpenLink}
+                  linkPreview={linkPreview}
+                  onPreviewShown={keepAtBottom}
+                />
+              </React.Fragment>
+            );
+          })}
 
-        {/* Live agent output, replaced by the stored message once the run ends. */}
-        {agentStream && <div className="agent-stream">{agentStream}</div>}
+          {/* Live agent output, replaced by the stored message once the run ends. */}
+          {agentStream && <div className="agent-stream">{agentStream}</div>}
 
-        <AgentApproval request={approval} agentName={peer.name || 'The agent'} onAnswer={onApprove} />
+          <AgentApproval request={approval} agentName={peer.name || 'The agent'} onAnswer={onApprove} />
+        </div>
+        {flash && (
+          <AgentFlash
+            key={flash.nonce}
+            mode={flash.mode}
+            ms={flash.ms}
+            name={peer.name || peer.hostname}
+            onDone={onFlashDone}
+          />
+        )}
       </div>
 
       <div className="typing">

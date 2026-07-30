@@ -99,6 +99,10 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   bus.on('agent-delta', (d) => emit('agent-delta', d));
   bus.on('agent-approval', (a) => emit('agent-approval', a));
   bus.on('agent-typing', ({ agentId, isTyping }) => emit('typing', { peerId: agentId, isTyping }));
+  // A run that finished with nothing in it. Carries a thread id rather than an
+  // agent id because a peer's conversation with a local agent lives in its own
+  // delegate thread, and that is the thread the window has to answer in.
+  bus.on('agent-empty', ({ threadId }) => emit('agent-empty', { peerId: threadId }));
 
   bus.on('file-received', (info) => {
     const message = {
@@ -162,6 +166,23 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       // Every gate the @name path applies is re-applied inside routeDirect.
       case 'agent-chat': {
         if (agentHub) agentHub.routeDirect(from, msg.agentId, msg.text);
+        break;
+      }
+      // A peer's bare `@name`: nothing is asked, so nothing is run and no turn is
+      // spent. The same three gates as a question are re-applied inside
+      // routeSummon — the greeting is this machine's to give or withhold.
+      case 'agent-summon': {
+        if (agentHub) agentHub.routeSummon(from, msg.agentId);
+        break;
+      }
+      // A run of ours that finished with nothing in it, on a question this peer
+      // asked. Resolved through remoteAgents rather than trusted: get() only
+      // returns an agent this peer actually advertised to us, so nobody can make a
+      // light play on somebody else's thread. An id that does not resolve is a
+      // frame to drop, not one to guess at.
+      case 'agent-empty': {
+        const entry = remoteAgents && remoteAgents.get(from, msg.agentId);
+        if (entry) emit('agent-empty', { peerId: entry.id });
         break;
       }
       // An agent owned by another peer is offering, or retracting, itself.
@@ -446,8 +467,15 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     // is what makes the agent's thread appear without it having to be shared for
     // direct chat.
     const mention = remoteAgents.matchMention(peerId, text);
-    if (mention && mention.text) {
-      return remoteAgents.send(peerId, mention.entry, mention.text, {
+    if (mention) {
+      // `@name` with nothing after it is a summon rather than a question: it asks
+      // the agent to be here, not to do anything. It goes to the owner all the
+      // same, because the greeting is theirs to give — and what we file is what was
+      // typed, in the agent's thread, exactly where `@name …` already goes. Letting
+      // it fall through to the ordinary chat frame below is what used to leave a
+      // bare `@name` sitting in the conversation with a person.
+      if (!mention.text) return remoteAgents.summon(mention.ownerPeerId, mention.entry, text.trim());
+      return remoteAgents.send(mention.ownerPeerId, mention.entry, mention.text, {
         prompt: composePrompt(mention.text, docs),
         docs,
       });

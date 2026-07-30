@@ -55,6 +55,7 @@ const { PeerHub } = require('../src/main/peers.js');
 const { createServer } = require('../src/main/server.js');
 const { MessageStore } = require('../src/main/store.js');
 const { createAgentHub } = require('../src/main/agents/index.js');
+const { greetingLine } = require('../src/main/agents/turnCopy.js');
 const { createIpc } = require('../src/main/ipc.js');
 
 const fakeSafeStorage = {
@@ -86,6 +87,12 @@ function echoTransports(log) {
         }
         if (text.startsWith('fail:')) {
           h.onError?.(new Error('transport is down'));
+          return;
+        }
+        // A run that succeeds having said nothing — the other real outcome a
+        // transport can have, and the one that used to be reported as an error.
+        if (text.startsWith('quiet:')) {
+          h.onDone?.({ text: '' });
           return;
         }
         h.onDone?.({ text: `echo:${text}` });
@@ -292,6 +299,199 @@ test('a peer reaching the agent by @name lands in the same thread, not the human
   assert.ok(
     B.store.read(remoteId).some((m) => m.text === 'ping'),
     'it went to the agent thread with the prefix stripped'
+  );
+});
+
+// A bare `@name` — the reported bug, over real sockets, in the exact
+// configuration it was reported in: shared network-wide with direct chat off, so
+// the contact is meant to appear only once somebody writes the name.
+//
+// What used to happen: the mention fell through to an ordinary chat frame and sat
+// in the human conversation, the owner spent one of the asker's five queries
+// running the agent on a prompt of nothing, and the run of nothing came back as a
+// stored bubble reading "(no output)".
+test('a bare @name introduces the agent instead of reporting no output', async (t) => {
+  const A = makeNode('owner-summon', await freePort());
+  const B = makeNode('peer-summon', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idA = A.getIdentity().id;
+  const idB = B.getIdentity().id;
+  const { agent } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  await A.agentHub.setSharing(agent.id, { networkWide: true, directChat: false });
+
+  await connect(A, B);
+  await waitFor(() => B.hub.presenceList().length > 0, 5000, 'B to see A');
+
+  // Exactly what the user typed: the name and nothing else.
+  const sent = await waitFor(
+    () => {
+      const m = B.call('lanchat:sendChat', { peerId: idA, text: '@Hermes' });
+      return m && m.summoned ? m : false;
+    },
+    5000,
+    'the summon to be recognised as one'
+  );
+  assert.equal(sent.summoned, true, 'the renderer is told this was the moment of connection');
+
+  const remoteId = remoteIdOn(B, idA, agent.id);
+  assert.ok(remoteId, 'summoning revealed the contact even with direct chat off');
+  const card = B.hub.presenceList().find((p) => p.id === remoteId);
+  assert.equal(card.kind, 'agent', 'and it is an agent card, under AGENTS');
+  assert.equal(card.remote, true);
+  assert.equal(card.online, true);
+
+  await waitFor(
+    () => B.store.read(remoteId).some((m) => m.direction === 'in'),
+    5000,
+    'the greeting to come back'
+  );
+
+  // The greeting, asserted against the one place it is written so the two
+  // machines cannot drift apart on the wording.
+  assert.deepEqual(
+    B.store.read(remoteId).map((m) => `${m.direction}:${m.text}`),
+    ['out:@Hermes', `in:${greetingLine('Hermes')}`]
+  );
+
+  // The core of the bug: the agent was never run.
+  assert.deepEqual(A.log, [], 'no prompt of nothing, so no run of nothing');
+
+  // And the string that started all this appears nowhere, in either direction.
+  const everything = [
+    ...B.store.read(remoteId).map((m) => m.text || ''),
+    ...A.store.read(`${agent.id}#${idB}`).map((m) => m.text || ''),
+    ...B.events.map((e) => e.payload?.text || ''),
+    ...A.events.map((e) => e.payload?.text || ''),
+  ];
+  assert.ok(!everything.some((t2) => /no output/i.test(t2)), everything.join(' | '));
+
+  // Agent talk stays out of the human conversation on both machines.
+  assert.deepEqual(B.store.read(idA), [], 'the summon never entered B’s chat with A');
+  assert.deepEqual(A.store.read(idB), [], "and never entered A's chat with B");
+  assert.deepEqual(
+    A.store.read(`${agent.id}#${idB}`).map((m) => `${m.direction}:${m.text}`),
+    ['in:@Hermes', `in:${greetingLine('Hermes')}`],
+    'A sees it filed under the delegate thread'
+  );
+  assert.deepEqual(A.store.read(agent.id), [], "A's own thread with the agent is untouched");
+
+  // No turn was spent, observed from both ends: no standing was ever published to
+  // B, and the owner still has B down for a full quota.
+  assert.equal(
+    B.hub.identities.get(remoteId).queueState,
+    undefined,
+    'somebody who is not in the queue is not given a place in it'
+  );
+  assert.equal(turnStanding(B.hub.identities.get(remoteId)), null, 'so the panel shows no turn box');
+  assert.equal(A.agentHub.standingFor(agent.id, idB).remaining, A.agentHub.TURN_QUOTA);
+
+  // Summoning again greets again — every time, which is the point.
+  await waitFor(
+    () => {
+      B.call('lanchat:sendChat', { peerId: idA, text: '@Hermes' });
+      return B.store.read(remoteId).filter((m) => m.direction === 'in').length === 2;
+    },
+    8000,
+    'a second summon to be answered too'
+  );
+  assert.deepEqual(A.log, [], 'and still nothing has been run');
+});
+
+test('a bare @name from an older peer still gets a greeting', async (t) => {
+  const A = makeNode('owner-legacy', await freePort());
+  const B = makeNode('peer-legacy', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idA = A.getIdentity().id;
+  const idB = B.getIdentity().id;
+  const { agent } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  await A.agentHub.setSharing(agent.id, { networkWide: true, directChat: false });
+  await connect(A, B);
+
+  // A build with no summon frame sends the bare mention as ordinary chat — which
+  // is what every existing install does. The owner has to map it onto the same
+  // greeting rather than onto an empty run, or the fix only helps peers who have
+  // already updated.
+  B.hub.send(idA, { type: 'chat', id: 'legacy-1', text: '@Hermes', ts: Date.now() });
+
+  const remoteId = await waitFor(() => remoteIdOn(B, idA, agent.id), 5000, 'the contact to appear');
+  await waitFor(() => B.store.read(remoteId).some((m) => m.direction === 'in'), 5000, 'the greeting');
+
+  assert.equal(B.store.read(remoteId)[0].text, greetingLine('Hermes'));
+  assert.deepEqual(A.log, [], 'no empty run for an older asker either');
+  assert.deepEqual(A.store.read(idB), [], 'and the bare mention was consumed, not stored as a human message');
+  assert.equal(A.agentHub.standingFor(agent.id, idB).remaining, A.agentHub.TURN_QUOTA, 'no turn spent');
+});
+
+test('a run that finishes with nothing leaves no bubble on either machine', async (t) => {
+  const A = makeNode('owner-quiet', await freePort());
+  const B = makeNode('peer-quiet', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idA = A.getIdentity().id;
+  const idB = B.getIdentity().id;
+  const { agent } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  await A.agentHub.setSharing(agent.id, { networkWide: true, directChat: true });
+  await connect(A, B);
+  const remoteId = await waitFor(() => remoteIdOn(B, idA, agent.id), 5000, "B to see A's agent");
+
+  // `quiet:` makes the echo transport answer with an empty string — a CLI exiting
+  // 0 having printed nothing, or an ACP run stopping normally with no text.
+  B.call('lanchat:sendChat', { peerId: remoteId, text: 'quiet:now' });
+  await waitFor(() => A.log.length === 1, 5000, 'the request to reach the agent');
+  await waitFor(
+    () => B.events.some((e) => e.type === 'agent-empty' && e.payload?.peerId === remoteId),
+    5000,
+    'the empty-run signal to reach the far side'
+  );
+
+  // The question is still on the record; the non-answer is not.
+  assert.deepEqual(
+    B.store.read(remoteId).map((m) => `${m.direction}:${m.text}`),
+    ['out:quiet:now'],
+    'no bubble is stored for an answer that does not exist'
+  );
+  const delegate = `${agent.id}#${idB}`;
+  assert.deepEqual(A.store.read(delegate).map((m) => `${m.direction}:${m.text}`), ['in:quiet:now']);
+
+  // Nobody is left waiting on a reply that is never coming: the signal is what
+  // clears the "thinking" indicator, since no chat message arrives to do it.
+  const empties = B.events.filter((e) => e.type === 'agent-empty' && e.payload?.peerId === remoteId);
+  assert.equal(empties.length, 1, 'the window is told once that the run came back');
+  // And no bubble was pushed into the thread alongside it. The outbound question
+  // is handed back through the ipc call rather than emitted, so a `chat` event on
+  // this thread could only be an answer — and there is no answer.
+  assert.deepEqual(
+    B.events.filter((e) => e.type === 'chat' && e.payload?.peerId === remoteId),
+    [],
+    'nothing is pushed into the thread for an answer that does not exist'
+  );
+  // The owner's own window sees the same, filed under the delegate thread.
+  assert.ok(
+    A.events.some((e) => e.type === 'agent-empty' && e.payload?.peerId === delegate),
+    'the owner is told too, in the thread it happened in'
   );
 });
 

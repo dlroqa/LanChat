@@ -206,6 +206,39 @@ function createRemoteAgents({ hub, store }) {
     return { ...message, delivered: ok };
   }
 
+  // A bare `@name`, with nothing after it. The agent is not being asked anything
+  // — it is being asked to be here.
+  //
+  // Deliberately not routed through send(). Most of that function is the
+  // held-question refusal, and none of it applies: a summon cannot be a duplicate
+  // of a question, so being told to wait for a turn it does not even spend would
+  // be answering something nobody asked. There is no prompt and no documents here
+  // either.
+  //
+  // What it does share with send() is the two lines that matter — show() reveals
+  // the contact, and the bubble is filed under the agent's thread rather than the
+  // chat with its owner. The greeting itself is not ours to write: the frame goes
+  // to the owner, whose gates decide whether the agent answers at all, and the
+  // answer comes back through the ordinary agent-reply path.
+  function summon(ownerPeerId, entry, text) {
+    show(ownerPeerId, entry);
+    const message = {
+      id: crypto.randomUUID(),
+      peerId: entry.id,
+      direction: 'out',
+      kind: 'text',
+      text,
+      ts: Date.now(),
+    };
+    const ok = hub.send(ownerPeerId, { type: 'agent-summon', agentId: entry.agentId });
+    store.append(entry.id, message);
+    // `summoned` is on what the renderer is handed and not on what is written down:
+    // it marks *this* moment of connection, so a copy of it read back off disk
+    // tomorrow must not announce one. History keeps what was said, not what the
+    // window did about it.
+    return { ...message, summoned: true, delivered: ok };
+  }
+
   // An answer coming back. Filed under the agent's thread, never under the chat
   // with the peer who hosts it.
   function receive(ownerPeerId, msg) {
@@ -284,6 +317,7 @@ function createRemoteAgents({ hub, store }) {
     get,
     matchMention,
     send,
+    summon,
     receive,
     setStanding,
     setActivity,

@@ -33,6 +33,7 @@ const { describeSocketError, profilePrefix } = require('../src/main/agents/trans
 const { discoverProfiles, isLocalHost } = require('../src/main/agents/profiles.js');
 const { createVirtualSocket, OPEN, CLOSED } = require('../src/main/agents/virtualSocket.js');
 const { createAgentHub, LOCAL_ORIGIN } = require('../src/main/agents/index.js');
+const { greetingLine } = require('../src/main/agents/turnCopy.js');
 const { buildArgs } = require('../src/main/agents/transports/spawn.js');
 const { PeerHub } = require('../src/main/peers.js');
 const { MessageStore } = require('../src/main/store.js');
@@ -1732,6 +1733,229 @@ test('a run that stops without answering says why, and one that answers is left 
     answered.transport.send({ text: 'hi' }, { onDone: resolve, onError: resolve });
   }).then((r) => assert.equal(r.text, 'the answer'));
   await answered.transport.stop();
+});
+
+// ---- summoning: a bare @name ----
+//
+// A bare `@name` used to be handed to the question path with an empty prompt. It
+// spent one of the asker's five queries, ran the agent on nothing, and the run of
+// nothing came back as the word "(no output)" — an error report at the exact
+// moment somebody was trying to find out whether the channel worked at all.
+//
+// These tests hold the two halves of the fix apart: that a summon is *answered*,
+// and that it costs nothing.
+
+// Every outbound frame the hub would have put on the wire.
+function captureSend(hub) {
+  const relayed = [];
+  hub.send = (peerId, obj) => {
+    relayed.push({ peerId, obj });
+    return true;
+  };
+  return relayed;
+}
+
+async function summonHub(opts = {}) {
+  const h = makeHub(opts);
+  const { agent } = await h.agentHub.add({
+    name: 'Hermes',
+    kind: 'http',
+    config: {},
+    allowedPeers: ['friend'],
+  });
+  joinPeer(h.hub, 'friend');
+  return { ...h, agent, relayed: captureSend(h.hub) };
+}
+
+test('a bare @name is answered rather than run', async () => {
+  const { agentHub, log, relayed, bus } = await summonHub();
+  const requests = [];
+  bus.on('agent-request', (r) => requests.push(r));
+
+  assert.equal(agentHub.routeFromPeer('friend', '@Hermes'), true, 'the summon is consumed');
+  await new Promise((r) => setImmediate(r));
+
+  // The whole point: no prompt of nothing, so no run of nothing.
+  assert.deepEqual(log, [], 'the transport was never run');
+
+  const replies = relayed.filter((r) => r.obj.type === 'agent-reply');
+  assert.equal(replies.length, 1, 'exactly one greeting goes back');
+  assert.equal(replies[0].peerId, 'friend', 'and only to whoever summoned it');
+  assert.equal(replies[0].obj.text, greetingLine('Hermes'));
+  assert.equal(replies[0].obj.notice, undefined, 'kept, not swept away as a notice');
+  // The string this whole change exists to remove.
+  assert.doesNotMatch(replies[0].obj.text, /no output/i);
+
+  // The summon is written into the agent's own thread, and the text is
+  // synthesised here rather than relayed — the frame carries none.
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].text, '@Hermes');
+  assert.equal(requests[0].peerId, 'friend');
+});
+
+test('a summon spends no turn, so the introduction does not cost the first question', async () => {
+  await withFakeClock(async () => {
+    const { agentHub, agent, log, relayed } = await summonHub();
+
+    agentHub.routeFromPeer('friend', '@Hermes');
+    await new Promise((r) => setImmediate(r));
+
+    const standing = agentHub.standingFor(agent.id, 'friend');
+    assert.equal(standing.state, 'idle', 'saying hello does not make you the holder');
+    assert.equal(standing.remaining, agentHub.TURN_QUOTA, 'and costs none of the quota');
+    assert.equal(standing.position, 0, 'nor does it put you in the queue');
+    assert.equal(
+      relayed.filter((r) => r.obj.type === 'agent-queue').length,
+      0,
+      'no queue standing is published for somebody who is not in the queue'
+    );
+
+    // And the five are all still there afterwards.
+    assert.equal(await ask(agentHub, 'friend', 5, log), 5, 'the full quota survived the greeting');
+  });
+});
+
+test('a summon never displaces a turn-holder and never joins the queue', async () => {
+  await withFakeClock(async () => {
+    const { hub, agentHub, agent, log } = makeHub();
+    const { agent: rec } = { agent: (await agentHub.add({ name: 'Hermes', kind: 'http', config: {} })).agent };
+    await agentHub.setSharing(rec.id, { networkWide: true });
+    joinPeer(hub, 'alice');
+    joinPeer(hub, 'bob');
+    captureSend(hub);
+
+    // Alice takes the turn with a real question.
+    assert.equal(await ask(agentHub, 'alice', 2, log), 2);
+    const before = agentHub.standingFor(rec.id, 'alice');
+
+    // Bob only says hello.
+    agentHub.routeFromPeer('bob', '@Hermes');
+    await new Promise((r) => setImmediate(r));
+
+    const after = agentHub.standingFor(rec.id, 'alice');
+    assert.equal(after.state, 'active', 'the holder still holds it');
+    assert.equal(after.remaining, before.remaining, 'and has lost nothing off her quota');
+
+    const bob = agentHub.standingFor(rec.id, 'bob');
+    assert.equal(bob.state, 'idle', 'the summoner did not join the line');
+    assert.equal(bob.held, false, 'and left no question waiting to be read');
+    assert.deepEqual(log, ['q0', 'q1'], 'only the real questions ever ran');
+    void agent;
+  });
+});
+
+test('a summon from a peer who may not reach the agent gets nothing at all', async () => {
+  // Not on the allowlist.
+  {
+    const { agentHub, agent, hub, relayed, log } = await summonHub();
+    joinPeer(hub, 'stranger');
+    assert.equal(agentHub.routeSummon('stranger', agent.id), false, 'closed by default');
+    assert.equal(agentHub.routeFromPeer('stranger', '@Hermes'), false, 'and by @name too');
+    await new Promise((r) => setImmediate(r));
+    assert.deepEqual(relayed, [], 'nothing is sent to somebody with no grant');
+    assert.deepEqual(log, []);
+    assert.equal(hub.identities.has(`${agent.id}#stranger`), false, 'and no thread is created for them');
+  }
+
+  // Switched off: the toggle is a hard gate, allowlist or not.
+  {
+    const { agentHub, agent, relayed } = await summonHub();
+    await agentHub.setEnabled(agent.id, false);
+    relayed.length = 0;
+    assert.equal(agentHub.routeSummon('friend', agent.id), false);
+    assert.deepEqual(
+      relayed.filter((r) => r.obj.type === 'agent-reply'),
+      [],
+      'a disabled agent does not greet anyone'
+    );
+  }
+
+  // Configured, allowed, but the transport never came up.
+  {
+    const { agentHub, agent, relayed } = await summonHub({ startError: 'nope' });
+    assert.equal(agentHub.routeSummon('friend', agent.id), false, 'an agent that is not running cannot answer');
+    assert.deepEqual(relayed.filter((r) => r.obj.type === 'agent-reply'), []);
+  }
+
+  // An id nobody has.
+  {
+    const { agentHub } = await summonHub();
+    assert.equal(agentHub.routeSummon('friend', 'agent:does-not-exist'), false);
+  }
+});
+
+test('a summon flood produces one greeting, and still never lands in the human chat', async () => {
+  const { agentHub, log, relayed, bus } = await summonHub();
+  const requests = [];
+  bus.on('agent-request', (r) => requests.push(r));
+
+  const returns = [];
+  for (let i = 0; i < 20; i += 1) returns.push(agentHub.routeFromPeer('friend', '@Hermes'));
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(relayed.filter((r) => r.obj.type === 'agent-reply').length, 1, 'the throttle holds');
+  assert.equal(requests.length, 1, 'and a flood of the same synthesised line is written down once');
+  assert.deepEqual(log, [], 'nothing was ever run');
+  // The load-bearing one. ipc.js reads this return value to decide whether the
+  // message was consumed; a `false` here would drop a bare `@Hermes` into the
+  // owner's chat with the peer — the one place agent traffic must never go.
+  assert.deepEqual(
+    [...new Set(returns)],
+    [true],
+    'every summon is consumed, including the ones the throttle swallowed'
+  );
+});
+
+test('a summon is not throttled against the question it invites', async () => {
+  const { agentHub, log } = await summonHub();
+
+  // The greeting says "ask me anything", so the next thing that happens is
+  // somebody asking. Sharing one throttle key made that question vanish.
+  assert.equal(agentHub.routeFromPeer('friend', '@Hermes'), true);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(agentHub.routeFromPeer('friend', '@Hermes are you there'), true);
+  await new Promise((r) => setImmediate(r));
+
+  assert.deepEqual(log, ['are you there'], 'the invitation did not swallow the reply to it');
+});
+
+test('a run that finishes silently is signalled, not written down as an error', async () => {
+  const dir = tmpdir('silent');
+  const bus = new EventEmitter();
+  const hub = new PeerHub({ getIdentity: () => ({ id: 'me', name: 'Me' }), bus });
+  const store = new MessageStore(dir);
+  const agentHub = createAgentHub({
+    userDataDir: dir,
+    hub,
+    bus,
+    store,
+    safeStorage: fakeSafeStorage,
+    // A CLI that exits 0 having printed nothing, or an ACP session that stops for
+    // a normal reason having said nothing. Both are real outcomes, not faults.
+    transports: {
+      http: ({ id, name }) => ({
+        id,
+        name,
+        kind: 'stub',
+        start: async () => ({ detail: 'ready' }),
+        send: async (_msg, h) => h.onDone?.({ text: '' }),
+        stop: async () => {},
+      }),
+    },
+  });
+  const { agent } = await agentHub.add({ name: 'Quiet', kind: 'http', config: {} });
+
+  const messages = [];
+  const empties = [];
+  bus.on('peer-message', (m) => messages.push(m));
+  bus.on('agent-empty', (e) => empties.push(e));
+
+  hub.send(agent.id, { type: 'chat', text: 'say nothing' });
+  await new Promise((r) => setImmediate(r));
+
+  assert.deepEqual(messages, [], 'no bubble is produced for an answer that does not exist');
+  assert.deepEqual(empties, [{ threadId: agent.id }], 'the window is told, in the thread it happened in');
+  assert.deepEqual(store.read(agent.id), [], 'and nothing is written to disk');
 });
 
 // ---- Hermes profiles ----

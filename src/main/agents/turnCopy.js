@@ -1,6 +1,7 @@
 'use strict';
 
-// What the turn queue says to somebody standing in it.
+// What an agent says on its own behalf: the turn queue, and the greeting that is
+// not an answer to anything.
 //
 // Two machines write these lines now — the agent's owner, which knows the queue,
 // and the asker's own copy, which refuses a second attempt before it ever
@@ -34,4 +35,18 @@ function busyLine(name, position) {
   return `${name} is busy with someone else. You are #${position} in line — ask again when it is your turn.`;
 }
 
-module.exports = { heldLine, rotatedLine, busyLine };
+// A bare `@name` with nothing after it. The agent is not being asked anything —
+// it is being asked to be here — so this is what it says when it arrives.
+//
+// Written by the owner's machine and never by the asker's. A greeting is the
+// agent's to give, and one invented locally would be claiming it spoke when it
+// may be switched off, unreachable, or not shared with whoever typed the name.
+//
+// It also says what to do next, because the moment somebody summons an agent is
+// the moment they are trying to find out whether the channel works at all. The
+// old answer to that question was the word `(no output)`.
+function greetingLine(name) {
+  return `Hello — ${name} here. Ask me anything.`;
+}
+
+module.exports = { heldLine, rotatedLine, busyLine, greetingLine };
