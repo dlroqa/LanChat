@@ -433,6 +433,45 @@ test('a second socket for a live peer is fine under the same key, refused under 
   impostor.close();
 });
 
+// ---------------------------------------------------------------- teardown
+
+test('a peer that goes away is seen to go away, promptly', async (t) => {
+  // `hub.close()` used to only ask for a graceful close: a frame out, the
+  // peer's reply back, and the socket alive until that round trip finished.
+  // This side cleared its roster immediately, so the far end went on showing us
+  // online for however long that took — seconds on a loaded machine, and
+  // forever against a peer that had stopped answering.
+  //
+  // It surfaced as a Windows-only CI failure in the key-change test below, which
+  // waits for exactly this. Timing out there was the symptom; the delay was the
+  // bug, and it applied to every shutdown rather than to the test.
+  const [pa, pb] = [await freePort(), await freePort()];
+  const A = makeNode('alice', pa);
+  const B = makeNode('bob', pb);
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idA = A.getIdentity().id;
+  A.hub.connect(B.getIdentity().id, `127.0.0.1:${pb}`);
+  await waitFor(() => B.hub.isConnected(idA), 15000, 'the handshake');
+
+  const started = Date.now();
+  A.hub.close();
+  await waitFor(() => !B.hub.isConnected(idA), 15000, 'the peer to drop off the roster');
+  const took = Date.now() - started;
+
+  // Generous, because CI runners are slow and this is not a benchmark. The
+  // failure it guards against is measured in whole seconds, or in never.
+  assert.ok(took < 3000, `the peer took ${took}ms to be seen as gone`);
+  assert.equal(A.hub.keys.size, 0, 'and this side let go of the key binding too');
+});
+
 // -------------------------------------------------------------- key change
 
 test('a peer whose key changed is refused, loudly, without losing the history', async (t) => {
@@ -458,7 +497,7 @@ test('a peer whose key changed is refused, loudly, without losing the history', 
 
   A.hub.close();
   A.server.stop();
-  await waitFor(() => !B.hub.isConnected(idA), 5000, 'the socket to drop');
+  await waitFor(() => !B.hub.isConnected(idA), 15000, 'the socket to drop');
 
   // Alice reinstalls: same userData, same UUID, but the key file is gone. This
   // is indistinguishable from an impostor, and is treated as one.

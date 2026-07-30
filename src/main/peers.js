@@ -255,15 +255,33 @@ class PeerHub {
   }
 
   // Close every socket (used on shutdown / in tests).
+  //
+  // Closed *and* terminated, in that order. `close()` on its own begins a
+  // graceful handshake — a close frame out, the peer's reply back — and only
+  // then does the socket actually go. Which means this method returns, the
+  // roster is cleared here, and the far end still shows us online for as long as
+  // that round trip takes. On a loaded machine that is seconds; against a peer
+  // that has stopped responding it is never, and the socket sits there until TCP
+  // gives up on it minutes later.
+  //
+  // Nothing that calls this wants to negotiate. It is shutdown and teardown —
+  // "we are going away" — so the close frame is sent as a courtesy and the
+  // socket is then destroyed, which the peer sees at once. Virtual sockets (the
+  // local and remote agents) have no `terminate`, hence the check rather than a
+  // bare call.
   close() {
     for (const set of this.sockets.values()) {
       for (const ws of set) {
         try {
           ws.close();
         } catch {}
+        try {
+          if (typeof ws.terminate === 'function') ws.terminate();
+        } catch {}
       }
     }
     this.sockets.clear();
+    this.keys.clear();
   }
 
   // Facts discovery worked out locally about a peer — that it is shared in from
