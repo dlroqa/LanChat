@@ -22,6 +22,13 @@ const { Outbox } = require('./outbox');
 const { normalizeWebUrl } = require('./webLinks');
 const { createSplash, closeSplash, splashIsOpen, createGate } = require('./splash');
 
+// Node shows ten frames by default, which is not enough to see a cycle. The
+// 0.4.21 crash dialog was truncated exactly where the loop closed, so the part
+// that named the bug was the part that got cut off. Crashes here are read from a
+// screenshot of a dialog on someone else's machine, and there is no second
+// attempt at capturing one — the whole trace has to be in the first report.
+Error.stackTraceLimit = 50;
+
 // Long enough that the update check never competes with first-run setup.
 const STARTUP_UPDATE_CHECK_DELAY = 4000;
 // Re-check periodically so a session left open for hours still learns about a

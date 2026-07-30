@@ -6,6 +6,11 @@ const WebSocket = require('ws');
 // Both inbound (server-accepted) and outbound (we dialed) sockets register here,
 // so send() can use whichever socket is open. Discovery feeds it candidate peers.
 
+// How many times a single presence burst will re-emit to let the roster settle.
+// Two is the normal ceiling — one pass for listeners to react, one to show the
+// result — so anything approaching this means a listener is not converging.
+const MAX_PRESENCE_PASSES = 10;
+
 class PeerHub {
   constructor({ getIdentity, bus }) {
     this.getIdentity = getIdentity;
@@ -14,6 +19,8 @@ class PeerHub {
     this.identities = new Map(); // peerId -> identity card
     this.addresses = new Map(); // peerId -> "ip:port" last known
     this.dialing = new Set(); // peerId currently being dialed
+    this.emittingPresence = false; // a burst is in flight; nested emits fold in
+    this.presenceDirty = false; // the roster changed while that burst ran
   }
 
   register(peerId, ws) {
@@ -165,8 +172,48 @@ class PeerHub {
     return out;
   }
 
+  // Every roster change funnels through here, which makes this the one place
+  // that can make re-entrancy safe for all of them.
+  //
+  // Presence listeners are allowed to change the roster — answering "an owner
+  // went offline" by dropping their agents is exactly that — and those changes
+  // emit presence in turn. Recursing into a fresh emit for each one is what once
+  // ran the main process out of stack, so a nested emit is folded into the burst
+  // already in flight: it marks the roster dirty and returns, and the call still
+  // running loops round to emit again. The list is rebuilt every pass, so a
+  // listener that changed the roster is never answered with the list from before
+  // it did, and the last emit of a burst always carries the settled roster.
+  //
+  // A caller that is not already inside a burst still emits once, synchronously,
+  // exactly as before — nothing about the ordinary path changes.
   emitPresence() {
-    this.bus.emit('presence', this.presenceList());
+    if (this.emittingPresence) {
+      this.presenceDirty = true;
+      return;
+    }
+    this.emittingPresence = true;
+    try {
+      let passes = 0;
+      do {
+        this.presenceDirty = false;
+        this.bus.emit('presence', this.presenceList());
+      } while (this.presenceDirty && ++passes < MAX_PRESENCE_PASSES);
+      if (this.presenceDirty) {
+        // A listener is changing the roster on every pass, so it is never going
+        // to settle. Ending the burst leaves the roster where it stands, which
+        // is a stale contact at worst; spinning here would wedge the main
+        // process, which is the failure this whole guard exists to prevent.
+        console.warn(
+          `[peers] presence did not settle in ${MAX_PRESENCE_PASSES} passes; a listener keeps changing the roster`
+        );
+      }
+    } finally {
+      // Cleared even when a listener throws. A flag left standing would swallow
+      // every later presence emit for the rest of the session — the roster would
+      // freeze silently, which is far worse than the throw on its way out.
+      this.emittingPresence = false;
+      this.presenceDirty = false;
+    }
   }
 }
 

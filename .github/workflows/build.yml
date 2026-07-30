@@ -7,7 +7,39 @@ on:
   workflow_dispatch:
 
 jobs:
+  # The gate. Nothing is packaged and nothing reaches a user unless the suite
+  # passes first, on every platform we ship to. v0.4.21 went out with a crash
+  # that the suite catches in under a second, because until now the suite was
+  # never run here — the workflow only ever built installers.
+  #
+  # fail-fast is off so one platform's failure reports the other two rather than
+  # cancelling them; when something breaks we want to know if it broke everywhere
+  # or only in one place.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `npm test` discovers its own files rather than relying on the shell to
+      # expand a glob, so this is the same command, running the same tests, on
+      # all three runners including PowerShell.
+      - name: Run tests
+        run: npm test
+
   build:
+    needs: test
     strategy:
       fail-fast: false
       matrix:
