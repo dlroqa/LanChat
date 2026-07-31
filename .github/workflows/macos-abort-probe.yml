@@ -1,0 +1,115 @@
+name: macOS abort probe
+
+# Not part of the build. A throwaway workflow, on a throwaway branch, to find out
+# why test/auth.test.js sometimes dies with SIGABRT on the macOS runner and takes
+# a release with it. It answers three questions the build's own log cannot:
+#
+#   1. What does the crash report say? The child aborts without printing a single
+#      line to stderr, so the only account of it is the .ips macOS writes.
+#   2. Does it need the rest of the suite running alongside it, or does the file
+#      abort on its own? One loop each says which.
+#   3. Is it the runner flags? Three arms — as `npm test` runs it, without
+#      --test-force-exit, and with concurrency pinned to one — measured against
+#      each other rather than argued about.
+#
+# Every step keeps going on failure: a run that stops at the first abort measures
+# nothing.
+
+on:
+  push:
+    branches: ['probe/**']
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+      - name: What this machine is
+        run: |
+          sw_vers
+          uname -m
+          node -p "[process.version, process.arch, require('node:os').cpus().length, require('node:os').availableParallelism?.()].join(' ')"
+          ulimit -a
+          sysctl -n hw.memsize kern.maxproc kern.maxfilesperproc
+
+      # Arm 1: exactly what CI runs.
+      - name: Suite as CI runs it (npm test)
+        if: always()
+        continue-on-error: true
+        run: |
+          fail=0
+          for i in $(seq 1 6); do
+            if npm test > "suite-$i.log" 2>&1; then echo "run $i: ok"
+            else fail=$((fail+1)); echo "run $i: FAILED"; grep -E "not ok [0-9]+ - /|signal:|exitCode:" "suite-$i.log" | head -6; fi
+          done
+          echo "ARM force-exit: $fail/6 failed"
+
+      # Arm 2: the same suite without --test-force-exit.
+      - name: Suite without --test-force-exit
+        if: always()
+        continue-on-error: true
+        run: |
+          fail=0
+          for i in $(seq 1 6); do
+            if node --test > "noforce-$i.log" 2>&1; then echo "run $i: ok"
+            else fail=$((fail+1)); echo "run $i: FAILED"; grep -E "not ok [0-9]+ - /|signal:|exitCode:" "noforce-$i.log" | head -6; fi
+          done
+          echo "ARM no-force-exit: $fail/6 failed"
+
+      # Arm 3: one file at a time, so nothing is competing for the machine.
+      - name: Suite with one file at a time
+        if: always()
+        continue-on-error: true
+        run: |
+          fail=0
+          for i in $(seq 1 4); do
+            if node --test --test-force-exit --test-concurrency=1 > "serial-$i.log" 2>&1; then echo "run $i: ok"
+            else fail=$((fail+1)); echo "run $i: FAILED"; grep -E "not ok [0-9]+ - /|signal:|exitCode:" "serial-$i.log" | head -6; fi
+          done
+          echo "ARM serial: $fail/4 failed"
+
+      # Arm 4: the file the build points at, alone and often. If it never aborts
+      # here, the file is not what is wrong.
+      - name: auth.test.js alone, thirty times
+        if: always()
+        continue-on-error: true
+        run: |
+          fail=0
+          for i in $(seq 1 30); do
+            if ! node --test --test-force-exit test/auth.test.js > "alone-$i.log" 2>&1; then
+              fail=$((fail+1)); echo "alone run $i: FAILED"; tail -25 "alone-$i.log"; fi
+          done
+          echo "ARM alone: $fail/30 failed"
+
+      # The account the process never got to give.
+      - name: Crash reports
+        if: always()
+        run: |
+          for dir in "$HOME/Library/Logs/DiagnosticReports" /Library/Logs/DiagnosticReports; do
+            echo "=== $dir"
+            ls -la "$dir" 2>/dev/null || echo "(none)"
+            for f in "$dir"/*.ips "$dir"/*.crash; do
+              [ -f "$f" ] || continue
+              echo "----- $f"
+              head -c 6000 "$f"
+              echo
+            done
+          done
+
+      - name: Keep the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-logs
+          path: |
+            *.log
+            ~/Library/Logs/DiagnosticReports/*
+          if-no-files-found: ignore
