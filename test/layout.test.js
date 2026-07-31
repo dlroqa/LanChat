@@ -47,6 +47,52 @@ test('the grid gives its columns a row to sit in, and one that can shrink', () =
   assert.match(app, /grid-auto-rows:\s*minmax\(0,\s*1fr\)/);
 });
 
+test('a category opens onto its own contents, and shuts faster than it opens', () => {
+  // A height cannot be transitioned to `auto`, so the fold is a grid track going
+  // from 0fr to 1fr with the list clipped inside it. Both halves are pinned
+  // here: without the clip the rows spill out of a shut category, and without
+  // the track there is nothing to animate.
+  const body = block('.sb-body');
+  const inner = block('.sb-body-inner');
+  assert.ok(body && inner, '.sb-body and .sb-body-inner should be in styles.css');
+  assert.match(body, /grid-template-rows:\s*0fr/);
+  assert.match(block('.sb-section.open > .sb-body'), /grid-template-rows:\s*1fr/);
+  assert.match(inner, /overflow:\s*hidden/);
+  assert.match(inner, /min-height:\s*0/);
+
+  // Shut, the rows are out of the tab order and out of the accessibility tree
+  // as well as out of sight — a category that has been put away must not still
+  // be reachable by pressing Tab enough times.
+  assert.match(body, /visibility:\s*hidden/);
+  assert.match(block('.sb-section.open > .sb-body'), /visibility:\s*visible/);
+
+  const ms = (rules) => Number(rules.match(/grid-template-rows\s+(\d+)ms/)[1]);
+  const open = ms(block('.sb-section.open > .sb-body'));
+  const shut = ms(body);
+  assert.ok(open <= 300 && shut <= 300, `${open}ms / ${shut}ms is past the 300ms a micro-interaction gets`);
+  assert.ok(shut < open, `shutting (${shut}ms) should be quicker than opening (${open}ms)`);
+});
+
+test('the flash on a shut category keeps its title readable, moving or not', () => {
+  const flash = block('.sb-section.flash .sb-title');
+  assert.ok(flash, 'the flash rule should be in styles.css');
+
+  // The glyphs stay opaque and the light moves across them. A pulse that faded
+  // the title would make the one word saying where the unread message is
+  // unreadable for half of every cycle.
+  assert.match(flash, /background-clip:\s*text/);
+  assert.match(flash, /animation:\s*sb-prism/);
+  assert.doesNotMatch(flash, /opacity/);
+
+  // And it survives motion being turned off: the sweep stops, the prism stays,
+  // and the count beside the title says the same thing in a number.
+  const reduced = css.slice(css.indexOf('@keyframes sb-prism'));
+  assert.match(
+    reduced,
+    /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.sb-section\.flash \.sb-title\s*\{[^}]*animation:\s*none/
+  );
+});
+
 test('every scroller in a column may shrink below what is in it', () => {
   // A `flex: 1` element that scrolls needs `min-height: 0`, or it refuses to go
   // below its content height and pushes its siblings out of the window instead
@@ -144,6 +190,12 @@ test('the harness mirrors the nesting the app actually renders', () => {
     'me-actions',
     'chat-actions',
     'find-btn',
+    // The list is inside a category now, two elements deep. A harness that put
+    // the peers straight into .peer-list would be measuring a panel that no
+    // longer exists — and would never see the fold that clips them.
+    'sb-head',
+    'sb-body',
+    'sb-body-inner',
   ]) {
     assert.match(markup, new RegExp(`class="${cls}"`), `the harness should still build .${cls}`);
   }

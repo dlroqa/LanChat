@@ -94,12 +94,28 @@ function buildPage(cssPath) {
     </div>
     <div class="sidebar-search"><input placeholder="Search people" /></div>
     <div class="peer-list">
-      <div class="section-label">Sessions</div>
-      <div class="peer session"><span class="session-mark">S</span>
-        <div class="meta"><div class="name"><span class="name-text">why the turn moved</span></div>
-        <div class="sub">Session · Hermes</div></div></div>
-      <div class="section-label">People</div>
-      ${Array.from({ length: PEERS }, (_, i) => peerRow(i)).join('\n')}
+      <section class="sb-section">
+        <div class="sb-head"><button class="sb-grip">G</button><span class="sb-title">Sessions</span>
+          <button class="sb-lock">L</button></div>
+        <div class="sb-body"><div class="sb-body-inner">
+          <div class="peer session"><span class="session-mark">S</span>
+            <div class="meta"><div class="name"><span class="name-text">why the turn moved</span></div>
+            <div class="sub">Session · Hermes</div></div></div>
+        </div></div>
+      </section>
+      <!-- Open, because the category holding the open conversation is: a panel
+           with every category shut has nothing in it to overflow, and the
+           scrolling assertions below would pass by having nothing to scroll. -->
+      <section class="sb-section open">
+        <div class="sb-head"><button class="sb-grip">G</button><span class="sb-title">People</span>
+          <span class="sb-actions"><button class="icon-btn sb-action">C</button>
+            <button class="icon-btn sb-action">R</button>
+            <button class="icon-btn sb-action">+</button></span>
+          <button class="sb-lock">L</button></div>
+        <div class="sb-body"><div class="sb-body-inner">
+          ${Array.from({ length: PEERS }, (_, i) => peerRow(i)).join('\n')}
+        </div></div>
+      </section>
     </div>
   </div>
 

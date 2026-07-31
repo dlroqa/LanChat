@@ -242,3 +242,33 @@ export const ChevronDown = (p) => (
     <polyline points="6 9 12 15 18 9" />
   </S>
 );
+// Keeping a sidebar category open, and letting it fall shut again. The shackle
+// is the whole difference between the two, so it is drawn open rather than the
+// pair being told apart by colour alone.
+export const Lock = (p) => (
+  <S {...p}>
+    <rect x="3.5" y="11" width="17" height="10" rx="2" />
+    <path d="M7.5 11V7a4.5 4.5 0 0 1 9 0v4" />
+  </S>
+);
+export const Unlock = (p) => (
+  <S {...p}>
+    <rect x="3.5" y="11" width="17" height="10" rx="2" />
+    <path d="M7.5 11V7a4.5 4.5 0 0 1 8.9-1" />
+  </S>
+);
+// The handle a category is dragged by. Filled dots rather than rings: at 14px a
+// 1.8 stroke around a 1px circle closes up into a blob anyway, and the filled
+// version is the one that reads as something to take hold of.
+export const Grip = (p) => (
+  <S {...p}>
+    <g fill="currentColor" stroke="none">
+      <circle cx="9" cy="6" r="1.4" />
+      <circle cx="9" cy="12" r="1.4" />
+      <circle cx="9" cy="18" r="1.4" />
+      <circle cx="15" cy="6" r="1.4" />
+      <circle cx="15" cy="12" r="1.4" />
+      <circle cx="15" cy="18" r="1.4" />
+    </g>
+  </S>
+);

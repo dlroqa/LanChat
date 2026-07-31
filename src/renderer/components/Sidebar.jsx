@@ -1,8 +1,23 @@
 import React, { useState, useMemo } from 'react';
 import Avatar from './Avatar.jsx';
 import QueueBadge from './QueueBadge.jsx';
+import SidebarSection from './SidebarSection.jsx';
 import { Settings, Plus, Search, Refresh, Users, GroupCall, Code, Sessions } from '../lib/icons.jsx';
 import { platformLabel } from '../lib/util.js';
+import {
+  normalizeOrder,
+  moveSection,
+  sectionForThread,
+  sectionSignal,
+  sectionTitle,
+} from '../lib/sidebarSections.js';
+
+// A drag carrying a category, told apart from a drag carrying files. The window
+// puts a "drop to send" sheet over the conversation for anything dragged into
+// it, and re-ordering the panel is not that — so the type is checked rather than
+// assumed, on the way in here and again in App.jsx on the way out.
+const DND_TYPE = 'application/x-lanchat-section';
+const carriesSection = (e) => Array.from(e.dataTransfer?.types || []).includes(DND_TYPE);
 
 // Why a peer could not connect, in words rather than a code.
 //
@@ -42,6 +57,12 @@ export default function Sidebar({
   authFailures = {},
   showAddresses,
   sessions = [],
+  // The order the categories are stacked in and which of them are pinned open,
+  // both saved settings. They arrive as whatever was in the config file, so
+  // neither is trusted further than normalizeOrder makes it safe.
+  sectionOrder = [],
+  lockedSections = [],
+  onSectionPrefs = () => {},
   onSelect,
   onOpenProfile,
   onOpenDev,
@@ -79,6 +100,100 @@ export default function Sidebar({
     const s = q.trim().toLowerCase();
     return s ? sessions.filter((x) => (x.title || '').toLowerCase().includes(s)) : sessions;
   }, [sessions, q]);
+
+  // The same two splits again, before the search box has had them. A heading is
+  // the only thing a shut category shows, so what it counts has to be everything
+  // inside it — a search for "eli" must not quietly take the flashing off People
+  // because the person with the unread message is not called Eli.
+  const allAgents = useMemo(() => peers.filter((p) => p.kind === 'agent'), [peers]);
+  const allPeople = useMemo(() => peers.filter((p) => p.kind !== 'agent'), [peers]);
+
+  const onlineTailnet = useMemo(() => (tailnet || []).filter((t) => t.online).length, [tailnet]);
+
+  // ---- the four categories -------------------------------------------------
+  //
+  // Which one is open is worked out on every render rather than stored. There is
+  // no state that could disagree with the panel: a category is open because it
+  // is pinned, or pointed at, or holds the conversation you are in, or has
+  // something the search found — and it flashes because it is shut and has
+  // something waiting. Nothing has to be remembered to switch the flash off,
+  // which is why it stops exactly when the message is read and not a moment
+  // before.
+  const [hovered, setHovered] = useState(null);
+  const [drag, setDrag] = useState({ id: null, overId: null, before: false });
+
+  const order = useMemo(() => normalizeOrder(sectionOrder), [sectionOrder]);
+  const locked = useMemo(
+    () => (Array.isArray(lockedSections) ? lockedSections : []).filter((id) => order.includes(id)),
+    [lockedSections, order]
+  );
+
+  const searching = q.trim().length > 0;
+  const activeSection = useMemo(
+    () => sectionForThread(selectedId, { sessions, peers }),
+    [selectedId, sessions, peers]
+  );
+
+  const shownCount = {
+    sessions: shownSessions.length,
+    agents: agents.length,
+    people: people.length,
+    tailnet: 0,
+  };
+
+  const signals = {
+    sessions: sectionSignal(sessions, unread, summoned),
+    agents: sectionSignal(allAgents, unread, summoned),
+    people: sectionSignal(allPeople, unread, summoned),
+    tailnet: { count: 0, alert: false },
+  };
+
+  // Everything shuts while a category is being carried: four headings are a
+  // short list to drop into, and a list that grew and shrank under the pointer
+  // as it passed each category would be a moving target.
+  const isExpanded = (id) =>
+    !drag.id &&
+    (locked.includes(id) || hovered === id || id === activeSection || (searching && shownCount[id] > 0));
+
+  const onHover = (id, open) => setHovered((h) => (open ? id : h === id ? null : h));
+
+  const toggleLock = (id) =>
+    onSectionPrefs({ sidebarLocked: locked.includes(id) ? locked.filter((x) => x !== id) : [...locked, id] });
+
+  const move = (id, delta) =>
+    onSectionPrefs({ sidebarOrder: moveSection(order, id, order.indexOf(id) + delta) });
+
+  const dragStart = (id) => (e) => {
+    e.dataTransfer.setData(DND_TYPE, id);
+    e.dataTransfer.effectAllowed = 'move';
+    setHovered(null);
+    setDrag({ id, overId: null, before: false });
+  };
+
+  const dragOver = (id) => (e) => {
+    if (!carriesSection(e)) return; // a file: leave it to the window's own handler
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+    const r = e.currentTarget.getBoundingClientRect();
+    const before = e.clientY < r.top + r.height / 2;
+    setDrag((d) => (d.overId === id && d.before === before ? d : { ...d, overId: id, before }));
+  };
+
+  const drop = (id) => (e) => {
+    if (!carriesSection(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const moving = e.dataTransfer.getData(DND_TYPE) || drag.id;
+    if (moving && moving !== id) {
+      const rest = order.filter((x) => x !== moving);
+      const at = rest.indexOf(id) + (drag.before ? 0 : 1);
+      onSectionPrefs({ sidebarOrder: moveSection(order, moving, at) });
+    }
+    setDrag({ id: null, overId: null, before: false });
+  };
+
+  const dragEnd = () => setDrag({ id: null, overId: null, before: false });
 
   // What a session is for, in the line under its name: the agent it asks, or
   // that it has not been given one yet. The agent's name comes from the roster
@@ -171,6 +286,96 @@ export default function Sidebar({
     </div>
   );
 
+  // The three things done to the roster rather than to one person. They live in
+  // the People heading, which is where they have always been — a heading that
+  // can now be shut, so they fade in with the grip and the lock on hover rather
+  // than sitting on top of a title that is meant to read as a title.
+  const peopleActions = (
+    <>
+      <button className="icon-btn sb-action" onClick={onNewGroupCall} title="Start a group call">
+        <GroupCall size={16} />
+      </button>
+      <button className="icon-btn sb-action" onClick={onRefresh} title="Refresh">
+        <Refresh size={15} />
+      </button>
+      <button className="icon-btn sb-action" onClick={onAddPeer} title="Add peer by IP">
+        <Plus size={16} />
+      </button>
+    </>
+  );
+
+  // What is under each heading. Every category renders whether or not it has
+  // anything in it: four headings that are always the same four, in whatever
+  // order they have been put in, is the thing being dragged and locked — one
+  // that came and went with its contents would move the others under the
+  // pointer, and could not be given a place to sit at all.
+  const sectionBody = (id) => {
+    if (searching && shownCount[id] === 0 && id !== 'tailnet') {
+      return <div className="empty-hint">Nothing here matches “{q.trim()}”.</div>;
+    }
+    switch (id) {
+      case 'sessions':
+        return shownSessions.length ? (
+          shownSessions.map(sessionRow)
+        ) : (
+          <div className="empty-hint">No sessions yet. The button above starts one.</div>
+        );
+      case 'agents':
+        return agents.length ? (
+          agents.map(peerRow)
+        ) : (
+          <div className="empty-hint">
+            No agents yet. One appears here when you connect an agent on this machine, or when a peer shares
+            theirs with you.
+          </div>
+        );
+      case 'people':
+        return people.length ? (
+          people.map(peerRow)
+        ) : (
+          <div className="empty-hint">
+            No LanChat users found yet. People on your Tailscale network or LAN who run LanChat show up here
+            automatically. You can also add one by IP with the + button.
+          </div>
+        );
+      case 'tailnet':
+      default:
+        // An empty tailnet list is ambiguous on its own — say which of "no CLI",
+        // "signed out" or "nothing there" it actually is. The two used to be
+        // separate blocks with a heading each, which printed the heading twice
+        // whenever Tailscale was down *and* something had been seen earlier.
+        if (tailnetStatus && tailnetStatus.ok === false) {
+          return (
+            <div className="empty-hint">
+              {tailnetStatus.reason === 'not-installed'
+                ? 'The Tailscale command-line tool was not found, so tailnet peers cannot be listed. Peers on your local network still appear above.'
+                : 'Tailscale is not responding — check that it is running and signed in.'}
+            </div>
+          );
+        }
+        if (!noApp.length) {
+          return (
+            <div className="empty-hint">
+              {onlineTailnet
+                ? 'Everything online on your tailnet is running LanChat.'
+                : 'No other devices on your tailnet are online.'}
+            </div>
+          );
+        }
+        return noApp.map((t) => (
+          <div key={t.ip} className="peer offline" title="Online on Tailscale but not running LanChat">
+            <Avatar name={t.hostname} id={t.ip} />
+            <div className="meta">
+              <div className="name">
+                <span className="name-text">{t.hostname}</span>
+              </div>
+              <div className="sub">{platformLabel(t.os)} · app not running</div>
+            </div>
+          </div>
+        ));
+    }
+  };
+
   return (
     <div className="sidebar">
       <div className="me">
@@ -216,90 +421,32 @@ export default function Sidebar({
       </div>
 
       <div className="peer-list">
-        {/* Work in progress before correspondents: a session is something you
-            are in the middle of, and the button that starts one is directly
-            above. Like the agents below, the heading only exists when there is
-            something under it. */}
-        {shownSessions.length > 0 && (
-          <>
-            <div className="section-label">
-              <span>Sessions</span>
-            </div>
-            {shownSessions.map(sessionRow)}
-          </>
-        )}
-
-        {/* Agents first, so the panel opens on them. The section only exists
-            when there is an agent to put in it — an empty heading would read
-            as something missing. */}
-        {agents.length > 0 && (
-          <>
-            <div className="section-label">
-              <span>Agents</span>
-            </div>
-            {agents.map(peerRow)}
-          </>
-        )}
-
-        <div className="section-label">
-          <span>People</span>
-          <span style={{ display: 'flex', gap: 2 }}>
-            <button
-              className="icon-btn"
-              style={{ width: 26, height: 26 }}
-              onClick={onNewGroupCall}
-              title="Start a group call"
-            >
-              <GroupCall size={16} />
-            </button>
-            <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={onRefresh} title="Refresh">
-              <Refresh size={15} />
-            </button>
-            <button className="icon-btn" style={{ width: 26, height: 26 }} onClick={onAddPeer} title="Add peer by IP">
-              <Plus size={16} />
-            </button>
-          </span>
-        </div>
-
-        {people.length === 0 && (
-          <div className="empty-hint">
-            No LanChat users found yet. People on your Tailscale network or LAN who run LanChat show up here
-            automatically. You can also add one by IP with the + button.
-          </div>
-        )}
-        {people.map(peerRow)}
-
-        {/* An empty tailnet list is ambiguous on its own — say which of "no
-            CLI", "signed out" or "nothing there" it actually is. */}
-        {tailnetStatus && tailnetStatus.ok === false && (
-          <>
-            <div className="section-label" style={{ marginTop: 6 }}>
-              On your tailnet
-            </div>
-            <div className="hint" style={{ padding: '0 4px 8px' }}>
-              {tailnetStatus.reason === 'not-installed'
-                ? 'The Tailscale command-line tool was not found, so tailnet peers cannot be listed. Peers on your local network still appear above.'
-                : 'Tailscale is not responding — check that it is running and signed in.'}
-            </div>
-          </>
-        )}
-
-        {noApp.length > 0 && (
-          <>
-            <div className="section-label" style={{ marginTop: 6 }}>
-              On your tailnet
-            </div>
-            {noApp.map((t) => (
-              <div key={t.ip} className="peer offline" title="Online on Tailscale but not running LanChat">
-                <Avatar name={t.hostname} id={t.ip} />
-                <div className="meta">
-                  <div className="name"><span className="name-text">{t.hostname}</span></div>
-                  <div className="sub">{platformLabel(t.os)} · app not running</div>
-                </div>
-              </div>
-            ))}
-          </>
-        )}
+        {order.map((id) => (
+          <SidebarSection
+            key={id}
+            id={id}
+            title={sectionTitle(id)}
+            expanded={isExpanded(id)}
+            locked={locked.includes(id)}
+            flashing={!isExpanded(id) && signals[id].alert}
+            count={signals[id].count}
+            alert={signals[id].alert}
+            dragging={Boolean(drag.id)}
+            dropEdge={
+              drag.id && drag.overId === id && drag.id !== id ? (drag.before ? 'before' : 'after') : null
+            }
+            actions={id === 'people' ? peopleActions : null}
+            onHover={onHover}
+            onToggleLock={toggleLock}
+            onMove={move}
+            onDragStart={dragStart(id)}
+            onDragOver={dragOver(id)}
+            onDrop={drop(id)}
+            onDragEnd={dragEnd}
+          >
+            {sectionBody(id)}
+          </SidebarSection>
+        ))}
       </div>
     </div>
   );

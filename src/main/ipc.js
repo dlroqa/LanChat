@@ -52,6 +52,8 @@ const SETTABLE_KEYS = Object.freeze([
   'showAddresses',
   'linkPreviews',
   'findSessionsOnly',
+  'sidebarOrder',
+  'sidebarLocked',
   'ringtone',
   'ringtoneVolume',
   'customRingtonePath',

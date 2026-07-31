@@ -25,6 +25,13 @@ const DEFAULTS = Object.freeze({
   // a chat with a person can be just as long, and the button costs nothing when
   // it is not used.
   findSessionsOnly: false,
+  // The sidebar's four categories: the order they are stacked in, and which of
+  // them are pinned open. Both are arrangements of the panel rather than of the
+  // network, so they are per-machine and saved the moment they change. An older
+  // or hand-edited list cannot lose a category — the renderer normalizes it back
+  // to all four (see renderer lib/sidebarSections.js).
+  sidebarOrder: ['sessions', 'agents', 'people', 'tailnet'],
+  sidebarLocked: [],
   ringtone: 'classic', // see renderer lib/sounds.js
   ringtoneVolume: 0.8,
   customRingtonePath: null,

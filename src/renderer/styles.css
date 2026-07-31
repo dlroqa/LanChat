@@ -63,6 +63,16 @@
   --streak-amber: #ffc93d;
   --streak-rose: #ff3b6b;
 
+  /* The prism a shut sidebar category's title is lit by while something unread
+     is waiting inside it. Five hues rather than one so the sweep reads as light
+     through glass instead of a colour change, and every one of them light enough
+     to be read as text on --bg-2 — see the note beside .sb-section.flash. */
+  --prism-1: #8ab4ff;
+  --prism-2: #c8a2ff;
+  --prism-3: #ff9ad5;
+  --prism-4: #ffc93d;
+  --prism-5: #6ff0d0;
+
   /* The sidebar's profile block and the chat header sit side by side, so their
      bottom borders have to land on the same line. Pinning both to one height
      keeps them aligned no matter how the text inside either one changes. */
@@ -293,17 +303,6 @@ input:focus-visible {
   border-color: var(--primary);
 }
 
-.section-label {
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--fg-faint);
-  padding: 12px 16px 6px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
 .peer-list {
   flex: 1;
   /* Same rule as the message list: a scrolling flex child will not shrink below
@@ -314,14 +313,203 @@ input:focus-visible {
   padding-bottom: 12px;
 }
 
-/* The section headings now scroll with the list (Agents sits above People), so
-   they stick to the top instead — the People row carries the refresh, add and
-   group-call buttons, which must stay reachable however far the list scrolls. */
-.peer-list .section-label {
+/* ---------------- Sidebar categories ----------------
+   Four headings — Sessions, Agents, People, On your tailnet — each of which puts
+   its list away until it is asked for. The heading is therefore the permanent
+   thing in the panel and the list is the temporary one, which is the reverse of
+   how it used to be, and the whole reason the type is now a heading's size
+   rather than a label's: at 11px uppercase --fg-faint it was the quietest text
+   in the column, while being the only text most of the column now shows. */
+.sb-section {
+  position: relative;
+}
+
+.sb-head {
   position: sticky;
   top: 0;
   z-index: 1;
   background: var(--bg-2);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 10px 8px 6px;
+  cursor: default;
+  user-select: none;
+}
+
+.sb-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The grip, the lock and the People buttons are all things done *to* a category
+   rather than things it is saying, so they stay out of the way until the pointer
+   or the keyboard arrives — which is what keeps the resting panel down to four
+   words. A pinned lock is the exception: it stays lit, because it is the reason
+   its category is open and there would otherwise be nothing to say so. */
+.sb-grip,
+.sb-lock,
+.sb-actions {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.sb-section:hover .sb-grip,
+.sb-section:hover .sb-lock,
+.sb-section:hover .sb-actions,
+.sb-section:focus-within .sb-grip,
+.sb-section:focus-within .sb-lock,
+.sb-section:focus-within .sb-actions,
+.sb-section.locked .sb-lock {
+  opacity: 1;
+}
+
+.sb-grip,
+.sb-lock {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-faint);
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    opacity 0.12s ease;
+}
+.sb-grip {
+  cursor: grab;
+}
+.sb-grip:hover,
+.sb-lock:hover {
+  background: var(--surface);
+  color: var(--fg);
+}
+.sb-section.locked .sb-lock {
+  color: var(--primary-hover);
+}
+
+.sb-actions {
+  display: flex;
+  gap: 2px;
+  flex: none;
+}
+/* The roster's own buttons, at heading size. They were three inline styles on
+   .icon-btn, which is 34px — too tall for a row that now has to read as a line
+   of type. */
+.icon-btn.sb-action {
+  width: 26px;
+  height: 26px;
+}
+
+/* A category with something waiting in it but nothing to count — a summoned
+   agent writes no message — still has to say so. */
+.sb-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary-hover);
+}
+
+/* Opening and shutting.
+   The outer element is a grid track animated from nothing to the height of its
+   own contents; the inner one is what gets clipped while that happens. A height
+   cannot be transitioned to `auto`, and a measured one would go stale the moment
+   a peer came online.
+
+   Shut, the list is `visibility: hidden` as well as clipped — otherwise its rows
+   stay in the tab order and are still read out, and a category that has been put
+   away would only look put away. The delay holds that off until the collapse has
+   finished, so the rows do not vanish before the fold does. */
+.sb-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  visibility: hidden;
+  transition:
+    grid-template-rows 140ms ease-in,
+    visibility 0s linear 140ms;
+}
+.sb-body-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+.sb-section.open > .sb-body {
+  grid-template-rows: 1fr;
+  visibility: visible;
+  /* Longer opening than closing: a category that is arriving should be watched,
+     one that is leaving should be got out of the way. */
+  transition:
+    grid-template-rows 200ms ease-out,
+    visibility 0s;
+}
+
+/* ---- the flash -----------------------------------------------------------
+   A shut category with unread messages under it lights its own title, and keeps
+   lighting it until the message is read — hovering the category open pauses it,
+   and leaving without reading brings it back, because the thing it is reporting
+   has not changed.
+
+   It is a prism rather than a pulse: the glyphs stay fully opaque and a band of
+   colour travels across them, so what moves is the light on the word and not the
+   word itself. A title that faded in and out would be unreadable for half of
+   every cycle, which is a poor way to treat the one piece of text that says
+   where the unread message is.
+
+   Every stop, and every colour the gradient makes between them, sits above 4.5:1
+   on --bg-2. That is why these are lighter than the --streak-* set used behind
+   the agent status light: those are masked away from text and may go as dark as
+   they like; this *is* the text. */
+.sb-section.flash .sb-title {
+  background-image: linear-gradient(
+    100deg,
+    var(--prism-1),
+    var(--prism-2),
+    var(--prism-3),
+    var(--prism-4),
+    var(--prism-5)
+  );
+  background-size: 260% 100%;
+  background-position: 0 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: sb-prism 2.6s ease-in-out infinite alternate;
+}
+@keyframes sb-prism {
+  to {
+    background-position: 100% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* The global switch already stops the sweep. What is left is the prism held
+     still — the title is still lit differently from the three around it, and the
+     count beside it says the same thing in a number. Nothing here depends on
+     having seen the light move. */
+  .sb-section.flash .sb-title {
+    animation: none;
+  }
+}
+
+/* Where a dragged category would land. Drawn on the heading rather than between
+   two of them so it is visible whichever category is being carried past. */
+.sb-section.drop-before .sb-head {
+  box-shadow: inset 0 2px 0 var(--primary-hover);
+}
+.sb-section.drop-after .sb-head {
+  box-shadow: inset 0 -2px 0 var(--primary-hover);
 }
 
 .peer {

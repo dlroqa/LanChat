@@ -1175,6 +1175,17 @@ export default function App() {
     toast('Settings saved');
   }
 
+  // How the sidebar's categories are stacked, and which are pinned open.
+  //
+  // Optimistic and quiet, like a device change: the panel has already moved by
+  // the time this runs — dragging a heading somewhere and then watching it snap
+  // back while a write completes would be the panel arguing with the hand — and
+  // a toast for every drag would be three toasts for three tries.
+  function saveSectionPrefs(patch) {
+    setConfig((c) => ({ ...c, ...patch }));
+    api.setConfig(patch);
+  }
+
   // Change mic/camera mid-call and remember it for future calls.
   async function switchDevice(key, deviceId) {
     setConfig((c) => ({ ...c, [key]: deviceId }));
@@ -1307,7 +1318,10 @@ export default function App() {
       className="app"
       onDragOver={(e) => {
         e.preventDefault();
-        if (selectedId) setDragOver(true);
+        // Files only. Everything dragged anywhere in the window arrives here,
+        // including a sidebar category on its way to a new place in the list,
+        // and the sheet that says "drop to send" has nothing to do with that.
+        if (selectedId && Array.from(e.dataTransfer?.types || []).includes('Files')) setDragOver(true);
       }}
       onDragLeave={(e) => {
         if (e.currentTarget === e.target) setDragOver(false);
@@ -1326,6 +1340,9 @@ export default function App() {
         authFailures={authFailures}
         showAddresses={config.showAddresses}
         sessions={sessions}
+        sectionOrder={config.sidebarOrder}
+        lockedSections={config.sidebarLocked}
+        onSectionPrefs={saveSectionPrefs}
         onSelect={setSelectedId}
         onOpenProfile={() => setModal('profile')}
         onOpenDev={() => setModal('devgate')}
