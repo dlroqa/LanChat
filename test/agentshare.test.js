@@ -415,6 +415,166 @@ test('a bare @name introduces the agent instead of reporting no output', async (
 // waiting to hear from the owner — so `summoned` has to be false whenever the
 // summon did not actually leave, or a pulsing row would be claiming a connection
 // that never happened.
+// What the `@` menu is allowed to offer, pinned against what `@name` can
+// actually reach.
+//
+// These are two different sets and only one of them is the roster. An agent
+// shared without direct chat is routable by matchMention and deliberately *not*
+// a contact, so a menu built from presence offers a strict subset — it stays
+// empty until a summon reveals the agent, which is the bug this is here to stop
+// coming back. Both halves are asserted together, in the one state where they
+// disagree, because asserting either alone is what let it ship.
+test('an agent shared without direct chat is offered by @ before it is a contact', async (t) => {
+  const A = makeNode('offers-owner', await freePort());
+  const B = makeNode('offers-peer', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idA = A.getIdentity().id;
+  const { agent } = await A.agentHub.add({ name: 'Tessie', kind: 'http', config: {} });
+  await A.agentHub.setSharing(agent.id, { networkWide: true, directChat: false });
+
+  await connect(A, B);
+  // The published set is what the window is handed, so it is what is waited on.
+  const offered = await waitFor(
+    () => B.events.filter((e) => e.type === 'peer-agents').pop()?.payload?.[idA]?.[0],
+    5000,
+    "A's agent to be offered to B"
+  );
+
+  // Nothing has revealed it, and it is not a contact.
+  assert.equal(remoteIdOn(B, idA, agent.id), null, 'not on the roster');
+  // And it is offered all the same.
+  assert.equal(offered.name, 'Tessie');
+  assert.equal(offered.agentId, agent.id);
+
+  // getState carries it too, or a window reloaded while already connected would
+  // open with an empty menu until some peer happened to re-advertise.
+  assert.equal(B.call('lanchat:getState').peerAgents[idA][0].name, 'Tessie');
+
+  // The half that matters: a name taken from that menu really does reach the
+  // agent. Asserted by using it rather than by re-reading the map it came from,
+  // which would only prove the map agrees with itself.
+  const sent = B.call('lanchat:sendChat', { peerId: idA, text: '@Tessie hello' });
+  assert.equal(sent.peerId, offered.id, 'the question is filed in the agent thread');
+  assert.deepEqual(B.store.read(idA), [], 'and not in the chat with its owner');
+  await waitFor(() => A.log.length === 1, 5000, 'the agent to be asked');
+  assert.equal(A.log[0], 'hello', 'with the name stripped off the front');
+
+  // Withdrawn, and it leaves the menu.
+  await A.agentHub.setSharing(agent.id, { networkWide: false, directChat: false });
+  await waitFor(
+    () => {
+      const last = B.events.filter((e) => e.type === 'peer-agents').pop()?.payload;
+      return last && !last[idA];
+    },
+    5000,
+    'the withdrawal to reach B'
+  );
+});
+
+test('a greeting from a peer on an older build is dropped, not filed', async (t) => {
+  const A = makeNode('greet-owner', await freePort());
+  const B = makeNode('greet-peer', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idA = A.getIdentity().id;
+  const idB = B.getIdentity().id;
+  const { agent } = await A.agentHub.add({ name: 'Tessie', kind: 'http', config: {} });
+  await A.agentHub.setSharing(agent.id, { networkWide: true, directChat: true });
+  await connect(A, B);
+  const remoteId = await waitFor(() => remoteIdOn(B, idA, agent.id), 5000, "B to see A's agent");
+
+  // Watched on the way in, so what is asserted afterwards is a frame that was
+  // seen and discarded rather than one still in flight. ipc.js's own listener is
+  // registered first and runs receive() synchronously on the same emit, so by the
+  // time this one fires the decision has been made.
+  const replies = [];
+  B.bus.on('peer-message', (m) => m.type === 'agent-reply' && replies.push(m));
+
+  // Exactly what a 0.7.0 owner sends when it is summoned — nothing outstanding,
+  // because a summon asks nothing. Put on the wire by hand, since this build no
+  // longer has the code that would send it.
+  const greeting = 'Hello — Tessie here. Ask me anything.';
+  A.hub.send(idB, { type: 'agent-reply', agentId: agent.id, name: 'Tessie', text: greeting, ts: Date.now() });
+  await waitFor(() => replies.length === 1, 5000, 'the greeting to reach B');
+
+  assert.deepEqual(B.store.read(remoteId), [], 'nothing was filed');
+  assert.ok(
+    !B.events.some((e) => e.type === 'chat' && e.payload?.text === greeting),
+    'and nothing was shown'
+  );
+
+  // The thread still works: a real question and its answer land as they always did.
+  B.call('lanchat:sendChat', { peerId: remoteId, text: 'what is the time' });
+  await waitFor(
+    () => B.store.read(remoteId).some((m) => m.direction === 'in'),
+    5000,
+    'a real answer to arrive'
+  );
+  assert.deepEqual(
+    B.store.read(remoteId).map((m) => `${m.direction}:${m.text}`),
+    ['out:what is the time', 'in:echo:what is the time'],
+    'and the greeting is nowhere among them'
+  );
+});
+
+test('the same sentence as a real answer is kept, because a question was asked', async (t) => {
+  // The other side of the guard. Dropping on the text alone would swallow this.
+  const A = makeNode('greet-answer-owner', await freePort());
+  const B = makeNode('greet-answer-peer', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idA = A.getIdentity().id;
+  const idB = B.getIdentity().id;
+  const { agent } = await A.agentHub.add({ name: 'Tessie', kind: 'http', config: {} });
+  await A.agentHub.setSharing(agent.id, { networkWide: true, directChat: true });
+  await connect(A, B);
+  const remoteId = await waitFor(() => remoteIdOn(B, idA, agent.id), 5000, "B to see A's agent");
+
+  // A question is outstanding, so whatever comes back is its answer — even if the
+  // agent happens to have said the exact words a greeting is made of.
+  B.call('lanchat:sendChat', { peerId: remoteId, text: 'introduce yourself' });
+  A.hub.send(idB, {
+    type: 'agent-reply',
+    agentId: agent.id,
+    name: 'Tessie',
+    text: 'Hello — Tessie here. Ask me anything.',
+    ts: Date.now(),
+  });
+
+  await waitFor(
+    () => B.store.read(remoteId).some((m) => m.direction === 'in'),
+    5000,
+    'the answer to be filed'
+  );
+  assert.equal(
+    B.store.read(remoteId).find((m) => m.direction === 'in').text,
+    'Hello — Tessie here. Ask me anything.',
+    'an answer to a real question is kept whatever it says'
+  );
+});
+
 test('a summon that cannot reach its owner is refused, and reveals nothing', async (t) => {
   const A = makeNode('owner-unreachable', await freePort());
   const B = makeNode('peer-unreachable', await freePort());

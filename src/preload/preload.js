@@ -48,6 +48,7 @@ contextBridge.exposeInMainWorld('lanchat', {
   deleteSession: (id) => invoke('lanchat:deleteSession', { id }),
   importSessionText: (id) => invoke('lanchat:importSessionText', { id }),
   sweepSessionErrors: (id, ids) => invoke('lanchat:sweepSessionErrors', { id, ids }),
+  purgeMessages: (id, ids) => invoke('lanchat:purgeMessages', { id, ids }),
   sendTyping: (peerId, isTyping) => invoke('lanchat:sendTyping', { peerId, isTyping }),
   sendSignal: (peerId, signal) => invoke('lanchat:sendSignal', { peerId, signal }),
 

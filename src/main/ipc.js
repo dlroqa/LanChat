@@ -83,7 +83,7 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
 
   // Agents other peers have shared with us. Purely a receiver of adverts — it
   // never assumes a grant that was not sent.
-  const remoteAgents = createRemoteAgents({ hub, store });
+  const remoteAgents = createRemoteAgents({ hub, store, bus });
 
   // Sessions: local workspaces that ask an agent — one of ours or one a peer
   // shared. Built here rather than in main.js because reaching a shared agent
@@ -138,6 +138,11 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   bus.on('outbox-counts', (counts) => emit('outbox-counts', counts));
   // A queued message finally went out — update the bubble that was pending.
   bus.on('outbox-sent', (msg) => msg && emit('chat', msg));
+  // Which agents each peer is sharing with us. Not the same set as the roster —
+  // an agent shared without direct chat is routable by `@name` while
+  // deliberately not being a contact — so the composer's menu is fed from here
+  // rather than from presence. See sharedBy() in agents/remote.js.
+  bus.on('agent-offers', (offers) => emit('peer-agents', offers));
   bus.on('agent-status', (s) => emit('agent-status', s));
   bus.on('agent-delta', (d) => emit('agent-delta', d));
   bus.on('agent-approval', (a) => emit('agent-approval', a));
@@ -348,6 +353,10 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     configured: config.isConfigured,
     config: publicConfig(config),
     presence: hub.presenceList(),
+    // Read once at startup and kept current by the `peer-agents` event
+    // afterwards. Without it a window reloaded while already connected would
+    // have an empty `@` menu until some peer happened to re-advertise.
+    peerAgents: remoteAgents.sharedBy(),
   }));
 
   ipcMain.handle('lanchat:setProfile', (_e, { displayName, avatar }) => {
@@ -587,6 +596,20 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     const { removed } = sessions.sweepErrors(id, ids);
     if (removed) publishSessions();
     return { ok: true, removed };
+  });
+
+  // Taking named messages out of any thread.
+  //
+  // Separate from sweepSessionErrors above, which also corrects a session's
+  // commit total. This one only removes: it is used for the summon lines and
+  // greetings older builds left in *agent* threads, where there is no Commit box
+  // and subtracting from one would be adjusting a number nothing displays.
+  //
+  // The ids are decided in the window, which is the only place that knows what is
+  // on screen and has just counted it down in front of somebody.
+  ipcMain.handle('lanchat:purgeMessages', (_e, { id, ids }) => {
+    if (!id || !Array.isArray(ids) || !ids.length) return { ok: false, removed: 0 };
+    return { ok: true, removed: store.remove(id, ids) };
   });
 
   // Loading a saved conversation back in. Read through readDocument, which is

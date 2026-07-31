@@ -20,8 +20,13 @@ const SRC = fs.readFileSync(
   path.join(__dirname, '..', 'src', 'renderer', 'components', 'ErrorSweepModal.jsx'),
   'utf8'
 );
-const BODY = SRC.slice(SRC.indexOf('export function findKeptErrors')).replace(/^export\s+/gm, '');
-const { findKeptErrors } = new Function(`${BODY}\n   return { findKeptErrors };`)();
+const BODY = SRC.slice(SRC.indexOf('// Which messages in a loaded history are errors')).replace(
+  /^export\s+/gm,
+  ''
+);
+const { findKeptErrors, findSummonLeftovers } = new Function(
+  `${BODY}\n   return { findKeptErrors, findSummonLeftovers };`
+)();
 
 const inbound = (id, text, extra = {}) => ({
   id,
@@ -74,6 +79,73 @@ test('files and empty threads match nothing', () => {
   assert.deepEqual(findKeptErrors([null, undefined, {}]), []);
 });
 
+// ---- what a summon used to leave behind ----
+
+const outbound = (id, text, extra = {}) => ({
+  id,
+  peerId: 'remote-agent:server:a1',
+  direction: 'out',
+  kind: 'text',
+  text,
+  ts: 1,
+  ...extra,
+});
+
+test('both halves of an old summon are matched', () => {
+  const thread = [
+    outbound('s1', '@Tessie'),
+    inbound('g1', 'Hello — Tessie here. Ask me anything.'),
+    inbound('g2', 'Hello — Hermes here. Ask me anything.'),
+  ];
+  assert.deepEqual(
+    findSummonLeftovers(thread).map((m) => m.id),
+    ['s1', 'g1', 'g2']
+  );
+});
+
+test('a real question that opens with a mention is not a summon line', () => {
+  // The distinction the whole matcher rests on: `@Tessie` alone is the bubble a
+  // summon used to write, `@Tessie …` is something somebody asked.
+  const thread = [
+    outbound('q1', '@Tessie what is the time'),
+    outbound('q2', '@Tessie '),
+    outbound('q3', 'ask @Tessie about it'),
+  ];
+  assert.deepEqual(findSummonLeftovers(thread), []);
+});
+
+test('direction is respected in both directions', () => {
+  const thread = [
+    // A peer said this to us; it is theirs, not machinery of ours.
+    inbound('i1', '@Tessie'),
+    // And we never wrote the greeting — only the owner's machine did.
+    outbound('o1', 'Hello — Tessie here. Ask me anything.'),
+  ];
+  assert.deepEqual(findSummonLeftovers(thread), []);
+});
+
+test('a message about a greeting is not a greeting', () => {
+  const thread = [
+    inbound('a', 'It said "Hello — Tessie here. Ask me anything." and nothing else.'),
+    inbound('b', 'Hello — Tessie here. Ask me anything. What can I do?'),
+  ];
+  assert.deepEqual(findSummonLeftovers(thread), []);
+});
+
+test('anything already counting itself down is left alone', () => {
+  // It is on screen with a timer running and was never on disk, so there is
+  // nothing here to take off it.
+  const thread = [inbound('live', 'Hello — Tessie here. Ask me anything.', { notice: true })];
+  assert.deepEqual(findSummonLeftovers(thread), []);
+});
+
+test('leftovers and empty threads', () => {
+  assert.deepEqual(findSummonLeftovers([]), []);
+  assert.deepEqual(findSummonLeftovers(null), []);
+  assert.deepEqual(findSummonLeftovers([null, undefined, {}]), []);
+  assert.deepEqual(findSummonLeftovers([outbound('f', '@Tessie', { kind: 'file' })]), []);
+});
+
 // ---- taking them off disk ----
 
 function tmpStore() {
@@ -110,6 +182,24 @@ test('remove counts only what was really there', () => {
   assert.equal(store.remove('session:1', ['e1', 'never-existed']), 1);
   assert.equal(store.remove('session:1', ['e1']), 0, 'and sweeping twice takes nothing the second time');
   assert.equal(store.remove('session:1', []), 0);
+});
+
+test('an agent thread can be purged too, not just a session', () => {
+  // The summon leftovers live in agent threads, which have no Commit box — so
+  // they go through the plain purge rather than the session sweep.
+  const { store } = tmpStore();
+  const thread = 'remote-agent:server:a1';
+  store.append(thread, outbound('s1', '@Tessie'));
+  store.append(thread, inbound('g1', 'Hello — Tessie here. Ask me anything.'));
+  store.append(thread, outbound('q1', '@Tessie what is the time'));
+  store.append(thread, inbound('a1', 'Half past.'));
+
+  assert.equal(store.remove(thread, ['s1', 'g1']), 2);
+  assert.deepEqual(
+    store.read(thread).map((m) => m.id),
+    ['q1', 'a1'],
+    'the question and its answer stay'
+  );
 });
 
 test('remove leaves other threads alone', () => {

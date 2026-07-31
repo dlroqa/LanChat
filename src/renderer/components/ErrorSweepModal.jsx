@@ -77,3 +77,37 @@ export function findKeptErrors(messages) {
       !m.error
   );
 }
+
+// The two lines a summon used to leave behind in an agent thread.
+//
+// Summoning writes nothing now, on either machine, but every thread summoned
+// before that still holds them — and a peer on an older build still sends the
+// greeting, so a thread can pick one up today. Neither is a question or an
+// answer; both are machinery, and the thread is for the conversation.
+//
+// Anchored end to end, the way findKeptErrors is and for the same reason:
+//
+//   * the greeting as the owner's machine wrote it, with the agent's name in the
+//     middle. `.{1,64}` rather than `.*` so a long line cannot wander into it;
+//   * a bare `@name` and *nothing else*, which is exactly the shape of the
+//     summon bubble. `@Tessie what is the time` is a real question and must
+//     survive, which is what `\S+$` guarantees.
+//
+// Direction matters both ways round. The greeting only ever arrived, and the
+// summon line was only ever ours — so an inbound `@name` is something a peer
+// said and is left alone.
+const LEGACY_GREETING = /^Hello — .{1,64} here\. Ask me anything\.$/;
+const BARE_MENTION = /^@\S{1,64}$/;
+
+export function findSummonLeftovers(messages) {
+  if (!Array.isArray(messages)) return [];
+  return messages.filter((m) => {
+    if (!m || m.kind === 'file' || typeof m.text !== 'string') return false;
+    // Anything already counting itself down is on its way out without help, and
+    // was never on disk to begin with.
+    if (m.notice || m.error) return false;
+    if (m.direction === 'in') return LEGACY_GREETING.test(m.text);
+    if (m.direction === 'out') return BARE_MENTION.test(m.text);
+    return false;
+  });
+}

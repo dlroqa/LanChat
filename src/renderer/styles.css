@@ -4059,6 +4059,22 @@ code.path {
   border: 1px solid color-mix(in srgb, var(--danger) 42%, transparent);
 }
 
+/* A summon line or greeting an older build left behind, on its way out. It
+   leaves the same way an error does and by the same clock, but it is not one —
+   nothing went wrong, this is housekeeping — so it is marked as being on its way
+   out rather than tinted with the danger colour. Dashed, like the queued bubble,
+   which is the vocabulary this app already uses for "not an ordinary message". */
+.bubble.leftover {
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  opacity: 0.75;
+}
+/* Specific enough to beat `.bubble-row.out .bubble`, which sets the blue on the
+   `@name` half of the pair. */
+.bubble-row.out .bubble.leftover {
+  background: color-mix(in srgb, var(--primary) 30%, var(--surface));
+}
+
 /* The caption belongs under the bubble, not beside it, and the row is a flex
    line. Wrapping is switched on only for this row so no other row's layout
    moves. */

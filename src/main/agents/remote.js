@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 
 const { remoteAgentIdFor, isRemoteAgentId, parseRemoteAgentId } = require('./registry');
 const { createVirtualSocket } = require('./virtualSocket');
-const { busyLine } = require('./turnCopy');
+const { busyLine, legacyGreeting } = require('./turnCopy');
 
 // The other half of agent sharing: an agent owned by *another* peer, seen from
 // this machine.
@@ -26,7 +26,11 @@ const { busyLine } = require('./turnCopy');
 //   * Conversation with it is confined to its own thread. Asking someone's agent
 //     a question must not fill up the chat with that person.
 
-function createRemoteAgents({ hub, store }) {
+// The colour an agent wears wherever it appears — the roster card and the `@`
+// menu both. One constant, so the two cannot drift.
+const AGENT_AVATAR_COLOR = '#7c3aed';
+
+function createRemoteAgents({ hub, store, bus = null }) {
   // ownerPeerId -> Map<agentId, { id, name, agentKind, directChat, socket }>
   const byOwner = new Map();
 
@@ -41,7 +45,7 @@ function createRemoteAgents({ hub, store }) {
       viaId: ownerPeerId,
       viaName: (owner && (owner.name || owner.hostname)) || 'a peer',
       hostname: (owner && owner.hostname) || 'remote',
-      avatar: { color: '#7c3aed', image: null },
+      avatar: { color: AGENT_AVATAR_COLOR, image: null },
     };
   }
 
@@ -102,6 +106,10 @@ function createRemoteAgents({ hub, store }) {
     // agent, and either an answer or a question brings the contact back.
     if (entry.directChat) show(ownerPeerId, entry);
     else conceal(entry);
+    // After the roster has been settled either way, because what is announced
+    // here is what `@name` can reach — which is true of this entry whichever
+    // side of that branch it took.
+    publish();
     return entry;
   }
 
@@ -118,6 +126,10 @@ function createRemoteAgents({ hub, store }) {
     agents.delete(agentId);
     if (agents.size === 0) byOwner.delete(ownerPeerId);
     conceal(entry); // emits presence, so the roster loses it in the same tick
+    // Off the menu in the same tick too. `byOwner` is already correct by the time
+    // this runs — deleting first is what makes the re-entrant drop described
+    // above a no-op — so what is announced is the set after the removal.
+    publish();
     return true;
   }
 
@@ -132,6 +144,39 @@ function createRemoteAgents({ hub, store }) {
   function get(ownerPeerId, agentId) {
     const agents = byOwner.get(ownerPeerId);
     return (agents && agents.get(agentId)) || null;
+  }
+
+  // Every agent every peer is currently sharing with this machine, by owner.
+  //
+  // This is `byOwner` and nothing else, which is the whole point of it. The
+  // roster is not the same set and must not be mistaken for it: an agent shared
+  // without direct chat is deliberately kept off the contact list (see adopt),
+  // while `matchMention` below will still route to it. Anything that needs to
+  // know what `@name` can reach — the composer's menu — has to read this, or it
+  // offers a strict subset of what actually works and looks broken until the
+  // agent has been used once.
+  function sharedBy() {
+    const out = {};
+    for (const [ownerPeerId, agents] of byOwner) {
+      out[ownerPeerId] = [...agents.values()].map((entry) => ({
+        id: entry.id,
+        agentId: entry.agentId,
+        name: entry.name,
+        agentKind: entry.agentKind,
+        // The same purple cardFor() gives an agent on the roster. An agent
+        // suggested in the menu and the same agent in the sidebar are the same
+        // thing, and a name that changed colour between the two would not look
+        // like one.
+        avatar: { color: AGENT_AVATAR_COLOR, image: null },
+      }));
+    }
+    return out;
+  }
+
+  // Announced whenever that set changes, so the window never has to poll for it
+  // and never has to guess from the roster.
+  function publish() {
+    if (bus) bus.emit('agent-offers', sharedBy());
   }
 
   // Does this text address one of `ownerPeerId`'s shared agents by name? This is
@@ -263,6 +308,32 @@ function createRemoteAgents({ hub, store }) {
     if (!msg || !msg.agentId || typeof msg.text !== 'string') return null;
     const entry = get(ownerPeerId, msg.agentId) || adopt(ownerPeerId, { ...msg, name: msg.name });
     if (!entry) return null;
+    // A greeting from a peer on an older build.
+    //
+    // Summoning writes nothing on either machine now, but a 0.7.0 owner still
+    // answers `@name` with "Hello — X here. Ask me anything." and this end used
+    // to file it. Four of them in a row is what a thread looks like after four
+    // summons, and none of it is a question or an answer.
+    //
+    // Two conditions, and both are needed. Nothing outstanding, because a
+    // greeting is never the answer to anything — that alone is what stops a real
+    // reply being swallowed. And the text exactly as this agent would have
+    // written it, built from the name we hold rather than matched loosely: to
+    // trip this falsely an agent would have to answer a question nobody asked
+    // with precisely its own greeting.
+    //
+    // Dropped rather than shown and swept: there is nothing here worth ten
+    // seconds of anybody's attention. Returning null is already how this
+    // function says there is nothing to file.
+    //
+    // One narrow window is left on purpose. Asking a question in the round trip
+    // between summoning an older peer's agent and its greeting arriving makes the
+    // greeting look like that question's answer, and it is kept. Closing it would
+    // mean timing the correlation rather than reasoning about it, for a case that
+    // costs one stray line and disappears entirely once the owner updates.
+    if (!entry.pendingRef && !entry.pendingThread && msg.text === legacyGreeting(entry.name)) {
+      return null;
+    }
     show(ownerPeerId, entry);
     // The owner marks their turn-queue housekeeping as a notice: shown once, then
     // dropped rather than kept. This is the copy the asking peer actually reads,
@@ -376,6 +447,7 @@ function createRemoteAgents({ hub, store }) {
     drop,
     dropOwner,
     get,
+    sharedBy,
     matchMention,
     send,
     summon,

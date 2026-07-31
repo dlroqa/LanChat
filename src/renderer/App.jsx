@@ -11,7 +11,7 @@ import DevPanel from './components/DevPanel.jsx';
 import AddPeerModal from './components/AddPeerModal.jsx';
 import UpdatePrompt from './components/UpdatePrompt.jsx';
 import UpdateBanner from './components/UpdateBanner.jsx';
-import ErrorSweepModal, { findKeptErrors } from './components/ErrorSweepModal.jsx';
+import ErrorSweepModal, { findKeptErrors, findSummonLeftovers } from './components/ErrorSweepModal.jsx';
 import { CallManager } from './lib/rtc.js';
 import { Ringer, playNotification, playCallEvent, playPttCue, playRejectCue } from './lib/sounds.js';
 import ConnectionPanel from './components/ConnectionPanel.jsx';
@@ -23,6 +23,7 @@ import NewGroupCallModal from './components/NewGroupCallModal.jsx';
 import { GroupCallManager } from './lib/groupCall.js';
 import { listDevices, labelFor } from './lib/devices.js';
 import { isSessionThread, isThinkingThread } from './lib/sessionIds.js';
+import { isAgentThread } from './lib/agentPhrase.js';
 import { commitCount } from './lib/sessionStanding.js';
 import { flashDuration, prefersReducedMotion } from './lib/connectFlash.js';
 import { useAgentMusic } from './lib/agentMusic.js';
@@ -75,6 +76,14 @@ export default function App() {
   const [, setConfigured] = useState(true);
   const [config, setConfig] = useState({ iceServers: [], enableTailscale: true, enableLan: true });
   const [peers, setPeers] = useState([]);
+  // Which agents each peer is sharing with us: `ownerPeerId -> [{ id, name }]`.
+  //
+  // Deliberately not derived from `peers`. An agent shared without direct chat is
+  // routable by `@name` and is *not* a contact, so the roster holds a strict
+  // subset of what a mention can reach — reading it left the `@` menu empty until
+  // the agent had been summoned once. Main publishes the real set; see
+  // sharedBy() in agents/remote.js.
+  const [peerAgents, setPeerAgents] = useState({});
   const [tailnet, setTailnet] = useState([]);
   const [tailnetStatus, setTailnetStatus] = useState({ ok: true, reason: null });
   const [selectedId, setSelectedId] = useState(null);
@@ -152,6 +161,10 @@ export default function App() {
   // kept. Asked once per session per run: declining is an answer, and re-asking
   // it every time the conversation is reopened would make it a nag.
   const sweepOffered = useRef(new Set());
+  // Agent threads whose summon leftovers have already been counted down this run.
+  // Once per thread: the countdown is a thing you watch happen, not something to
+  // start again every time you come back to the conversation.
+  const erasedThreads = useRef(new Set());
 
   configRef.current = config;
   selectedRef.current = selectedId;
@@ -354,6 +367,7 @@ export default function App() {
       setConfigured(state.configured);
       setConfig(state.config);
       setPeers(state.presence || []);
+      setPeerAgents(state.peerAgents || {});
       // Sessions are local and always there, so the list is read once at start
       // and kept current by the `sessions` event rather than polled.
       api.listSessions().then((list) => setSessions(list || []));
@@ -408,6 +422,12 @@ export default function App() {
         }
         case 'tailnet-peers':
           setTailnet(payload);
+          break;
+        // Sent whenever a peer advertises or withdraws an agent, or goes away
+        // taking theirs with them. The whole map each time, so there is no
+        // incremental state here to fall out of step with main's.
+        case 'peer-agents':
+          setPeerAgents(payload || {});
           break;
         case 'outbox-counts':
           setQueued(payload);
@@ -628,6 +648,10 @@ export default function App() {
     const thread = selectedId;
     api.getHistory(thread).then((hist) => {
       setMessages((prev) => ({ ...prev, [thread]: mergeHistory(hist, prev[thread]) }));
+      // The summon lines and greetings older builds left in an agent thread. Not
+      // offered the way errors are — there is nothing in them to read and decide
+      // about — so they are shown once, counted down in the open, and gone.
+      if (isAgentThread(thread)) eraseSummonLeftovers(thread, hist);
       // Errors an older version kept. Only in sessions — the commit correction
       // that goes with removing them has nowhere to live on any other thread —
       // and only once per session per run, so declining is not asked again every
@@ -638,6 +662,51 @@ export default function App() {
       if (found.length) setSweep({ threadId: thread, ids: found.map((m) => m.id) });
     });
   }, [selectedId]);
+
+  // Machinery an older build wrote into an agent thread, taken back out.
+  //
+  // The same treatment a failed run gets, because it is the same idea and the app
+  // now has one way of saying it: shown once so nothing disappears behind your
+  // back, counted down where you can see it, then it comes apart and leaves the
+  // disk. One countdown for the batch rather than one per bubble — four summons
+  // leave four greetings, and four captions saying the same thing would be its
+  // own kind of clutter.
+  function eraseSummonLeftovers(thread, hist) {
+    if (erasedThreads.current.has(thread)) return;
+    erasedThreads.current.add(thread);
+    const found = findSummonLeftovers(hist);
+    if (!found.length) return;
+    const ids = found.map((m) => m.id);
+    const last = ids[ids.length - 1];
+    setMessages((prev) => ({
+      ...prev,
+      [thread]: (prev[thread] || []).map((m) =>
+        ids.includes(m.id) ? { ...m, erasing: true, eraseLast: m.id === last } : m
+      ),
+    }));
+    const key = `erase:${thread}`;
+    noticeTimers.current[key] = setTimeout(() => {
+      setMessages((prev) => ({
+        ...prev,
+        [thread]: (prev[thread] || []).map((m) => (ids.includes(m.id) ? { ...m, dissolving: true } : m)),
+      }));
+      noticeTimers.current[key] = setTimeout(
+        () => {
+          delete noticeTimers.current[key];
+          // Off the disk and out of the window together. If the app closes in
+          // between, the next open finds them again and counts them down again —
+          // which is the right failure: nothing is lost, and nothing is deleted
+          // that was not seen going.
+          api.purgeMessages(thread, ids);
+          setMessages((prev) => ({
+            ...prev,
+            [thread]: (prev[thread] || []).filter((m) => !ids.includes(m.id)),
+          }));
+        },
+        prefersReducedMotion() ? 0 : DISSOLVE_MS
+      );
+    }, ERROR_TTL_MS);
+  }
 
   // Removing them. Both halves happen together or neither does: main takes the
   // messages out of the file and the same number off what the session claims to
@@ -699,19 +768,28 @@ export default function App() {
 
   // Agents the person whose chat is open is sharing, for `@` in the composer.
   //
-  // Deliberately the same set main will route a mention to, and no wider. A card
-  // is here only because its owner sent an advert for it, and it goes the moment
-  // they stop sharing (agent-advert / agent-withdraw in ipc.js), so being on this
-  // list already means the agent exists and we are allowed to ask it. Online, so
-  // a name that cannot be reached is never offered — with nobody online the menu
-  // has nothing to show and no summon can be started from it.
+  // Straight off what main published, which is `byOwner` — the exact map
+  // `matchMention` walks. That equality is the whole contract: anything else on
+  // this list would complete to something that lands in the human's chat instead,
+  // and anything missing from it is an agent you can reach but cannot be offered.
+  //
+  // This used to filter the roster, which is a strict subset: an agent shared
+  // without direct chat is routable and deliberately not a contact, so the menu
+  // stayed empty until a summon revealed it — the bug this replaces. There is no
+  // `online` filter for the same reason: an owner going offline empties this map
+  // through dropOwner, and a second guess at reachability is how the two sets
+  // drifted apart in the first place.
   //
   // Empty in an agent thread or a session: `@name` is routed out of a *person's*
-  // chat, and nowhere else.
-  const mentionables = useMemo(
-    () => peers.filter((p) => p.kind === 'agent' && p.remote && p.online && p.viaId === selectedId),
-    [peers, selectedId]
-  );
+  // chat, and nowhere else. `viaName` is the open peer, since that is whose
+  // agents these are.
+  const mentionables = useMemo(() => {
+    const offered = peerAgents[selectedId];
+    if (!offered?.length) return [];
+    const owner = peers.find((p) => p.id === selectedId);
+    const viaName = owner?.name || owner?.hostname || 'a peer';
+    return offered.map((a) => ({ ...a, viaName }));
+  }, [peerAgents, peers, selectedId]);
 
   const selectedPeer = useMemo(() => {
     if (!selectedId) return null;

@@ -44,5 +44,15 @@ function busyLine(name, position) {
 // that job has moved rather than gone: the asking side only offers a name its
 // owner is currently advertising, so reaching one at all is the proof, and the
 // agent's row says so by pulsing until it is opened.
+//
+// The sentence survives here, unused by anything that writes, because a peer on
+// an older build still sends it and this machine has to be able to recognise one
+// arriving. Kept as the exact string rather than a pattern so the recognition is
+// an equality against the agent's own name — see receive() in remote.js — which
+// is what makes it impossible to mistake a real answer for one. It goes when no
+// build old enough to send it is left.
+function legacyGreeting(name) {
+  return `Hello — ${name} here. Ask me anything.`;
+}
 
-module.exports = { heldLine, rotatedLine, busyLine };
+module.exports = { heldLine, rotatedLine, busyLine, legacyGreeting };

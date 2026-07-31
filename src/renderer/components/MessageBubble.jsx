@@ -60,7 +60,14 @@ export default function MessageBubble({
   // A run that failed. Never written down, and on its way out from the moment it
   // arrives: `dissolving` is App.jsx saying the count has reached zero.
   const errored = !out && msg.error === true;
+  // A summon line or a greeting an older build left in an agent thread. Written
+  // down at the time, so unlike an error this one really is being deleted — but
+  // it leaves the same way, and by the same clock.
+  const leftover = msg.erasing === true;
   const dissolving = msg.dissolving === true;
+  // Either kind of message on its way out. The row layout, the caption slot and
+  // the disintegration are shared; only the wording differs.
+  const going = errored || leftover;
   // The question that error was the outcome of. Still here to be read and put
   // back, but no longer claiming to have been answered.
   const failed = out && msg.failed === true;
@@ -73,18 +80,18 @@ export default function MessageBubble({
   // Counted here rather than passed in, so the sentence and the bubble it sits
   // under read the same clock. Stops at the moment the bubble starts to go —
   // "in 0s" under something already coming apart is a promise about the past.
-  const left = useCountdown(ERROR_TTL_S, errored && !dissolving);
+  const left = useCountdown(ERROR_TTL_S, going && !dissolving);
 
   return (
     <div
       className={`bubble-row ${out ? 'out' : 'in'} ${grouped ? 'grouped' : ''} ${
-        errored ? 'erasing' : ''
+        going ? 'erasing' : ''
       } ${dissolving ? 'dissolving' : ''}`}
     >
       <div
         className={`bubble ${queued ? 'queued' : ''} ${rejected ? 'rejected' : ''} ${
           errored ? 'errored' : ''
-        } ${failed ? 'failed' : ''}`}
+        } ${leftover ? 'leftover' : ''} ${failed ? 'failed' : ''}`}
       >
         {/* What this question was asked about. Stored on the message rather than
             folded into its text, so the transcript keeps the question somebody
@@ -183,11 +190,14 @@ export default function MessageBubble({
       {/* Why the error is about to disappear, counted down in the open. Polite
           rather than assertive: it is worth hearing, but not worth cutting into
           whatever a screen reader is already saying. */}
-      {errored && (
+      {/* One caption for a batch, not one per bubble: four summons leave four
+          greetings, and four lines all saying the same thing would be its own
+          kind of clutter. `eraseLast` marks the one to carry it. An error is
+          always alone, so it always carries its own. */}
+      {going && (errored || msg.eraseLast) && (
         <div className="bubble-erase" role="status" aria-live="polite">
-          {dissolving
-            ? 'Erasing error to maintain clean context conversation'
-            : `Erasing error to maintain clean context conversation in ${left}s`}
+          {`Erasing ${errored ? 'error' : 'summon'} to maintain clean context conversation` +
+            (dissolving ? '' : ` in ${left}s`)}
         </div>
       )}
     </div>
