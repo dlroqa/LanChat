@@ -13,6 +13,13 @@
   --fg: #e8ecf4;
   --fg-muted: #9aa4b8;
   --fg-faint: #6b7488;
+  /* Small text with a colour wash behind it — the 11px labels in the tinted stat
+     boxes, and nothing else. --fg-muted was chosen for that job and measures 3.8:1
+     over the lightest of those tints once the wash is composited, which is under
+     the 4.5:1 that 11px text needs. One step brighter, in the same blue-grey
+     family, clears it on every tint while staying plainly subordinate to the
+     value above it. */
+  --fg-on-tint: #b6bfd0;
 
   --primary: #2563eb;
   --primary-hover: #3b78f0;
@@ -2948,13 +2955,18 @@ input[type='range']:disabled::-webkit-slider-thumb {
   }
 }
 
-/* ---- Turn box ----
-   The one stat whose value moves on its own, so it is the one worth being able
-   to read without reading it: the colour says which of the five states the
-   thread is in, and the Status box next to it says the same thing in a word.
-   A pane of tinted glass rather than a painted chip — the panel surface still
-   shows through, and the text keeps exactly the colour it always had. */
-.stat-turn {
+/* ---- Tinted stat box ----
+   The stats whose value moves on its own, so they are the ones worth being able
+   to read without reading them: the colour says which state the thread is in,
+   and the word inside says the same thing in a word. A pane of tinted glass
+   rather than a painted chip — the panel surface still shows through, and the
+   text keeps exactly the colour it always had.
+
+   Two panels use it. An agent tints the Turn box, where the state is a place in
+   a queue; a session tints Status and Commit, where it is what the agent is
+   doing and what the workspace has put in. The machinery is the same, which is
+   why it is named for what it does rather than for either of them. */
+.stat-tint {
   background: color-mix(in srgb, var(--surface) 74%, transparent);
   backdrop-filter: blur(10px) saturate(120%);
   -webkit-backdrop-filter: blur(10px) saturate(120%);
@@ -2963,9 +2975,10 @@ input[type='range']:disabled::-webkit-slider-thumb {
 }
 
 /* The tint lives in its own layer, so the blink animates opacity alone — that
-   stays on the compositor and never touches layout. */
-.stat-turn::before {
-  content: '';
+   stays on the compositor and never touches layout. An element rather than a
+   pseudo-element, so the box can remount the tint alone when its value lands
+   without the number under it flickering. */
+.stat-tint-wash {
   position: absolute;
   inset: 0;
   pointer-events: none;
@@ -2981,43 +2994,73 @@ input[type='range']:disabled::-webkit-slider-thumb {
 }
 
 /* Above the tint, so the value keeps exactly the colour it has always had. */
-.stat-turn .stat-value,
-.stat-turn .stat-label {
+.stat-tint .stat-value,
+.stat-tint .stat-label {
   position: relative;
 }
 /* The one exception, and it is legibility rather than state: the 11px label is
-   --fg-faint, which lands at 2.4:1 once there is colour behind it. One step up
-   to the neutral grey next to it puts every tint back over 4.5:1. */
-.stat-turn .stat-label {
-  color: var(--fg-muted);
+   --fg-faint, which lands at 2.4:1 once there is colour behind it. --fg-on-tint
+   is the step up that actually clears 4.5:1 on every tint — measured off the
+   composited pixels rather than off the tokens, because the wash, the glass and
+   the backdrop filter all sit between the two colours the ratio is about. */
+.stat-tint .stat-label {
+  color: var(--fg-on-tint);
 }
 
-.stat-turn-waiting {
+/* A shared agent's turn. */
+.stat-tint-waiting {
   --turn-tint: var(--warn);
 }
-.stat-turn-brace {
+.stat-tint-brace {
   --turn-tint: var(--primary-hover);
 }
-.stat-turn-ready {
+.stat-tint-ready {
   --turn-tint: var(--online);
 }
-.stat-turn-handover {
+.stat-tint-handover {
   --turn-tint: var(--turn-orange);
 }
 /* Not a state so much as the absence of one: present, and deliberately not
    competing with the four that mean something. Same grey the panel already uses
    for an agent it cannot reach. */
-.stat-turn-offline {
+.stat-tint-offline {
   --turn-tint: var(--fg-faint);
 }
-.stat-turn-offline::before {
+.stat-tint-offline .stat-tint-wash {
   opacity: 0.5;
+}
+
+/* A session's own three. Working takes the cyan the status row is already
+   wearing while it works, so the row and the box are visibly the same news;
+   idle takes the same green a turn in hand does. The cyan is taken down towards
+   the surface first: --neon-busy is a colour picked to glow on two-pixel strokes
+   and, spread across a whole box, it lifts the background far enough to put the
+   label under 4.5:1. */
+.stat-tint-forking {
+  --turn-tint: color-mix(in srgb, var(--neon-busy) 55%, var(--surface));
+}
+.stat-tint-listening {
+  --turn-tint: var(--online);
+}
+/* The one session state with something to do about it, in the same amber the
+   panel already uses for a wait that is on you. */
+.stat-tint-unbound {
+  --turn-tint: var(--warn);
+}
+/* The count. Violet is not one of the state colours in either panel, which is
+   the point: it sits beside a box that changes colour to mean something and must
+   never be read as having changed with it. Taken down towards the surface first,
+   because the streak colour it is drawn from is a neon meant for two-pixel light
+   trails — at full strength across a whole box it out-shouts the state beside it,
+   and the state is the thing worth looking at. */
+.stat-tint-commit {
+  --turn-tint: color-mix(in srgb, var(--streak-violet) 62%, var(--surface));
 }
 
 /* Only the two states with a clock running blink. Waiting and holding a turn are
    situations, not events — they can sit still. */
-.stat-turn-brace::before,
-.stat-turn-handover::before {
+.stat-tint-brace .stat-tint-wash,
+.stat-tint-handover .stat-tint-wash {
   animation: turn-blink 1.5s ease-in-out infinite;
 }
 @keyframes turn-blink {
@@ -3027,6 +3070,27 @@ input[type='range']:disabled::-webkit-slider-thumb {
   }
   50% {
     opacity: 0.3;
+  }
+}
+
+/* A commit is an event, not a situation, so the box marks the moment one is made
+   and then leaves it alone — the opposite of a blink, which would go on drawing
+   attention to something that has already happened. The layer is keyed on the
+   count in ConnectionPanel.jsx, so each new commit remounts it and the animation
+   plays from its first frame rather than picking up mid-flight. Opacity alone:
+   nothing here can touch layout however fast the questions go. */
+.stat-tint-commit .stat-tint-wash {
+  animation: commit-land 420ms ease-out 1;
+}
+@keyframes commit-land {
+  0% {
+    opacity: 0.15;
+  }
+  35% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
   }
 }
 
@@ -3040,9 +3104,12 @@ input[type='range']:disabled::-webkit-slider-thumb {
     animation: none;
   }
   /* Held at full tint rather than mid-blink: the colour is the state, and it
-     still has to be the right one when the motion is gone. */
-  .stat-turn-brace::before,
-  .stat-turn-handover::before {
+     still has to be the right one when the motion is gone. The commit wash is
+     the same bargain — the box is still tinted, it simply stops announcing
+     itself. */
+  .stat-tint-brace .stat-tint-wash,
+  .stat-tint-handover .stat-tint-wash,
+  .stat-tint-commit .stat-tint-wash {
     animation: none;
     opacity: 1;
   }

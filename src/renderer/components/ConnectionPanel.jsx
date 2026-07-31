@@ -1,8 +1,10 @@
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Avatar from './Avatar.jsx';
+import { Sessions } from '../lib/icons.jsx';
 import { useCountdown } from '../lib/useCountdown.js';
 import { useAgentPhrase } from '../lib/agentPhrase.js';
 import { turnStanding, turnStandingLabel } from '../lib/turnStanding.js';
+import { sessionStanding, sessionStandingLabel } from '../lib/sessionStanding.js';
 import { useSweep, useBurstHue, useReadyBurst, useReducedMotion, boxReach } from '../lib/statusMotion.js';
 
 // Live connection quality for the selected peer, drawn from real round-trip
@@ -13,6 +15,13 @@ import { useSweep, useBurstHue, useReadyBurst, useReducedMotion, boxReach } from
 // measure — a local one rides a virtual socket, and a shared one is reached
 // through its owner — so latency, jitter and packet loss are meaningless for it.
 // What matters instead is what the agent is doing and whose turn it is.
+//
+// A session gets a third. It is a workspace in this window with no socket of any
+// kind, and it used to fall through to the panel above and claim a "Good"
+// connection, a latency graph measuring nothing, and a round-trip time it had no
+// way to have. It borrows the agent's row and boxes instead, and fills them with
+// the two things that are true of it: what its agent is doing, and how many
+// questions have been committed to it.
 
 const QUALITY = {
   excellent: { label: 'Excellent', color: 'var(--online)', bars: 4 },
@@ -33,7 +42,7 @@ const QUALITY = {
   unreachable: { label: 'Not responding', color: 'var(--warn)', bars: 0 },
 };
 
-export default function ConnectionPanel({ peer, stats, agentStatus, awaiting }) {
+export default function ConnectionPanel({ peer, stats, agentStatus, awaiting, typing, commits }) {
   if (!peer) {
     return (
       <div className="panel-empty">
@@ -49,6 +58,12 @@ export default function ConnectionPanel({ peer, stats, agentStatus, awaiting }) 
   }
 
   if (peer.kind === 'agent') return <AgentPanel peer={peer} status={agentStatus} awaiting={awaiting} />;
+
+  if (peer.kind === 'session') {
+    return (
+      <SessionPanel peer={peer} status={agentStatus} awaiting={awaiting} typing={typing} commits={commits} />
+    );
+  }
 
   const q = QUALITY[stats?.quality || (peer.online ? 'good' : 'offline')] || QUALITY.offline;
   const samples = stats?.samples || [];
@@ -115,10 +130,6 @@ function AgentPanel({ peer, status, awaiting }) {
   // Turn can never disagree about which of them is true.
   const standing = turnStanding(peer, secondsLeft);
 
-  // Fires once, the moment the agent has finished and the word "Ready" has
-  // finished typing itself in. Null the rest of the time.
-  const burst = useReadyBurst(state.tone, state.label);
-
   return (
     <div className="conn-panel">
       <div className="conn-head">
@@ -133,37 +144,7 @@ function AgentPanel({ peer, status, awaiting }) {
 
       {/* Where a human peer gets a latency graph, an agent says what it is
           doing. Same slot, information that actually applies. */}
-      <div
-        className={`agent-state agent-tone-${state.tone}`}
-        // A tool name long enough to be cut is the one case where the row
-        // cannot say everything it knows, so it offers the rest on hover.
-        title={state.label.length > CUT_RISK ? state.label : undefined}
-      >
-        {/* Behind everything, spanning the whole row. */}
-        <SpeedStreaks active={state.tone === 'busy'} />
-        {/* The finish. A new id is a new firework, and remounting is what makes
-            the animation start over rather than picking up mid-flight. */}
-        {burst != null && <ReadyBurst key={burst} />}
-        {/* Pip and word travel together in a content-sized box, which is what
-            lets the veil behind them size itself to the phrase. */}
-        <span className="agent-state-front">
-          <SparkPip active={state.tone === 'busy'} />
-          {/* The row is a fixed size and the phrase is not, so the label is set
-              from its own length: the type shrinks as the phrase grows, and the
-              phrase fills the row instead of running out of it. One number is
-              all CSS needs to do that — see --len in styles.css. */}
-          <span className="agent-state-label" style={{ '--len': state.label.length }}>
-            <TypedLabel text={state.label} sweeping={state.tone === 'busy'} />
-            {state.tone === 'busy' && (
-              <span className="agent-dots" aria-hidden="true">
-                <i />
-                <i />
-                <i />
-              </span>
-            )}
-          </span>
-        </span>
-      </div>
+      <StatusRow tone={state.tone} label={state.label} />
 
       {/* Status says where this thread stands in the queue whenever it stands
           anywhere at all — waiting behind someone, about to be handed the turn,
@@ -198,6 +179,131 @@ function AgentPanel({ peer, status, awaiting }) {
           queries.
         </div>
       )}
+    </div>
+  );
+}
+
+function SessionPanel({ peer, status, awaiting, typing, commits }) {
+  // Three sources again, and none of them the peer card: a session has no
+  // presence to read one off. `typing` is main's own bracket around a run — it
+  // is raised on the session's id, not the agent's, the moment the question goes
+  // and lowered when the answer lands. `awaiting` is having asked and not heard
+  // back, which covers a slow start. `streaming` is text already arriving.
+  //
+  // The agent's own `status` is deliberately not one of them: it is published
+  // keyed by agent id alone, so a session thread never receives `working` and a
+  // row built on it would sit dead through the whole answer.
+  const busy = typing === true || awaiting === true || Boolean(status?.streaming);
+
+  // The same clock-derived phrase the chat indicator is showing under the
+  // conversation at this instant, so the two never show different words.
+  const phrase = useAgentPhrase(busy);
+
+  // One derivation for the row and the Status box, so the word being typed and
+  // the word in the box can never contradict each other.
+  const standing = sessionStanding(peer, busy, phrase);
+
+  return (
+    <div className="conn-panel">
+      <div className="conn-head">
+        {/* A session has no face and no presence: it is a workspace. The same
+            mark the conversation header uses stands where an avatar would, so
+            neither surface implies somebody is there. */}
+        <span className="session-mark" aria-hidden="true">
+          <Sessions size={20} />
+        </span>
+        <div style={{ minWidth: 0 }}>
+          <div className="conn-name">{peer.name}</div>
+          <div className={`conn-sub agent-tone-${standing.tone}`}>
+            {peer.agentName ? `Asks ${peer.agentName}` : 'No agent yet'}
+          </div>
+        </div>
+      </div>
+
+      {/* Same slot as the agent's, and the same row: what is being done with the
+          question this session last asked. */}
+      <StatusRow tone={standing.tone} label={standing.label} />
+
+      {/* Where a shared agent's panel counts down the queries left in a turn,
+          a session counts up. Nobody else is in here — a session is local, has
+          no presence and takes no turns — so the number worth carrying is what
+          this workspace has put in: the questions asked from it. */}
+      <div className="conn-stats">
+        <Stat
+          label="Status"
+          value={standing.word}
+          tone={standing.key}
+          title={sessionStandingLabel(peer, busy)}
+        />
+        <CommitStat commits={commits} />
+        <Stat label="Via" value={peer.agentName || '—'} />
+      </div>
+
+      <div className="conn-note">
+        {peer.agentName
+          ? `A workspace on this machine. Nothing in it goes over the wire — questions go to ${peer.agentName}, and the answers are filed here rather than in that agent's own thread.`
+          : 'A workspace on this machine, with no agent to ask yet. Choose one beside the title above and this session can start asking.'}
+      </div>
+    </div>
+  );
+}
+
+// The commit box. The number lands rather than blinks: a commit is an event, and
+// the tile marks the moment one is made instead of pulsing at you afterwards. The
+// key is the count itself, so a remount is what restarts the animation — the same
+// trick the finish firework uses, for the same reason.
+function CommitStat({ commits }) {
+  const n = Number.isFinite(commits) ? commits : 0;
+  return (
+    <Stat
+      label="Commit"
+      value={n}
+      tone="commit"
+      pulse={n}
+      title={`${n} question${n === 1 ? '' : 's'} asked in this session`}
+    />
+  );
+}
+
+// The status row: what is being done, said in the slot a peer uses for its
+// latency graph. Shared by the agent panel and the session panel so there is one
+// row rather than two that have to be kept looking alike.
+function StatusRow({ tone, label }) {
+  // Fires once, the moment the work has finished and the resting word has
+  // finished typing itself in. Null the rest of the time.
+  const burst = useReadyBurst(tone, label);
+
+  return (
+    <div
+      className={`agent-state agent-tone-${tone}`}
+      // A tool name long enough to be cut is the one case where the row
+      // cannot say everything it knows, so it offers the rest on hover.
+      title={label.length > CUT_RISK ? label : undefined}
+    >
+      {/* Behind everything, spanning the whole row. */}
+      <SpeedStreaks active={tone === 'busy'} />
+      {/* The finish. A new id is a new firework, and remounting is what makes
+          the animation start over rather than picking up mid-flight. */}
+      {burst != null && <ReadyBurst key={burst} />}
+      {/* Pip and word travel together in a content-sized box, which is what
+          lets the veil behind them size itself to the phrase. */}
+      <span className="agent-state-front">
+        <SparkPip active={tone === 'busy'} />
+        {/* The row is a fixed size and the phrase is not, so the label is set
+            from its own length: the type shrinks as the phrase grows, and the
+            phrase fills the row instead of running out of it. One number is
+            all CSS needs to do that — see --len in styles.css. */}
+        <span className="agent-state-label" style={{ '--len': label.length }}>
+          <TypedLabel text={label} sweeping={tone === 'busy'} />
+          {tone === 'busy' && (
+            <span className="agent-dots" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+          )}
+        </span>
+      </span>
     </div>
   );
 }
@@ -550,9 +656,15 @@ function SignalBars({ bars, color }) {
 // `tone` tints the box for a state worth spotting without reading it. Left off,
 // the stat looks exactly as it always has — which is how the latency stats above
 // stay untouched.
-function Stat({ label, value, tone, title }) {
+//
+// `pulse` is for a box whose value is an event rather than a situation: change it
+// and the tint layer remounts, which is what plays its animation from the first
+// frame again. The tint lives in a child of its own so that remount cannot take
+// the value with it and make the number flicker.
+function Stat({ label, value, tone, title, pulse }) {
   return (
-    <div className={tone ? `stat stat-turn stat-turn-${tone}` : 'stat'} title={title || undefined}>
+    <div className={tone ? `stat stat-tint stat-tint-${tone}` : 'stat'} title={title || undefined}>
+      {tone && <span key={pulse} className="stat-tint-wash" aria-hidden="true" />}
       <div className="stat-value">{value}</div>
       <div className="stat-label">{label}</div>
     </div>

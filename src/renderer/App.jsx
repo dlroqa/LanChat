@@ -22,6 +22,7 @@ import NewGroupCallModal from './components/NewGroupCallModal.jsx';
 import { GroupCallManager } from './lib/groupCall.js';
 import { listDevices, labelFor } from './lib/devices.js';
 import { isSessionThread, isThinkingThread } from './lib/sessionIds.js';
+import { commitCount } from './lib/sessionStanding.js';
 import { flashDuration, prefersReducedMotion } from './lib/connectFlash.js';
 import { useAgentMusic } from './lib/agentMusic.js';
 import { trackUrl, DEFAULT_TRACK } from './lib/agentMusicTrack.js';
@@ -593,6 +594,11 @@ export default function App() {
     toast(`Saved ${res.count} message${res.count === 1 ? '' : 's'}.`);
   }
 
+  // Agents this machine can point a session at: our own, and the ones peers have
+  // shared with us. A delegate thread is somebody else's conversation rather
+  // than an agent, so it is not one of them.
+  const askableAgents = useMemo(() => peers.filter((p) => p.kind === 'agent' && !p.delegate), [peers]);
+
   const selectedPeer = useMemo(() => {
     if (!selectedId) return null;
     // A session is not a contact and never appears in the roster: it is a
@@ -602,17 +608,33 @@ export default function App() {
     if (isSessionThread(selectedId)) {
       const record = sessions.find((s) => s.id === selectedId);
       if (!record) return null;
-      return { id: record.id, kind: 'session', name: record.title, agentId: record.agentId, online: true };
+      // The agent is resolved once, here, so every surface reading this card
+      // agrees on whether the session has one. An id that no longer answers to
+      // an agent resolves to nothing, which is the same state as never having
+      // chosen one — in both cases there is nothing this session can ask.
+      const agent = record.agentId ? askableAgents.find((a) => a.id === record.agentId) : null;
+      return {
+        id: record.id,
+        kind: 'session',
+        name: record.title,
+        agentId: record.agentId,
+        agentName: agent?.name || null,
+        online: true,
+      };
     }
     const live = peers.find((p) => p.id === selectedId);
     const base = live || knownPeers.current[selectedId] || { id: selectedId, name: 'Unknown' };
     return { ...base, online: live ? live.online : false };
-  }, [selectedId, peers, sessions]);
+  }, [selectedId, peers, sessions, askableAgents]);
 
-  // Agents this machine can point a session at: our own, and the ones peers have
-  // shared with us. A delegate thread is somebody else's conversation rather
-  // than an agent, so it is not one of them.
-  const askableAgents = useMemo(() => peers.filter((p) => p.kind === 'agent' && !p.delegate), [peers]);
+  // How many questions this session has been asked. Derived from the thread the
+  // window already holds rather than stored on the record: the messages are the
+  // only place it is ever true, and a stored number would be one restart away
+  // from disagreeing with them.
+  const selectedCommits = useMemo(
+    () => (isSessionThread(selectedId) ? commitCount(messages[selectedId]) : 0),
+    [selectedId, messages]
+  );
 
   // Windows asks for the loopback address itself rather than the name for it:
   // there "localhost" resolves to ::1 first, while the service listens on
@@ -1129,6 +1151,11 @@ export default function App() {
               stats={linkStats[selectedId]}
               agentStatus={agentStatus[selectedId]}
               awaiting={Boolean(awaiting[selectedId])}
+              // A session has no presence to read a state off, so the panel is
+              // told the same two things the conversation is: main's bracket
+              // around the run, and the count of what has been asked.
+              typing={Boolean(typing[selectedId])}
+              commits={selectedCommits}
             />
           </>
         )}

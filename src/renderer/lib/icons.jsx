@@ -191,15 +191,17 @@ export const Sessions = (p) => (
     <path d="M7 4h12a1 1 0 0 1 1 1v12" />
   </S>
 );
-// A branch leaving the line it grew from — the shape of taking one thing that
-// was said and carrying on from there.
+// Two lines from one — the shape of taking one thing that was said and carrying
+// on from there. The standard fork glyph, the way every version-control tool
+// draws it: the trunk rises out of the node below and splits to the two above.
+// Recognising it costs nothing; a shape of our own would have to be learned.
 export const Fork = (p) => (
   <S {...p}>
-    <circle cx="6" cy="5" r="2.5" />
-    <circle cx="6" cy="19" r="2.5" />
-    <circle cx="18" cy="12" r="2.5" />
-    <path d="M6 7.5v9" />
-    <path d="M8.5 5H12a3.5 3.5 0 0 1 3.5 3.5v1" />
+    <circle cx="6" cy="5.5" r="2.6" />
+    <circle cx="18" cy="5.5" r="2.6" />
+    <circle cx="12" cy="18.5" r="2.6" />
+    <path d="M6 8.1v1.9a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V8.1" />
+    <path d="M12 12v3.9" />
   </S>
 );
 // Upload: the mirror of Download, arrow going the other way.
