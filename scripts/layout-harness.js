@@ -55,6 +55,12 @@ const PEERS = 40;
 // thing anyone actually cares about.
 const PROBE = 'Searching for every call site of resolveAgentApproval in the renderer';
 
+// Longer than the header is wide at any of these sizes. The find button sits
+// beside it, so what this size proves is that the name gives way rather than
+// pushing the button out of the header — the failure mode of putting anything
+// next to a name somebody else chose.
+const LONG_NAME = 'A conversation with a name far longer than the header could ever hope to hold';
+
 function peerRow(i) {
   return `<div class="peer${i === 0 ? ' active' : ''}">
       <div class="avatar">P</div>
@@ -100,7 +106,13 @@ function buildPage(cssPath) {
   <div class="chat-wrap">
     <div class="chat">
       <div class="chat-header"><div class="avatar">H</div>
-        <div class="meta"><div class="name">Hermes</div><div class="sub">Agent · shared by MacAir</div></div></div>
+        <div class="meta"><div class="name"><span class="peer-name">${LONG_NAME}</span>
+          <button class="find-btn" aria-label="Find in this conversation">S</button></div>
+          <div class="sub">Agent · shared by MacAir</div></div>
+        <div class="chat-actions">
+          <button class="icon-btn" aria-label="Save chat history">D</button>
+          <button class="icon-btn danger" aria-label="Delete chat history">T</button>
+        </div></div>
       <div class="messages-wrap">
         <div class="messages">
           ${Array.from({ length: MESSAGES }, (_, i) => bubble(i)).join('\n')}
@@ -164,6 +176,13 @@ function buildPage(cssPath) {
       return { x: Math.round(r.x), w: Math.round(r.width), h: Math.round(r.height), right: Math.round(r.right) };
     }),
     search: rect('.sidebar-search'),
+    // The header row the find button was added to. It is pinned to --header-h so
+    // it lines up with the sidebar's profile block, and a button beside a name of
+    // any length must not be able to change that or be pushed out of it.
+    chatHeader: rect('.chat-header'),
+    chatActions: rect('.chat-actions'),
+    findBtn: rect('.find-btn'),
+    peerName: rect('.peer-name'),
   };
 
   const pre = document.createElement('pre');

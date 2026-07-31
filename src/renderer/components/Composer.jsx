@@ -32,6 +32,11 @@ export default function Composer({
   // Summoning one of them. Chosen from the menu with Enter or a click, which
   // reaches the agent rather than writing its name down.
   onSummon = () => {},
+  // A way back to the input for whoever put the focus somewhere else — closing
+  // the find bar should land the cursor here, where the next thing anybody does
+  // is type. A function on a ref rather than the textarea itself: the caller
+  // gets to ask for focus and nothing else.
+  focusRef,
 }) {
   // Recording needs MediaRecorder with an Opus-capable container; hide the
   // affordance entirely where that is missing rather than failing on press.
@@ -65,6 +70,14 @@ export default function Composer({
     el.style.height = 'auto';
     el.style.height = `${el.scrollHeight}px`;
   }, []);
+
+  useEffect(() => {
+    if (!focusRef) return undefined;
+    focusRef.current = () => ref.current?.focus();
+    return () => {
+      focusRef.current = null;
+    };
+  }, [focusRef]);
 
   // One measure per keystroke and nothing else. Anything that reads geometry
   // here reads it after a style write, which chromium can only answer by laying

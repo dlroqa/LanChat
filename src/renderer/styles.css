@@ -769,6 +769,149 @@ input:focus-visible {
   background: var(--bg-2);
 }
 
+/* ---- find in a conversation -----------------------------------------------
+   A thread nobody scrolls twice. The button sits beside the name of the thing
+   being searched; the bar it opens floats over the top of the messages, so the
+   header keeps its height and the conversation does not move under the reader
+   at the moment they are trying to find their place in it. */
+.chat-header .name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+/* The title takes the space and gives it back: a long session name must not
+   push the search button out of the header. `min-width: 0` is what lets a flex
+   item shrink past its own text at all — without it the ellipsis never happens
+   and the row grows instead. */
+.chat-header .name > .session-title,
+.chat-header .name > .session-title-input,
+.chat-header .name > .peer-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.find-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  color: var(--fg-faint);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.find-btn:hover {
+  background: var(--surface-hover);
+  color: var(--fg);
+}
+/* Open is a state of the conversation, not of the pointer, so the button holds
+   the fill while the bar is up. */
+.find-btn.on {
+  background: var(--primary-soft);
+  color: var(--fg);
+}
+
+.find-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  animation: find-in 0.15s ease-out;
+}
+.find-ic {
+  display: inline-flex;
+  flex: none;
+  color: var(--fg-faint);
+}
+.find-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  font: inherit;
+  color: var(--fg);
+  /* The box has no border of its own, but it still takes the focus ring every
+     other input here takes — rounded, so the ring is the shape of the field
+     rather than a rectangle drawn around nothing. */
+  border-radius: var(--radius-sm);
+}
+/* Tabular figures: 9/17 becoming 10/17 must not shift the arrows sideways under
+   the finger already on its way to them. */
+.find-count {
+  flex: none;
+  font-size: 12px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 54px;
+  text-align: right;
+}
+.find-step {
+  width: 28px;
+  height: 28px;
+}
+.find-step:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.find-step:disabled:hover {
+  background: transparent;
+  color: var(--fg-muted);
+}
+@keyframes find-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Every occurrence, so the density of a word in a conversation can be seen at a
+   glance, with the one being pointed at filled solid. The browser's own <mark>
+   is yellow-on-black and belongs to a light page, so it is replaced outright.
+
+   Both fills are opaque, and both bring their own text colour. A translucent
+   warm tint was the obvious thing and it does not survive measurement: over an
+   outgoing bubble it composites with --primary, and the white text on top lands
+   at 4.16:1 — under AA, and only because the blue starts at 5:1 with no room to
+   give away. Painting over the bubble instead of through it means one pair of
+   colours wherever a hit turns up, on a bubble either way, on a file name, in a
+   quote (scripts/find-harness.js measures all of them).
+
+   The current hit is marked by a fill *and* a ring, never by colour alone — the
+   same rule the mention list follows. */
+mark.find-hit {
+  background: color-mix(in srgb, var(--warn) 55%, var(--fg));
+  color: var(--bg);
+  border-radius: 3px;
+  padding: 0 1px;
+}
+mark.find-hit.current {
+  background: var(--warn);
+  color: var(--bg);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 45%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .find-bar {
+    animation: none;
+  }
+}
+
 /* Holds the scrolling message list and the connection light that plays behind it.
    The light cannot live inside .messages: `inset: 0` in a scrolling box resolves
    against the scrolled content, so it would be as tall as the whole conversation

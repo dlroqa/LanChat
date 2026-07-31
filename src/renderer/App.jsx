@@ -1356,6 +1356,7 @@ export default function App() {
           previewUrl={previewUrl}
           previewFallback={self?.platform === 'win32'}
           showAddresses={config.showAddresses}
+          canFind={config.findSessionsOnly ? selectedPeer?.kind === 'session' : true}
           onOpenLink={openLink}
           linkPreview={fetchLinkPreview}
           draft={draft && draft.threadId === selectedId ? draft : null}

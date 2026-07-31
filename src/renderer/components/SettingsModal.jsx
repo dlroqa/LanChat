@@ -21,6 +21,7 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
   const [useStun, setUseStun] = useState((config.iceServers || []).length > 0);
   const [showAddresses, setShowAddresses] = useState(Boolean(config.showAddresses));
   const [linkPreviews, setLinkPreviews] = useState(config.linkPreviews !== false);
+  const [findSessionsOnly, setFindSessionsOnly] = useState(Boolean(config.findSessionsOnly));
   // Applied immediately via IPC (not batched into onSave), since the OS login
   // item should reflect the toggle the moment it changes.
   const [openAtLogin, setOpenAtLogin] = useState(Boolean(config.openAtLogin));
@@ -64,6 +65,7 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
       iceServers: useStun ? [{ urls: DEFAULT_STUN }] : [],
       showAddresses,
       linkPreviews,
+      findSessionsOnly,
       ...devices,
       ...sounds,
       ...ptt,
@@ -172,6 +174,14 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
             </div>
           </div>
         )}
+
+        <div className="section-head">Conversations</div>
+        <Toggle
+          label="Find only in sessions"
+          desc="The search button beside a conversation's name. Off, every conversation has one; on, only sessions do."
+          on={findSessionsOnly}
+          set={setFindSessionsOnly}
+        />
 
         <div className="section-head">Discovery</div>
         <Toggle label="Discover peers over Tailscale" desc="Find people across your tailnet." on={enableTailscale} set={setTs} />

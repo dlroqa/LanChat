@@ -231,3 +231,14 @@ export const Upload = (p) => (
     <line x1="12" y1="3" x2="12" y2="15" />
   </S>
 );
+// Stepping through what a search found: back up the conversation, and down it.
+export const ChevronUp = (p) => (
+  <S {...p}>
+    <polyline points="18 15 12 9 6 15" />
+  </S>
+);
+export const ChevronDown = (p) => (
+  <S {...p}>
+    <polyline points="6 9 12 15 18 9" />
+  </S>
+);

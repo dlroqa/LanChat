@@ -51,6 +51,7 @@ const SETTABLE_KEYS = Object.freeze([
   'videoInputId',
   'showAddresses',
   'linkPreviews',
+  'findSessionsOnly',
   'ringtone',
   'ringtoneVolume',
   'customRingtonePath',

@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { formatTime, formatBytes, isImage, isVideo, isAudio } from '../lib/util.js';
 import { FileIcon, Download, Fork, Restore } from '../lib/icons.jsx';
 import { linkify } from '../lib/linkify.js';
+import { fieldHits, sliceRuns } from '../lib/findInThread.js';
 import { useCountdown } from '../lib/useCountdown.js';
 import LinkPreview from './LinkPreview.jsx';
 
@@ -31,10 +32,23 @@ export default function MessageBubble({
   // Putting a question that failed back into the composer, with whatever it was
   // asking about. Offered on the same threads as onFork.
   onResend,
+  // What the find bar is looking for: `{ query, base, current }`, where `base`
+  // is the ordinal this bubble's first hit was given and `current` is the one
+  // being pointed at. Undefined whenever nothing is being searched, which is
+  // nearly always — the bubble then renders exactly as it always has.
+  find,
 }) {
   const out = msg.direction === 'out';
 
   const runs = useMemo(() => (msg.kind === 'file' ? [] : linkify(msg.text)), [msg.kind, msg.text]);
+  // Where the search word occurs in each part of this bubble, numbered from
+  // `base`. Worked out here rather than passed in, so a new message arriving
+  // does not re-slice every bubble above it.
+  const hits = useMemo(
+    () => (find?.query ? fieldHits(msg, find.query, find.base) : null),
+    [msg, find?.query, find?.base]
+  );
+  const current = find?.current;
   // The first link only: a message with several should not become a wall of cards.
   const firstLink = runs.find((r) => r.type === 'link');
 
@@ -47,9 +61,11 @@ export default function MessageBubble({
         progress={progress}
         onOpen={onOpen}
         onReveal={onReveal}
+        hit={hits?.get('file')}
+        current={current}
       />
     ) : (
-      <MessageText runs={runs} onOpenLink={onOpenLink} />
+      <MessageText runs={runs} onOpenLink={onOpenLink} hit={hits?.get('text')} current={current} />
     );
 
   // A text message still waiting for the peer to come back online.
@@ -103,7 +119,7 @@ export default function MessageBubble({
             </span>
             <span className="bubble-quote-text">
               {msg.context.speaker ? <b>{msg.context.speaker}: </b> : null}
-              {msg.context.text}
+              <Marked text={msg.context.text} hit={hits?.get('context')} current={current} />
             </span>
           </div>
         )}
@@ -115,7 +131,7 @@ export default function MessageBubble({
             {msg.docs.map((doc, i) => (
               <span className="bubble-doc" key={`${doc.name}-${i}`}>
                 <FileIcon size={13} />
-                {doc.name}
+                <Marked text={doc.name} hit={hits?.get(`doc:${i}`)} current={current} />
                 <span className="bubble-doc-size">{formatBytes(doc.bytes)}</span>
               </span>
             ))}
@@ -206,11 +222,15 @@ export default function MessageBubble({
 
 // Message text, with the links in it made clickable. The runs come from
 // linkify(), which only ever reports plain text and http(s) URLs — the anchors
-// are built here, so nothing a peer writes can turn into markup.
-function MessageText({ runs, onOpenLink }) {
+// are built here, so nothing a peer writes can turn into markup. A search cuts
+// the same runs again at the edges of what it found; a word that begins in a
+// sentence and ends inside a link therefore comes back as two pieces carrying
+// one ordinal, and the second is an anchor to the same place as the first.
+function MessageText({ runs, onOpenLink, hit, current }) {
+  const pieces = marked(runs, hit);
   return (
     <div className="text">
-      {runs.map((run, i) =>
+      {pieces.map((run, i) =>
         run.type === 'link' ? (
           <a
             key={i}
@@ -222,13 +242,51 @@ function MessageText({ runs, onOpenLink }) {
             // the same thing as a click, and never a new window inside the app.
             onAuxClick={(e) => e.button === 1 && openLink(e, run.href, onOpenLink)}
           >
-            {run.text}
+            {run.hit == null ? run.text : <Hit run={run} current={current} />}
           </a>
-        ) : (
+        ) : run.hit == null ? (
           <React.Fragment key={i}>{run.text}</React.Fragment>
+        ) : (
+          <Hit key={i} run={run} current={current} />
         )
       )}
     </div>
+  );
+}
+
+// The runs of a string, cut at whatever the search found in it. `hit` is
+// undefined on every surface the current query does not touch, which is the
+// usual case and costs nothing.
+function marked(runs, hit) {
+  if (!hit || hit.ranges.length === 0) return runs.map((run) => ({ ...run, hit: null }));
+  return sliceRuns(runs, hit.ranges, hit.base);
+}
+
+// One occurrence, marked where it stands. `data-hit` is its ordinal in the
+// thread: it is how the pane finds this one on screen when the arrows walk to
+// it, and it is unique because the numbering is handed out once, in order.
+function Hit({ run, current }) {
+  return (
+    <mark className={`find-hit${run.hit === current ? ' current' : ''}`} data-hit={run.hit}>
+      {run.text}
+    </mark>
+  );
+}
+
+// The same marking for the strings that are not message text — a quoted
+// excerpt, the name of a document, the name of a file.
+function Marked({ text, hit, current }) {
+  const pieces = marked([{ type: 'text', text }], hit);
+  return (
+    <>
+      {pieces.map((run, i) =>
+        run.hit == null ? (
+          <React.Fragment key={i}>{run.text}</React.Fragment>
+        ) : (
+          <Hit key={i} run={run} current={current} />
+        )
+      )}
+    </>
   );
 }
 
@@ -240,7 +298,7 @@ function openLink(e, href, onOpenLink) {
   if (onOpenLink) onOpenLink(href);
 }
 
-function FileContent({ msg, previewUrl, previewFallback, progress, onOpen, onReveal }) {
+function FileContent({ msg, previewUrl, previewFallback, progress, onOpen, onReveal, hit, current }) {
   // Windows only: a thumbnail that cannot be fetched used to leave the browser's
   // broken-image glyph sitting in the bubble — the one thing on screen that says
   // nothing and does nothing. The file is still there and still openable, so the
@@ -259,7 +317,7 @@ function FileContent({ msg, previewUrl, previewFallback, progress, onOpen, onRev
         <div className="file-media">
           <img src={url} alt={f.name} onClick={() => onOpen(f.path)} onError={fail} loading="lazy" />
         </div>
-        <FileMeta f={f} onReveal={onReveal} />
+        <FileMeta f={f} onReveal={onReveal} hit={hit} current={current} />
         {pct != null && pct < 100 && <Progress pct={pct} />}
       </div>
     );
@@ -270,7 +328,7 @@ function FileContent({ msg, previewUrl, previewFallback, progress, onOpen, onRev
     return (
       <div className="file-bubble">
         <audio className="audio-player" src={url} controls preload="metadata" onError={fail} />
-        <FileMeta f={f} onReveal={onReveal} />
+        <FileMeta f={f} onReveal={onReveal} hit={hit} current={current} />
         {pct != null && pct < 100 && <Progress pct={pct} />}
       </div>
     );
@@ -281,7 +339,7 @@ function FileContent({ msg, previewUrl, previewFallback, progress, onOpen, onRev
         <div className="file-media">
           <video src={url} controls preload="metadata" onError={fail} />
         </div>
-        <FileMeta f={f} onReveal={onReveal} />
+        <FileMeta f={f} onReveal={onReveal} hit={hit} current={current} />
         {pct != null && pct < 100 && <Progress pct={pct} />}
       </div>
     );
@@ -293,7 +351,9 @@ function FileContent({ msg, previewUrl, previewFallback, progress, onOpen, onRev
           <FileIcon size={20} />
         </span>
         <div className="file-info">
-          <div className="fn">{f.name}</div>
+          <div className="fn">
+            <Marked text={f.name} hit={hit} current={current} />
+          </div>
           <div className="fs">
             {formatBytes(f.size)}
             {previewFallback && previewFailed && ' · preview unavailable'}
@@ -308,11 +368,13 @@ function FileContent({ msg, previewUrl, previewFallback, progress, onOpen, onRev
   );
 }
 
-function FileMeta({ f, onReveal }) {
+function FileMeta({ f, onReveal, hit, current }) {
   return (
     <div className="file-row">
       <div className="file-info" style={{ flex: 1 }}>
-        <div className="fn">{f.name}</div>
+        <div className="fn">
+          <Marked text={f.name} hit={hit} current={current} />
+        </div>
         <div className="fs">{formatBytes(f.size)}</div>
       </div>
       <button className="icon-btn" onClick={() => onReveal(f.path)} title="Show in folder">

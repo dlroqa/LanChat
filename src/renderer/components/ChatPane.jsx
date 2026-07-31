@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Avatar from './Avatar.jsx';
 import Logo from './Logo.jsx';
 import MessageBubble from './MessageBubble.jsx';
@@ -6,9 +6,11 @@ import Composer from './Composer.jsx';
 import AgentApproval from './AgentApproval.jsx';
 import AgentFlash from './AgentFlash.jsx';
 import SessionTitle from './SessionTitle.jsx';
-import { Phone, Video, Trash, Download, Upload, Sessions, Alert } from '../lib/icons.jsx';
+import FindBar from './FindBar.jsx';
+import { Phone, Video, Trash, Download, Upload, Sessions, Alert, Search } from '../lib/icons.jsx';
 import { useQueueLabel } from './QueueBadge.jsx';
 import { useAgentPhrase } from '../lib/agentPhrase.js';
+import { threadHits } from '../lib/findInThread.js';
 import { formatDay, platformLabel } from '../lib/util.js';
 
 const GROUP_WINDOW = 4 * 60 * 1000; // group consecutive messages within 4 min
@@ -68,6 +70,10 @@ export default function ChatPane({
   // rather than stack a second light on top of the first.
   flash,
   onFlashDone,
+  // Whether this conversation can be searched. Settings decides: every thread,
+  // or sessions only — the ones long enough that scrolling back through them is
+  // the problem this solves.
+  canFind = true,
 }) {
   const scrollRef = useRef(null);
   // Whether the reader is at the end of the conversation. A link card arriving
@@ -88,9 +94,117 @@ export default function ChatPane({
   const sessionAgent = isSession && peer.agentId ? agents.find((a) => a.id === peer.agentId) : null;
   const thinkerName = isSession ? sessionAgent?.name || 'The agent' : peer?.name || 'The agent';
 
+  // ---- find in this conversation ----
+  // What is being looked for, and which occurrence of it is being pointed at.
+  // All of it lives here rather than in App: a search is a way of reading one
+  // conversation, and it ends when you leave.
+  const [findOpen, setFindOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [index, setIndex] = useState(0);
+  const findInput = useRef(null);
+  const composerFocus = useRef(null);
+  const searching = findOpen && query.trim().length > 0;
+
+  // How many times the word occurs in the whole thread, and where each message's
+  // numbering starts. The bubbles work out their own ranges from that, so a
+  // message arriving does not re-slice the ones above it.
+  const { total, bases } = useMemo(
+    () => threadHits(messages, searching ? query : ''),
+    [messages, searching, query]
+  );
+  // Which hit the arrows are on, kept inside the range whatever happens to the
+  // conversation underneath — a match can be erased while it is being read.
+  const current = total > 0 ? ((index % total) + total) % total : -1;
+
+  const openFind = useCallback(() => {
+    setFindOpen(true);
+    // The input does not exist yet on the frame the bar opens, so the focus goes
+    // in after it lands. Selected rather than merely focused: reaching for find
+    // again means looking for something else more often than adding to it.
+    requestAnimationFrame(() => {
+      const el = findInput.current;
+      if (el) {
+        el.focus();
+        el.select();
+      }
+    });
+  }, []);
+
+  const closeFind = useCallback(() => {
+    setFindOpen(false);
+    setQuery('');
+    // Back to where typing happens. Escape out of a search is nearly always
+    // followed by saying something, and leaving the focus on a button that is no
+    // longer on screen is leaving it nowhere.
+    composerFocus.current?.();
+  }, []);
+
+  // A search belongs to the conversation it was made in.
+  useEffect(() => {
+    setFindOpen(false);
+    setQuery('');
+    setIndex(0);
+  }, [peer?.id]);
+
+  useEffect(() => {
+    if (!canFind) return undefined;
+    // Command on macOS, Control everywhere else — and only that one. Ctrl+F on a
+    // Mac moves the cursor forward a character in a text field, and taking it
+    // would break typing in the composer to save a keystroke here.
+    const mac = navigator.platform.toLowerCase().includes('mac');
+    const onKey = (e) => {
+      if (e.altKey || e.key.toLowerCase() !== 'f') return;
+      if (mac ? !e.metaKey || e.ctrlKey : !e.ctrlKey || e.metaKey) return;
+      // The window has its own find, which searches a page that is not this
+      // conversation and cannot see the messages that have scrolled away.
+      e.preventDefault();
+      openFind();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [canFind, openFind]);
+
+  // A fresh word starts at the last occurrence, not the first: a conversation is
+  // read from the bottom, so the arrows walk back through it from where the
+  // reader already is.
+  useEffect(() => {
+    setIndex(Math.max(0, total - 1));
+    // `total` is deliberately not a dependency. It also changes when a message
+    // arrives mid-search, and being thrown back to the end of the conversation
+    // in the middle of a walk through it is the thing this must not do.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, peer?.id]);
+
+  const step = useCallback(
+    (by) => setIndex((i) => (total > 0 ? (((i + by) % total) + total) % total : 0)),
+    [total]
+  );
+
+  // Bringing the current occurrence into view. Centred by measuring rather than
+  // with scrollIntoView, which would also scroll whatever contains the pane.
+  useEffect(() => {
+    if (!searching || current < 0) return;
+    const scroller = scrollRef.current;
+    const hit = scroller?.querySelector(`[data-hit="${current}"]`);
+    if (!scroller || !hit) return;
+    const box = scroller.getBoundingClientRect();
+    const seen = hit.getBoundingClientRect();
+    scroller.scrollTop += seen.top - box.top - (box.height - seen.height) / 2;
+  }, [searching, current, total]);
+
+  // Read by the effect below without waking it: closing the bar should leave the
+  // reader where they found something, not throw them back to the newest message.
+  const searchingRef = useRef(false);
+  useEffect(() => {
+    searchingRef.current = searching;
+  }, [searching]);
+
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    // Nothing may move the view while a search is walking it: an agent answering
+    // mid-search would otherwise pull the conversation out from under the hit
+    // being read.
+    if (el && !searchingRef.current) el.scrollTop = el.scrollHeight;
   }, [messages, typing, awaiting]);
 
   const onScroll = () => {
@@ -101,7 +215,7 @@ export default function ChatPane({
   // Stable, so a card is not handed a new callback on every render of the pane.
   const keepAtBottom = useCallback(() => {
     const el = scrollRef.current;
-    if (el && atBottom.current) el.scrollTop = el.scrollHeight;
+    if (el && atBottom.current && !searchingRef.current) el.scrollTop = el.scrollHeight;
   }, []);
 
   if (!peer) {
@@ -137,12 +251,29 @@ export default function ChatPane({
             {isSession ? (
               <SessionTitle title={peer.name} onRename={(title) => onRenameSession(peer.id, title)} />
             ) : (
-              peer.name || peer.hostname
+              // In an element of its own, so a long name ellipsises instead of
+              // squeezing what sits beside it out of the header.
+              <span className="peer-name">{peer.name || peer.hostname}</span>
             )}
             {peer.shared && (
               <span className="tag" title="Shared with you from another tailnet">
                 shared
               </span>
+            )}
+            {/* Beside the name of the thing being searched, rather than in the
+                row of actions on the right: everything over there does something
+                to the whole conversation — writes it out, brings one in, deletes
+                it — and this only changes how it is being read. */}
+            {canFind && (
+              <button
+                className={`find-btn ${findOpen ? 'on' : ''}`}
+                onClick={() => (findOpen ? closeFind() : openFind())}
+                title="Find in this conversation"
+                aria-label="Find in this conversation"
+                aria-expanded={findOpen}
+              >
+                <Search size={15} />
+              </button>
             )}
           </div>
           {/* Which agent this session asks — the one thing a session has to be
@@ -262,6 +393,21 @@ export default function ChatPane({
           `inset: 0` would resolve against the scrolled content: it would be as
           tall as the whole conversation and would slide away as you read. */}
       <div className="messages-wrap">
+        {/* Over the top of the conversation, not above it: the header keeps its
+            height, nothing below moves, and the messages stay exactly where the
+            reader left them while the bar comes and goes. */}
+        {findOpen && (
+          <FindBar
+            query={query}
+            count={total}
+            index={current}
+            onQuery={setQuery}
+            onNext={() => step(1)}
+            onPrev={() => step(-1)}
+            onClose={closeFind}
+            inputRef={findInput}
+          />
+        )}
         <div className="messages" ref={scrollRef} onScroll={onScroll}>
           {messages.map((m, i) => {
             const prev = messages[i - 1];
@@ -288,6 +434,7 @@ export default function ChatPane({
                   // is nothing there to carry a context to.
                   onFork={onFork}
                   onResend={onResend}
+                  find={searching ? { query, base: bases.get(m.id) || 0, current } : undefined}
                 />
               </React.Fragment>
             );
@@ -364,6 +511,7 @@ export default function ChatPane({
         // dismissed, in the same row the document chips use.
         context={context}
         onRemoveContext={onRemoveContext}
+        focusRef={composerFocus}
       />
     </div>
   );

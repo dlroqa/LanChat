@@ -134,7 +134,17 @@ test('the harness mirrors the nesting the app actually renders', () => {
   }
 
   const markup = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'layout-harness.js'), 'utf8');
-  for (const cls of ['chat-wrap', 'chat-header', 'messages-wrap', 'messages', 'typing', 'composer-wrap', 'me-actions']) {
+  for (const cls of [
+    'chat-wrap',
+    'chat-header',
+    'messages-wrap',
+    'messages',
+    'typing',
+    'composer-wrap',
+    'me-actions',
+    'chat-actions',
+    'find-btn',
+  ]) {
     assert.match(markup, new RegExp(`class="${cls}"`), `the harness should still build .${cls}`);
   }
 });
@@ -228,6 +238,34 @@ test('laid out in a browser: the four actions under the name are whole at every 
     // out of the sidebar by it.
     assert.ok(m.search.top >= m.meActions.bottom, `${where}: the search box overlaps the actions above it`);
     assert.ok(m.peerList.top >= m.search.bottom, `${where}: the list overlaps the search box`);
+  }
+});
+
+test('laid out in a browser: the find button holds its place beside a name of any length', async () => {
+  const result = await laidOut();
+  if (skipped(result)) return;
+
+  for (const [name, m] of Object.entries(result.sizes)) {
+    const where = `${name} (${m.viewport.w}x${m.viewport.h})`;
+
+    // The header is pinned to --header-h so it lines up with the sidebar's
+    // profile block. Anything added to it has to fit inside that, not stretch it.
+    assert.equal(m.chatHeader.h, 67, `${where}: the header is ${m.chatHeader.h}px tall`);
+
+    // A round target, whole, and inside the row it belongs to.
+    assert.equal(m.findBtn.w, 26, `${where}: the find button is ${m.findBtn.w}px wide`);
+    assert.equal(m.findBtn.h, 26, `${where}: the find button is ${m.findBtn.h}px tall`);
+    assert.ok(m.findBtn.top >= m.chatHeader.top, `${where}: the find button sits above the header`);
+    assert.ok(m.findBtn.bottom <= m.chatHeader.bottom, `${where}: the find button runs past the header`);
+
+    // The name the harness carries is longer than the header is wide at every
+    // size. It must give way rather than push the button into — or past — the
+    // actions on the right, which is what happens without min-width: 0.
+    assert.ok(
+      m.findBtn.x + m.findBtn.w <= m.chatActions.x,
+      `${where}: the find button overlaps the actions by ${m.findBtn.x + m.findBtn.w - m.chatActions.x}px`
+    );
+    assert.ok(m.peerName.x + m.peerName.w <= m.findBtn.x, `${where}: the name runs under the find button`);
   }
 });
 

@@ -19,6 +19,12 @@ const DEFAULTS = Object.freeze({
   // into a card, which means LanChat fetching the page itself — the one thing in
   // the app that reaches past your own network, so it is a visible setting.
   linkPreviews: true,
+  // Which conversations offer the find bar beside their title. Off means every
+  // one of them; on narrows it to sessions, which are the threads that grow long
+  // enough for scrolling back through them to be the problem. Off by default:
+  // a chat with a person can be just as long, and the button costs nothing when
+  // it is not used.
+  findSessionsOnly: false,
   ringtone: 'classic', // see renderer lib/sounds.js
   ringtoneVolume: 0.8,
   customRingtonePath: null,
