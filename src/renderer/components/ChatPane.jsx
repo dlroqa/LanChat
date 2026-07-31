@@ -6,7 +6,7 @@ import Composer from './Composer.jsx';
 import AgentApproval from './AgentApproval.jsx';
 import AgentFlash from './AgentFlash.jsx';
 import SessionTitle from './SessionTitle.jsx';
-import { Phone, Video, Trash, Download, Upload, Sessions } from '../lib/icons.jsx';
+import { Phone, Video, Trash, Download, Upload, Sessions, Alert } from '../lib/icons.jsx';
 import { useQueueLabel } from './QueueBadge.jsx';
 import { useAgentPhrase } from '../lib/agentPhrase.js';
 import { formatDay, platformLabel } from '../lib/util.js';
@@ -48,10 +48,16 @@ export default function ChatPane({
   // Sessions: the agents one can be pointed at, renaming it, loading a saved
   // conversation into it, and branching a new question off any bubble.
   agents = [],
+  // Agents this peer is sharing, offered while an `@` is typed at them.
+  mentionables = [],
   onRenameSession,
   onSetSessionAgent,
   onImportText,
   onFork,
+  // Putting a question that failed back into the composer. Given on the same
+  // threads as onFork, since both only mean anything where a question can be
+  // asked.
+  onResend,
   approval,
   agentStream,
   onApprove,
@@ -229,6 +235,27 @@ export default function ChatPane({
         </div>
       </div>
 
+      {/* This session had errors swept out of it that named no question, so the
+          questions behind them are gone and cannot be put back. Said here rather
+          than only in the dialog that removed them: the consequence turns up
+          later, at the moment somebody forks from a conversation with holes in
+          it, and by then the dialog is a memory.
+
+          Not dismissable, and it does not need to be — asking anything new
+          clears it, which is also the thing that fixes what it is warning about. */}
+      {isSession && peer.needsContext && (
+        <div className="context-warning" role="status">
+          <span className="context-warning-mark" aria-hidden="true">
+            <Alert size={15} />
+          </span>
+          <span>
+            Errors were removed from this conversation, and the questions they belonged to could not
+            be recovered. Reconnect the context before forking from it — ask {thinkerName} something
+            to pick the thread back up.
+          </span>
+        </div>
+      )}
+
       {/* The light lives beside the scroller rather than inside it. Inside, its
           `inset: 0` would resolve against the scrolled content: it would be as
           tall as the whole conversation and would slide away as you read. */}
@@ -258,6 +285,7 @@ export default function ChatPane({
                   // can be started from. Never in a chat with a person — there
                   // is nothing there to carry a context to.
                   onFork={onFork}
+                  onResend={onResend}
                 />
               </React.Fragment>
             );
@@ -326,6 +354,7 @@ export default function ChatPane({
               ? 'Ask the agent…  (Enter to send, Shift+Enter for newline)'
               : undefined
         }
+        mentionables={mentionables}
         docs={docs}
         onRemoveDoc={onRemoveDoc}
         // What a fork pinned: shown above the input until it is sent or

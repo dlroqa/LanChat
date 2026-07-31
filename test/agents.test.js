@@ -33,7 +33,6 @@ const { describeSocketError, profilePrefix } = require('../src/main/agents/trans
 const { discoverProfiles, isLocalHost } = require('../src/main/agents/profiles.js');
 const { createVirtualSocket, OPEN, CLOSED } = require('../src/main/agents/virtualSocket.js');
 const { createAgentHub, LOCAL_ORIGIN } = require('../src/main/agents/index.js');
-const { greetingLine } = require('../src/main/agents/turnCopy.js');
 const { buildArgs } = require('../src/main/agents/transports/spawn.js');
 const { PeerHub } = require('../src/main/peers.js');
 const { MessageStore } = require('../src/main/store.js');
@@ -1767,30 +1766,33 @@ async function summonHub(opts = {}) {
   return { ...h, agent, relayed: captureSend(h.hub) };
 }
 
-test('a bare @name is answered rather than run', async () => {
-  const { agentHub, log, relayed, bus } = await summonHub();
+test('a bare @name is a trigger: nothing is run, and nothing is said', async () => {
+  const { agentHub, hub, log, relayed, bus, agent } = await summonHub();
   const requests = [];
   bus.on('agent-request', (r) => requests.push(r));
 
   assert.equal(agentHub.routeFromPeer('friend', '@Hermes'), true, 'the summon is consumed');
   await new Promise((r) => setImmediate(r));
 
-  // The whole point: no prompt of nothing, so no run of nothing.
+  // No prompt of nothing, so no run of nothing.
   assert.deepEqual(log, [], 'the transport was never run');
 
-  const replies = relayed.filter((r) => r.obj.type === 'agent-reply');
-  assert.equal(replies.length, 1, 'exactly one greeting goes back');
-  assert.equal(replies[0].peerId, 'friend', 'and only to whoever summoned it');
-  assert.equal(replies[0].obj.text, greetingLine('Hermes'));
-  assert.equal(replies[0].obj.notice, undefined, 'kept, not swept away as a notice');
-  // The string this whole change exists to remove.
-  assert.doesNotMatch(replies[0].obj.text, /no output/i);
+  // And no words either way. `@Hermes` is how you open an agent rather than
+  // something anybody said, so neither half of it is written down: not the
+  // synthesised `@name` bubble, and not a greeting to sit under it.
+  assert.deepEqual(
+    relayed.filter((r) => r.obj.type === 'agent-reply'),
+    [],
+    'no greeting goes back'
+  );
+  assert.deepEqual(requests, [], 'and nothing is filed in the agent thread');
 
-  // The summon is written into the agent's own thread, and the text is
-  // synthesised here rather than relayed — the frame carries none.
-  assert.equal(requests.length, 1);
-  assert.equal(requests[0].text, '@Hermes');
-  assert.equal(requests[0].peerId, 'friend');
+  // What it does produce is the one thing a summon is for: the thread exists, so
+  // the agent is there to be opened.
+  assert.ok(
+    hub.identities.has(`${agent.id}#friend`),
+    'the delegate thread is on the roster, ready to be opened'
+  );
 });
 
 test('a summon spends no turn, so the introduction does not cost the first question', async () => {
@@ -1884,7 +1886,7 @@ test('a summon from a peer who may not reach the agent gets nothing at all', asy
   }
 });
 
-test('a summon flood produces one greeting, and still never lands in the human chat', async () => {
+test('a summon flood is absorbed, and still never lands in the human chat', async () => {
   const { agentHub, log, relayed, bus } = await summonHub();
   const requests = [];
   bus.on('agent-request', (r) => requests.push(r));
@@ -1893,8 +1895,12 @@ test('a summon flood produces one greeting, and still never lands in the human c
   for (let i = 0; i < 20; i += 1) returns.push(agentHub.routeFromPeer('friend', '@Hermes'));
   await new Promise((r) => setImmediate(r));
 
-  assert.equal(relayed.filter((r) => r.obj.type === 'agent-reply').length, 1, 'the throttle holds');
-  assert.equal(requests.length, 1, 'and a flood of the same synthesised line is written down once');
+  // Nothing is said now, so the throttle is no longer about words. It is about
+  // the roster: ensureDelegateIdentity touches it, and republishing presence
+  // twenty times on twenty keystrokes is a denial of service whether or not any
+  // text comes with it.
+  assert.deepEqual(relayed.filter((r) => r.obj.type === 'agent-reply'), [], 'nothing is said back');
+  assert.deepEqual(requests, [], 'and nothing is written down');
   assert.deepEqual(log, [], 'nothing was ever run');
   // The load-bearing one. ipc.js reads this return value to decide whether the
   // message was consumed; a `false` here would drop a bare `@Hermes` into the

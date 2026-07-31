@@ -90,6 +90,27 @@ test('a commit is a question asked here, and nothing else is', () => {
   assert.equal(commitCount(thread), 2);
 });
 
+test('a question the run failed on is not a commit, even though it is still in the thread', () => {
+  const thread = [
+    { direction: 'out', kind: 'text', text: 'what is the time' },
+    { direction: 'in', kind: 'text', text: 'half past' },
+    // Asked, and nothing came back: the run timed out. The bubble stays — it is
+    // what was asked, and there is a button on it to put it back in the composer
+    // — but the box must not claim two answers where there was one.
+    { direction: 'out', kind: 'text', text: 'and the date?', failed: true },
+    // The error itself never reaches disk, and would not count in any case: it
+    // came in rather than out.
+    {
+      direction: 'in',
+      kind: 'text',
+      text: "⚠️ ACP call 'session/prompt' timed out.",
+      notice: true,
+      error: true,
+    },
+  ];
+  assert.equal(commitCount(thread), 1);
+});
+
 test('an empty or unloaded thread is nought rather than nothing', () => {
   assert.equal(commitCount([]), 0);
   assert.equal(commitCount(undefined), 0);

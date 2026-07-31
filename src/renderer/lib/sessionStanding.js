@@ -67,13 +67,20 @@ export function sessionStandingLabel(peer, busy) {
 // make a freshly loaded session open on a number nobody in it had earned. A
 // refused send is shown and then taken away (App.jsx), so counting it would tick
 // the box up and back down again for something that was never asked.
+//
+// Nor is a question that failed. It was asked, and it is still in the thread to
+// be read and re-sent, but nothing came back from it — an ACP timeout is not
+// work the session got out of the agent, and counting it would have the box
+// claim two answers where there was one. The mark comes from main, which knows
+// which question a failed run was answering; it is on disk, so a session
+// re-opened tomorrow opens on the same number it closed on.
 export function commitCount(messages) {
   if (!Array.isArray(messages)) return 0;
   let n = 0;
   for (const m of messages) {
     if (!m || m.direction !== 'out') continue;
     if (m.kind && m.kind !== 'text') continue;
-    if (m.imported || m.rejected || m.notice) continue;
+    if (m.imported || m.rejected || m.notice || m.failed) continue;
     n += 1;
   }
   return n;

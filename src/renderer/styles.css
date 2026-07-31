@@ -373,6 +373,51 @@ input:focus-visible {
 .peer.offline .name {
   opacity: 0.55;
 }
+
+/* ---- summoned ------------------------------------------------------------
+   An agent asked to be here with a bare `@name`, and not opened yet.
+
+   A summon writes no message on either machine, so there is no unread count to
+   carry it and nothing in the thread to find. The row itself has to be the
+   signal, and it keeps signalling until it is clicked rather than fading on a
+   timer — it is a thing waiting to be looked at, not an announcement that
+   expires.
+
+   The pulse repeats, which decorative motion in this app never does. That is
+   deliberate and it is the reason the tag beside the name exists: the words say
+   the same thing, so nothing depends on the animation being seen, or on it being
+   running at all. */
+.peer.summoned {
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  box-shadow: inset 2px 0 0 var(--primary);
+  animation: peer-summoned 2s ease-in-out infinite;
+}
+/* Selected wins: once it is open the pulse has done its job, and the row must
+   read as the conversation you are in rather than as one still calling. */
+.peer.summoned.active {
+  animation: none;
+}
+/* The subtitle carries the word, so it is not the muted grey the other subtitles
+   are — it is the thing the row is saying. */
+.peer.summoned .sub {
+  color: var(--fg);
+  font-weight: 600;
+}
+@keyframes peer-summoned {
+  50% {
+    background: color-mix(in srgb, var(--primary) 30%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* The global switch already stops the animation. Left with the steady tint and
+     the bar, so the row still stands out — a signal that exists only while it is
+     moving is no signal at all for anybody who has turned motion off. */
+  .peer.summoned {
+    animation: none;
+    background: color-mix(in srgb, var(--primary) 24%, transparent);
+  }
+}
+
 /* update checker */
 .update-row {
   display: flex;
@@ -734,6 +779,34 @@ input:focus-visible {
    otherwise refuse to shrink and push the composer off the bottom of the window.
    `isolation` contains the blend modes the light uses, so they mix with the chat
    background rather than with the window behind it. */
+/* ---- missing context -------------------------------------------------------
+   A session that had errors swept out of it which named no question. The
+   questions behind them are gone and cannot be put back, so a fork from here is
+   asking about a conversation with holes in it.
+
+   Above the conversation rather than inside it: it is a fact about the whole
+   thread, not a thing that was said at a particular moment, and a bubble in the
+   scroller would scroll away from the place it applies to. It has no dismiss —
+   asking anything new clears it, and that is also what fixes it. */
+.context-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  flex: none;
+  padding: 9px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 35%, var(--border));
+  background: color-mix(in srgb, var(--warn) 11%, var(--bg-2));
+  color: var(--fg);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.context-warning-mark {
+  flex: none;
+  display: inline-flex;
+  margin-top: 1px;
+  color: var(--warn);
+}
+
 .messages-wrap {
   position: relative;
   /* A column, because it holds the scrolling list *and* the typing row beneath it.
@@ -1253,6 +1326,58 @@ input:focus-visible {
     transform: translateY(4px);
   }
 }
+
+/* ---- the @ menu -----------------------------------------------------------
+   Agents a peer is sharing, offered while an `@` is being typed at them.
+
+   Above the input rather than below it: the composer already sits at the bottom
+   of the window, and a list under it would be off the screen. It sits in the
+   flow above the composer rather than floating over the conversation, so it
+   never covers the message somebody is answering. */
+.mention-menu {
+  max-height: 208px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+  animation: doc-chip-in 0.16s ease both;
+}
+.mention-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  /* Comfortably clickable, and comfortably readable: this is a name being
+     chosen, not a dense list being scanned. */
+  min-height: 36px;
+  font-size: 13.5px;
+}
+/* The highlight is a fill *and* a bar. Colour alone would leave the current
+   option indistinguishable to anybody who cannot see the difference between two
+   dark blues — and this is the one thing on screen that Enter is about to act
+   on. */
+.mention-item.active {
+  background: var(--surface-hover);
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+.mention-name {
+  font-weight: 600;
+  color: var(--fg);
+}
+.mention-via {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+@media (prefers-reduced-motion: reduce) {
+  .mention-menu {
+    animation: none;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .composer-doc {
     animation: none;
@@ -1680,6 +1805,15 @@ input:focus-visible {
   gap: 10px;
   justify-content: flex-end;
   margin-top: 8px;
+}
+/* The part of a dialog that cannot be undone, set apart from the part that is
+   merely explanation — so the consequence is not read as more of the same. */
+.modal .desc.warn-note {
+  padding: 10px 12px;
+  border-left: 2px solid var(--warn);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  color: var(--fg);
 }
 .row {
   display: flex;
@@ -3907,6 +4041,152 @@ code.path {
      sit there looking sent. */
   .bubble-row.out .bubble.rejected {
     animation: bubble-reject-out 260ms ease-in 640ms forwards;
+  }
+}
+
+/* ---- failed runs ----------------------------------------------------------
+   A run that errored. Two bubbles are involved and they are going opposite
+   ways: the error is reported and then erased, while the question it failed
+   stays put and stops counting.
+
+   The error is never written to disk (agents/index.js), so nothing here is
+   undoing anything — the countdown is only about when the bubble goes. Timed
+   against ERROR_TTL_MS and DISSOLVE_MS in App.jsx; the sentence under it counts
+   the same clock down in words. */
+
+.bubble.errored {
+  background: color-mix(in srgb, var(--danger) 16%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--danger) 42%, transparent);
+}
+
+/* The caption belongs under the bubble, not beside it, and the row is a flex
+   line. Wrapping is switched on only for this row so no other row's layout
+   moves. */
+.bubble-row.erasing {
+  flex-wrap: wrap;
+}
+
+.bubble-erase {
+  flex-basis: 100%;
+  margin: 3px 2px 0;
+  font-size: 11px;
+  line-height: 1.4;
+  /* Muted rather than faint. `--fg-faint` is the timestamp colour and measures
+     3.1:1 against the conversation background — fine for a clock nobody has to
+     read, and not fine for a sentence explaining that something is about to be
+     deleted. `--fg-muted` measures 7.6:1. */
+  color: var(--fg-muted);
+  /* The seconds change once a second and must not change the width of the line
+     with them. */
+  font-variant-numeric: tabular-nums;
+}
+
+.bubble-row.out .bubble-erase {
+  text-align: right;
+}
+
+/* Coming apart rather than blinking out, so it is clear the app removed it on
+   purpose and did not simply lose it. Transform, opacity and filter only —
+   nothing here can force the conversation above it to lay out again. */
+.bubble-row.erasing.dissolving {
+  animation: bubble-disintegrate 620ms ease-in forwards;
+  will-change: transform, opacity, filter;
+}
+
+@keyframes bubble-disintegrate {
+  0% {
+    opacity: 1;
+    filter: blur(0);
+    transform: none;
+  }
+  55% {
+    opacity: 0.45;
+    filter: blur(2px);
+    transform: translateY(-3px) scale(0.985);
+  }
+  100% {
+    opacity: 0;
+    filter: blur(7px);
+    transform: translateY(-10px) scale(0.94);
+  }
+}
+
+/* The question that failed.
+
+   Muted by draining the colour out of the bubble rather than by fading the whole
+   thing. `opacity` composites the words toward the background along with the
+   fill behind them, and measured 3.1:1 — a question you are being invited to
+   read and send again must not be the hardest thing on screen to read. Mixing
+   the fill back toward the surface instead leaves the text at full strength
+   (~10:1) while still reading as spent.
+
+   And never by colour alone: the dashed border says the same thing the queued
+   bubble's does, `· not answered` says it in words, and the button beside it is
+   the thing to do about it. */
+.bubble-row.out .bubble.failed {
+  background: color-mix(in srgb, var(--primary) 45%, var(--surface));
+  border: 1px dashed color-mix(in srgb, var(--on-primary) 34%, transparent);
+}
+
+.failed-mark {
+  margin-left: 5px;
+  /* Lifted off the token, because `--warn` itself only just clears the bar
+     against the drained fill. Derived from it rather than picked, so it still
+     moves with the palette. */
+  color: color-mix(in srgb, var(--warn) 78%, #fff);
+  font-weight: 600;
+}
+
+/* Same placement and same reveal as .bubble-fork: outside the bubble, on hover
+   and on keyboard focus. A failed question is on the sent side, so it takes the
+   inside position for the same reason the fork button does. */
+.bubble-resend {
+  flex: none;
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  margin: 0 2px 2px;
+  border-radius: 50%;
+  color: var(--fg-faint);
+  opacity: 0;
+  transform: scale(0.92);
+  transition:
+    opacity 0.14s ease,
+    transform 0.14s ease,
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.bubble-row:hover .bubble-resend,
+.bubble-resend:focus-visible {
+  opacity: 1;
+  transform: none;
+}
+
+.bubble-resend:hover {
+  background: var(--surface-hover);
+  color: var(--primary);
+}
+
+.bubble-row.out .bubble-resend {
+  order: -1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The global switch already removes the disintegration. Removal is driven by
+     a timer in App.jsx rather than by animationend precisely because of that —
+     an event that never fires would leave the error on screen forever. Stated
+     here as well so the rule is readable where the animation is. */
+  .bubble-row.erasing.dissolving {
+    animation: none;
+    opacity: 0;
+  }
+  .bubble-resend {
+    transition: opacity 0.14s ease;
+    transform: none;
   }
 }
 

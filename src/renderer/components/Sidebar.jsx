@@ -35,6 +35,9 @@ export default function Sidebar({
   tailnetStatus,
   selectedId,
   unread,
+  // Agents summoned and not yet opened. A summon writes no message, so there is
+  // no unread count to carry it — the row says so itself, until it is clicked.
+  summoned = {},
   queued = {},
   authFailures = {},
   showAddresses,
@@ -107,7 +110,9 @@ export default function Sidebar({
   const peerRow = (p) => (
     <div
       key={p.id}
-      className={`peer ${p.id === selectedId ? 'active' : ''} ${p.online ? '' : 'offline'}`}
+      className={`peer ${p.id === selectedId ? 'active' : ''} ${p.online ? '' : 'offline'} ${
+        summoned[p.id] ? 'summoned' : ''
+      }`}
       onClick={() => onSelect(p.id)}
     >
       <Avatar name={p.name} id={p.id} avatar={p.avatar} online={p.online} />
@@ -131,14 +136,24 @@ export default function Sidebar({
         </div>
         <div className="sub">
           {p.kind === 'agent'
-            ? // A shared agent says whose it is, so it is never mistaken for
-              // one of your own: `delegate` is a peer's conversation with
-              // your agent, `remote` is an agent a peer shared with you.
-              p.delegate || p.remote
-              ? `Agent · via ${p.viaName}`
-              : p.online
-                ? `Agent · ${p.agentKind}`
-                : 'Agent · off'
+            ? // Summoned and not opened yet. Said here rather than as a second
+              // tag beside the name: at this width two tags squeeze the name
+              // down to "Tes…", and the name is the thing being looked for. The
+              // subtitle already carries what the row is doing, and it has the
+              // room.
+              //
+              // In words as well as in the pulse, because the pulse is the one
+              // part of this a reader with motion turned off will never see.
+              summoned[p.id]
+              ? `Summoned · via ${p.viaName}`
+              : // A shared agent says whose it is, so it is never mistaken for
+                // one of your own: `delegate` is a peer's conversation with
+                // your agent, `remote` is an agent a peer shared with you.
+                p.delegate || p.remote
+                ? `Agent · via ${p.viaName}`
+                : p.online
+                  ? `Agent · ${p.agentKind}`
+                  : 'Agent · off'
             : p.online
               ? platformLabel(p.platform) || 'Online'
               : authFailures[p.id]

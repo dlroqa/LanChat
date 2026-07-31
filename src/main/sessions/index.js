@@ -42,6 +42,30 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry }
     return sessions.update(id, { agentId: agentId || null });
   }
 
+  // Sweeping the errors an older version wrote into this session.
+  //
+  // Two things go together and must not come apart: the messages leave the
+  // transcript, and the same number is taken off what the session claims to have
+  // asked. An error that was written down is one question that was not answered,
+  // so removing the noise without removing the commit would leave the box
+  // counting work the session never got.
+  //
+  // The ids are decided in the window, which is also where the person is asked
+  // whether they want this at all. Only what was really removed is counted:
+  // pressing the button twice must not take the total down twice.
+  function sweepErrors(sessionId, ids) {
+    const record = sessions.get(sessionId);
+    if (!record) return { removed: 0 };
+    const removed = store.remove(sessionId, ids);
+    if (!removed) return { removed: 0 };
+    // `needsContext` rides along because it is the same fact seen from the other
+    // side: these errors named no question, so the questions behind them cannot
+    // be put back, and a fork from here is asking about a conversation with holes
+    // in it.
+    sessions.update(sessionId, { unlinkedFailures: removed, needsContext: true });
+    return { removed, record: sessions.get(sessionId) };
+  }
+
   // Removing a session takes its conversation with it. The record and the
   // transcript are two halves of one thing, and leaving the history file behind
   // would keep a deleted workspace on disk under a name nothing points at any
@@ -100,6 +124,16 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry }
     const quoted = contextRecord(context);
     const composed = composeContext(quoted, prompt == null ? text : prompt);
 
+    // Asking something new is the end of the missing-context warning. It was
+    // there to say the session had lost questions that could not be put back;
+    // once there is a fresh question in it, there is context again and the
+    // warning has nothing left to warn about.
+    //
+    // Cleared when the question is accepted rather than when it is answered: it
+    // is the asking that re-establishes what this session is about, and a run
+    // that fails does not put the hole back.
+    if (record.needsContext) sessions.update(sessionId, { needsContext: false });
+
     // An agent a peer shared with us. The question travels to its owner, and the
     // answer is routed back to this session rather than to the agent's own
     // thread — see `pendingThread` in agents/remote.js for how, and why that is
@@ -140,7 +174,10 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry }
     // question it was answering.
     store.append(sessionId, message);
     sessions.touch(sessionId);
-    agentHub.ask(record.agentId, composed, { thread: sessionId });
+    // `ref` is what makes a failure attributable: if this run errors, the error
+    // comes back naming this message, and this message stops counting as a
+    // question that was answered.
+    agentHub.ask(record.agentId, composed, { thread: sessionId, ref: message.id });
     return { ...message, delivered: true };
   }
 
@@ -192,7 +229,19 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry }
     return String(source).replace(/\.[^.]+$/, '');
   }
 
-  return { list, get, create, rename, setAgent, remove, unbindAgent, send, importText, isSessionId };
+  return {
+    list,
+    get,
+    create,
+    rename,
+    setAgent,
+    remove,
+    unbindAgent,
+    sweepErrors,
+    send,
+    importText,
+    isSessionId,
+  };
 }
 
 module.exports = { createSessions, isSessionId };

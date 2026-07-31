@@ -55,6 +55,33 @@ class MessageStore {
     return list[idx];
   }
 
+  // Takes named messages out of a thread.
+  //
+  // The one place history is deleted a piece at a time rather than a file at a
+  // time, so it is deliberately incurious: it deletes exactly the ids it is
+  // given and decides nothing for itself. Which messages deserve to go is a
+  // judgement, and it is made where the judgement can be explained to somebody
+  // and agreed to — see the error sweep in the renderer, which asks first.
+  //
+  // Returns how many actually went. Ids that are not there are not an error, but
+  // they must not be counted: the caller uses the number to correct a commit
+  // total, and a count that included them would take away work that was done.
+  remove(peerId, ids) {
+    const wanted = new Set(Array.isArray(ids) ? ids : [ids]);
+    if (!wanted.size) return 0;
+    const list = this.read(peerId);
+    const kept = list.filter((m) => !(m && wanted.has(m.id)));
+    const gone = list.length - kept.length;
+    if (!gone) return 0;
+    try {
+      fs.writeFileSync(this.fileFor(peerId), JSON.stringify(kept), 'utf8');
+    } catch (err) {
+      console.error('[store] remove failed:', err.message);
+      return 0;
+    }
+    return gone;
+  }
+
   // An agent thread should hold what was asked and what came back. Older versions
   // also wrote the machinery around that — whose turn it is, where you are in the
   // queue, that the agent is busy — as ordinary messages, so upgrading stops new

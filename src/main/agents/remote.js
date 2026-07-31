@@ -214,6 +214,10 @@ function createRemoteAgents({ hub, store }) {
     // deletes the whole record. If concurrent questions are ever allowed, this
     // has to become a `ref` echoed by the owner rather than a field here.
     entry.pendingThread = thread || null;
+    // And which message it was, kept for the same span and on the same reasoning,
+    // so a failure can be attributed to the question that caused it rather than
+    // to whatever happens to be last in the thread.
+    entry.pendingRef = message.id;
     const ok = hub.send(ownerPeerId, { type: 'agent-chat', agentId: entry.agentId, text: prompt ?? text });
     store.append(into, message);
     return { ...message, delivered: ok };
@@ -222,34 +226,35 @@ function createRemoteAgents({ hub, store }) {
   // A bare `@name`, with nothing after it. The agent is not being asked anything
   // — it is being asked to be here.
   //
+  // A trigger, and nothing else. Nothing is written on this machine and nothing
+  // is written on the owner's: `@Tessie` is how you open an agent, not something
+  // anybody said, and a thread that keeps it is keeping a keystroke. What the
+  // summon produces is the thing it is for — show() reveals the contact, so the
+  // agent appears under Agents and can be opened.
+  //
   // Deliberately not routed through send(). Most of that function is the
   // held-question refusal, and none of it applies: a summon cannot be a duplicate
   // of a question, so being told to wait for a turn it does not even spend would
   // be answering something nobody asked. There is no prompt and no documents here
   // either.
-  //
-  // What it does share with send() is the two lines that matter — show() reveals
-  // the contact, and the bubble is filed under the agent's thread rather than the
-  // chat with its owner. The greeting itself is not ours to write: the frame goes
-  // to the owner, whose gates decide whether the agent answers at all, and the
-  // answer comes back through the ordinary agent-reply path.
-  function summon(ownerPeerId, entry, text) {
-    show(ownerPeerId, entry);
-    const message = {
-      id: crypto.randomUUID(),
-      peerId: entry.id,
-      direction: 'out',
-      kind: 'text',
-      text,
-      ts: Date.now(),
-    };
+  function summon(ownerPeerId, entry) {
+    // Sent first, and everything else hangs off whether it went.
+    //
+    // This is what lets the window light the agent's row without waiting to hear
+    // back. The row pulsing has to mean the summon worked, and it can: the
+    // composer only offers agents their owner is currently advertising to us —
+    // an advert is withdrawn the moment sharing stops — so a name that reaches
+    // here is one we are allowed to ask. Reachability is the remaining condition,
+    // and hub.send already answers it rather than it having to be guessed at:
+    // false means the owner is not connected and nothing left this machine.
     const ok = hub.send(ownerPeerId, { type: 'agent-summon', agentId: entry.agentId });
-    store.append(entry.id, message);
-    // `summoned` is on what the renderer is handed and not on what is written down:
-    // it marks *this* moment of connection, so a copy of it read back off disk
-    // tomorrow must not announce one. History keeps what was said, not what the
-    // window did about it.
-    return { ...message, summoned: true, delivered: ok };
+    // Revealed only if it did. An agent added to the roster by a summon that
+    // never arrived would be a contact that appeared because of something that
+    // did not happen.
+    if (ok) show(ownerPeerId, entry);
+    // No message: there is nothing to append and nothing to hand back. `threadId`
+    // is what the window needs — which row to light, and which thread it opens.
+    return { summoned: ok, delivered: ok, threadId: entry.id };
   }
 
   // An answer coming back. Filed under the agent's thread, never under the chat
@@ -263,12 +268,26 @@ function createRemoteAgents({ hub, store }) {
     // dropped rather than kept. This is the copy the asking peer actually reads,
     // so it is where the queue chatter would otherwise pile up.
     const notice = msg.notice === true;
+    // The owner's run failed. It arrives as a notice — nothing about it is worth
+    // keeping — but it is not queue chatter, and the window shows it differently.
+    const error = msg.error === true;
     // A session asked this, so the answer belongs there and not in the agent's
     // own thread. Queue chatter goes to the same place — it is about the
     // question that is waiting — but only a real answer ends the correlation:
     // being told you are third in line does not mean you have been answered.
     const into = entry.pendingThread || entry.id;
-    if (!notice) entry.pendingThread = null;
+    // Which of our messages this is the outcome of. The owner cannot tell us —
+    // the id is ours and means nothing on their machine — so the error is matched
+    // against the question we have outstanding, which is sound for exactly the
+    // reason `pendingThread` is: there is only ever one.
+    const ref = entry.pendingRef;
+    // An error ends the correlation as surely as an answer does. The run is over
+    // and nothing further is coming for that question, so holding the thread open
+    // would file the *next* answer against a question that already failed.
+    if (!notice || error) {
+      entry.pendingThread = null;
+      entry.pendingRef = null;
+    }
     const message = {
       id: crypto.randomUUID(),
       peerId: into,
@@ -277,8 +296,13 @@ function createRemoteAgents({ hub, store }) {
       text: msg.text,
       ts: msg.ts || Date.now(),
       ...(notice && { notice: true }),
+      ...(error && { error: true, ...(ref && { failedRef: ref }) }),
     };
     if (!notice) store.append(into, message);
+    // The error itself is never written down; the mark it leaves on the question
+    // is, so a question that was never answered is still not counted as one after
+    // a restart.
+    if (error && ref) store.update(into, ref, { failed: true });
     return message;
   }
 

@@ -35,18 +35,14 @@ function busyLine(name, position) {
   return `${name} is busy with someone else. You are #${position} in line — ask again when it is your turn.`;
 }
 
-// A bare `@name` with nothing after it. The agent is not being asked anything —
-// it is being asked to be here — so this is what it says when it arrives.
+// A bare `@name` used to be answered with a greeting here. It no longer is: a
+// summon opens the agent's thread and writes nothing, on either machine, so
+// there is no line to write. The thread it opens is for the questions and the
+// answers, and "Hello — X here" was neither.
 //
-// Written by the owner's machine and never by the asker's. A greeting is the
-// agent's to give, and one invented locally would be claiming it spoke when it
-// may be switched off, unreachable, or not shared with whoever typed the name.
-//
-// It also says what to do next, because the moment somebody summons an agent is
-// the moment they are trying to find out whether the channel works at all. The
-// old answer to that question was the word `(no output)`.
-function greetingLine(name) {
-  return `Hello — ${name} here. Ask me anything.`;
-}
+// What made the greeting worth having was that it proved the channel worked, and
+// that job has moved rather than gone: the asking side only offers a name its
+// owner is currently advertising, so reaching one at all is the proof, and the
+// agent's row says so by pulsing until it is opened.
 
-module.exports = { heldLine, rotatedLine, busyLine, greetingLine };
+module.exports = { heldLine, rotatedLine, busyLine };

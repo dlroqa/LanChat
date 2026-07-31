@@ -99,6 +99,27 @@ class SessionRegistry {
     if (!record) return null;
     if (patch.title !== undefined) record.title = cleanTitle(patch.title);
     if (patch.agentId !== undefined) record.agentId = patch.agentId || null;
+    // How many questions in this session failed without leaving a mark on the
+    // question itself.
+    //
+    // Errors written before failures were attributable name nothing, so there is
+    // no way to say *which* question each belonged to — and guessing would write
+    // a false commit, which is worse than the wrong total it was meant to fix.
+    // The count does not need the link: every error came from exactly one failed
+    // run, so N errors swept from a thread means N of its questions were not
+    // answered. Subtracting N is arithmetic rather than attribution.
+    //
+    // Added to rather than replaced, so a session swept twice does not forget the
+    // first correction. Clamped at nought, because a negative would be a
+    // correction inventing work.
+    if (patch.unlinkedFailures !== undefined) {
+      record.unlinkedFailures = Math.max(0, (record.unlinkedFailures || 0) + patch.unlinkedFailures);
+    }
+    // Whether this session has lost questions it can no longer put back. Set with
+    // the correction above and cleared when the session is asked something new —
+    // by then there is fresh context and the warning has nothing left to warn
+    // about.
+    if (patch.needsContext !== undefined) record.needsContext = Boolean(patch.needsContext);
     record.updatedAt = Date.now();
     this.#save();
     return record;

@@ -1,8 +1,14 @@
 import React, { useMemo, useState } from 'react';
 import { formatTime, formatBytes, isImage, isVideo, isAudio } from '../lib/util.js';
-import { FileIcon, Download, Fork } from '../lib/icons.jsx';
+import { FileIcon, Download, Fork, Restore } from '../lib/icons.jsx';
 import { linkify } from '../lib/linkify.js';
+import { useCountdown } from '../lib/useCountdown.js';
 import LinkPreview from './LinkPreview.jsx';
+
+// How long an error is given before it erases itself. The timer that actually
+// removes it lives in App.jsx; this is the same number, for the sentence that
+// says so. They are two views of one fact rather than two facts.
+const ERROR_TTL_S = 10;
 
 // previewUrl builds a localhost URL the main-process server streams the file from.
 export default function MessageBubble({
@@ -22,6 +28,9 @@ export default function MessageBubble({
   // that can answer one — a session, or an agent thread a session can be
   // started from — so a chat with a person never grows the affordance.
   onFork,
+  // Putting a question that failed back into the composer, with whatever it was
+  // asking about. Offered on the same threads as onFork.
+  onResend,
 }) {
   const out = msg.direction === 'out';
 
@@ -48,14 +57,35 @@ export default function MessageBubble({
   // Refused because a question of ours is already waiting to be read. It exists
   // only in this window and only for a moment — long enough to be seen going.
   const rejected = out && msg.rejected === true;
+  // A run that failed. Never written down, and on its way out from the moment it
+  // arrives: `dissolving` is App.jsx saying the count has reached zero.
+  const errored = !out && msg.error === true;
+  const dissolving = msg.dissolving === true;
+  // The question that error was the outcome of. Still here to be read and put
+  // back, but no longer claiming to have been answered.
+  const failed = out && msg.failed === true;
 
   // Only text can be quoted into a question: a file is a thing on disk, and
   // "here is a photo I once sent" is not a context an agent can read.
   const forkable = Boolean(onFork) && msg.kind !== 'file' && Boolean(msg.text) && !msg.notice && !rejected;
+  const resendable = failed && Boolean(onResend) && Boolean(msg.text);
+
+  // Counted here rather than passed in, so the sentence and the bubble it sits
+  // under read the same clock. Stops at the moment the bubble starts to go —
+  // "in 0s" under something already coming apart is a promise about the past.
+  const left = useCountdown(ERROR_TTL_S, errored && !dissolving);
 
   return (
-    <div className={`bubble-row ${out ? 'out' : 'in'} ${grouped ? 'grouped' : ''}`}>
-      <div className={`bubble ${queued ? 'queued' : ''} ${rejected ? 'rejected' : ''}`}>
+    <div
+      className={`bubble-row ${out ? 'out' : 'in'} ${grouped ? 'grouped' : ''} ${
+        errored ? 'erasing' : ''
+      } ${dissolving ? 'dissolving' : ''}`}
+    >
+      <div
+        className={`bubble ${queued ? 'queued' : ''} ${rejected ? 'rejected' : ''} ${
+          errored ? 'errored' : ''
+        } ${failed ? 'failed' : ''}`}
+      >
         {/* What this question was asked about. Stored on the message rather than
             folded into its text, so the transcript keeps the question somebody
             typed and shows separately what it was carrying. */}
@@ -115,6 +145,14 @@ export default function MessageBubble({
               · not your turn
             </span>
           )}
+          {/* Asked, but nothing came back from it. Said in words as well as in
+              the dimming, because a bubble that is merely paler than its
+              neighbours is not telling anybody anything. */}
+          {failed && (
+            <span className="failed-mark" title="The run that was answering this failed — it was not counted">
+              · not answered
+            </span>
+          )}
         </div>
       </div>
       {/* Outside the bubble, beside it. Inside, it would sit on top of the words
@@ -129,6 +167,28 @@ export default function MessageBubble({
         >
           <Fork size={15} />
         </button>
+      )}
+      {/* Beside the question rather than beside the error, because the error is
+          leaving and the question is what there is to do something about. */}
+      {resendable && (
+        <button
+          className="bubble-resend"
+          onClick={() => onResend(msg)}
+          title="Put this question back in the composer"
+          aria-label="Put this question back in the composer"
+        >
+          <Restore size={15} />
+        </button>
+      )}
+      {/* Why the error is about to disappear, counted down in the open. Polite
+          rather than assertive: it is worth hearing, but not worth cutting into
+          whatever a screen reader is already saying. */}
+      {errored && (
+        <div className="bubble-erase" role="status" aria-live="polite">
+          {dissolving
+            ? 'Erasing error to maintain clean context conversation'
+            : `Erasing error to maintain clean context conversation in ${left}s`}
+        </div>
       )}
     </div>
   );

@@ -217,6 +217,10 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
         // below: an answer that happened to open with "@" would otherwise be
         // read as a fresh question and asked all over again.
         if (isSessionId(from)) {
+          // A run that failed. Never stored — it is a notice like any other — but
+          // the window gives it a countdown rather than sweeping it quietly, and
+          // it names the question it failed so that question stops counting.
+          const failed = msg.error === true;
           const answer = {
             id: msg.id || crypto.randomUUID(),
             peerId: from,
@@ -225,8 +229,13 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
             text: msg.text,
             ts: msg.ts || Date.now(),
             ...(msg.notice === true && { notice: true }),
+            ...(failed && { error: true, ...(msg.failedRef && { failedRef: msg.failedRef }) }),
           };
           if (!answer.notice) store.append(from, answer);
+          // The mark outlives the error that caused it: the error is gone in ten
+          // seconds, but a question nothing ever answered must still not be
+          // counted as one tomorrow.
+          if (failed && msg.failedRef) store.update(from, msg.failedRef, { failed: true });
           emit('chat', answer);
           break;
         }
@@ -243,6 +252,10 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
         // without this a peer could flag their own chat message and have it
         // leave no trace on our disk.
         const notice = msg.notice === true && msg[AGENT_LOCAL_ORIGIN] === true;
+        // Behind the same marker, and for the same reason: a peer must not be
+        // able to flag their own chat message as one of our failed runs and have
+        // it erase itself off our disk.
+        const failed = msg.error === true && msg[AGENT_LOCAL_ORIGIN] === true;
         const message = {
           id: msg.id || crypto.randomUUID(),
           peerId: from,
@@ -251,8 +264,10 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
           text: msg.text,
           ts: msg.ts || Date.now(),
           ...(notice && { notice: true }),
+          ...(failed && { error: true, ...(msg.failedRef && { failedRef: msg.failedRef }) }),
         };
         if (!notice) store.append(from, message);
+        if (failed && msg.failedRef) store.update(from, msg.failedRef, { failed: true });
         emit('chat', message);
         break;
       }
@@ -561,6 +576,19 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     return { ok };
   });
 
+  // Clearing out errors an older version wrote into a session's history.
+  //
+  // The ids come from the window, which is where the person was asked whether
+  // they wanted this — deleting somebody's history is not something to decide
+  // for them. Only sessions: the Commit box is a session's, and the correction
+  // that goes with the removal has nowhere to live on any other kind of thread.
+  ipcMain.handle('lanchat:sweepSessionErrors', (_e, { id, ids }) => {
+    if (!isSessionId(id)) return { ok: false, removed: 0 };
+    const { removed } = sessions.sweepErrors(id, ids);
+    if (removed) publishSessions();
+    return { ok: true, removed };
+  });
+
   // Loading a saved conversation back in. Read through readDocument, which is
   // already the app's answer to "turn this file into text somebody can be asked
   // about": it refuses binaries by name, decodes what Notepad writes, extracts
@@ -626,12 +654,11 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     const mention = remoteAgents.matchMention(peerId, text);
     if (mention) {
       // `@name` with nothing after it is a summon rather than a question: it asks
-      // the agent to be here, not to do anything. It goes to the owner all the
-      // same, because the greeting is theirs to give — and what we file is what was
-      // typed, in the agent's thread, exactly where `@name …` already goes. Letting
-      // it fall through to the ordinary chat frame below is what used to leave a
-      // bare `@name` sitting in the conversation with a person.
-      if (!mention.text) return remoteAgents.summon(mention.ownerPeerId, mention.entry, text.trim());
+      // the agent to be here, not to do anything. Nothing is filed for it — not
+      // here and not on the owner's machine — so it has to be consumed here all
+      // the same. Letting it fall through to the ordinary chat frame below is what
+      // would leave a bare `@name` sitting in the conversation with a person.
+      if (!mention.text) return remoteAgents.summon(mention.ownerPeerId, mention.entry);
       return remoteAgents.send(mention.ownerPeerId, mention.entry, mention.text, {
         prompt: composePrompt(mention.text, docs),
         docs,

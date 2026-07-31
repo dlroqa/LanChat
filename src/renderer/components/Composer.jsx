@@ -1,7 +1,8 @@
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useEffect, useCallback, useMemo, useId } from 'react';
 import { Send, Paperclip, Mic, FileIcon, X } from '../lib/icons.jsx';
 import { startRecording, pickFormat, formatDuration } from '../lib/voice.js';
 import { formatBytes } from '../lib/util.js';
+import MentionMenu, { mentionQuery, matchMentions } from './MentionMenu.jsx';
 
 // Message composer: auto-growing textarea, Enter to send, attach and voice.
 export default function Composer({
@@ -24,6 +25,10 @@ export default function Composer({
   context = null,
   onRemoveContext,
   placeholder,
+  // Agents this peer is sharing, for `@`. Exactly the set main will route a
+  // mention to — App does the filtering, because knowing which agents belong to
+  // the open thread is its business and not the composer's.
+  mentionables = [],
 }) {
   // Recording needs MediaRecorder with an Opus-capable container; hide the
   // affordance entirely where that is missing rather than failing on press.
@@ -32,6 +37,20 @@ export default function Composer({
   const ref = useRef(null);
   const typingRef = useRef(false);
   const typingTimer = useRef(null);
+
+  // Where the caret is, tracked because the `@` menu only opens while the caret
+  // is still inside the mention being typed. Held in state rather than read
+  // during render, which would be reading layout the browser has not settled.
+  const [caret, setCaret] = useState(0);
+  const [active, setActive] = useState(0);
+  // Dismissed with Escape. Cleared as soon as the mention itself changes, so
+  // pressing Escape silences this `@` and not every one after it.
+  const [dismissed, setDismissed] = useState(false);
+  const menuId = useId();
+
+  const query = mentionQuery(text, caret);
+  const matches = useMemo(() => matchMentions(mentionables, query), [mentionables, query]);
+  const menuOpen = !dismissed && matches.length > 0;
 
   // Grow the input to fit what is in it. No ceiling here: `max-height` in the
   // stylesheet clamps the used height even against an inline one, and a clamped
@@ -79,6 +98,10 @@ export default function Composer({
   useEffect(() => {
     if (!draft) return;
     setText(draft.text);
+    setCaret(draft.text.length);
+    // Text put back by the app is not text somebody is typing, so it must not
+    // pop the mention list open over a question that was already written.
+    setDismissed(true);
     const el = ref.current;
     if (!el) return;
     el.focus();
@@ -97,9 +120,41 @@ export default function Composer({
 
   function handleChange(e) {
     setText(e.target.value);
+    setCaret(e.target.selectionStart);
+    // A fresh keystroke is a fresh mention: whatever was dismissed is no longer
+    // what is being typed, and the highlight starts at the top of a list that
+    // has just been re-filtered.
+    setDismissed(false);
+    setActive(0);
     signalTyping(true);
     clearTimeout(typingTimer.current);
     typingTimer.current = setTimeout(() => signalTyping(false), 1500);
+  }
+
+  // Moving the caret without typing — clicking, or an arrow key — can take it
+  // out of a mention or back into one, and the menu has to follow.
+  function syncCaret(e) {
+    setCaret(e.target.selectionStart);
+  }
+
+  // Completing a mention. The trailing space is the point: `@Name` alone is a
+  // summon and `@Name …` is a question, so leaving the caret ready to ask one is
+  // what makes the menu a way of reaching an agent rather than just of naming it.
+  function pick(item) {
+    const rest = text.slice(caret);
+    const head = `@${item.name} `;
+    setText(head + rest);
+    setDismissed(true);
+    const el = ref.current;
+    if (el) {
+      el.focus();
+      // Set after the value lands, or the browser puts the caret back at the end
+      // of the old text.
+      requestAnimationFrame(() => {
+        el.setSelectionRange(head.length, head.length);
+        setCaret(head.length);
+      });
+    }
   }
 
   // A document on its own is a complete thing to send — "here, read this" — so
@@ -110,11 +165,40 @@ export default function Composer({
     if (!canSend) return;
     onSend(text.trim());
     setText('');
+    setCaret(0);
+    setDismissed(false);
     signalTyping(false);
     clearTimeout(typingTimer.current);
   }
 
   function onKeyDown(e) {
+    // While the menu is open it owns these keys. Enter in particular: it must
+    // complete the name rather than send `@Hermes` on its own, which main reads
+    // as a summon — pressing Enter to choose from a list and having it fire a
+    // half-typed message instead is the one way this feature could make things
+    // worse than no menu at all.
+    if (menuOpen) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setActive((i) => (i + 1) % matches.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActive((i) => (i - 1 + matches.length) % matches.length);
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        pick(matches[active]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setDismissed(true);
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       submit();
@@ -123,6 +207,11 @@ export default function Composer({
 
   return (
     <div className="composer-wrap">
+      {/* Above the input, because that is where there is room for it — a list
+          below would be off the bottom of the window. */}
+      {menuOpen && (
+        <MentionMenu id={menuId} items={matches} active={active} onPick={pick} onHover={setActive} />
+      )}
       {/* What a fork is asking about. Above the words for the same reason the
           documents are: it is part of the message being written, and seeing it
           is what stops the next question being typed as though the agent could
@@ -186,8 +275,18 @@ export default function Composer({
           }
           onChange={handleChange}
           onKeyDown={onKeyDown}
+          onKeyUp={syncCaret}
+          onClick={syncCaret}
           disabled={disabled}
           aria-label="Message"
+          // The textarea is the combobox: the list is what it controls, and the
+          // highlighted option is announced through it rather than by moving
+          // focus, so typing never leaves the input.
+          role="combobox"
+          aria-expanded={menuOpen}
+          aria-controls={menuOpen ? menuId : undefined}
+          aria-activedescendant={menuOpen ? `${menuId}-opt-${active}` : undefined}
+          aria-autocomplete="list"
         />
         {/* The mic replaces Send until there is something to send, so the
             primary action stays unambiguous rather than two buttons competing. */}

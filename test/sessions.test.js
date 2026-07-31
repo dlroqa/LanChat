@@ -56,6 +56,18 @@ const { SessionRegistry } = require('../src/main/sessions/registry.js');
 const { parseTranscript } = require('../src/main/sessions/transcript.js');
 const { composeContext } = require('../src/main/sessions/prompt.js');
 
+// The Commit box's arithmetic, as the window does it. Asserted here against a
+// real session on disk, because the number is made of two things that live in
+// different places — the messages, and the correction on the record — and the
+// bug worth catching is them disagreeing. ESM for the renderer, so it is
+// evaluated rather than imported.
+const { commitCount } = new Function(
+  `${fs
+    .readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'lib', 'sessionStanding.js'), 'utf8')
+    .replace(/^export\s+/gm, '')}
+   return { commitCount };`
+)();
+
 const fakeSafeStorage = {
   isEncryptionAvailable: () => true,
   encryptString: (s) => Buffer.from(`sealed:${s}`),
@@ -71,6 +83,12 @@ function echoTransports(log) {
       start: async () => ({ detail: 'ready' }),
       send: async ({ text }, h) => {
         log.push(text);
+        // A run that fails rather than answering — an ACP prompt that timed out,
+        // in the shape the real transport reports it.
+        if (text.includes('fail:now')) {
+          h.onError?.(new Error("ACP call 'session/prompt' timed out."));
+          return;
+        }
         h.onDone?.({ text: `echo:${text}` });
       },
       stop: async () => {},
@@ -335,6 +353,99 @@ test('a question asked in a session is answered in that session', async () => {
     typing.every((e) => e.payload.peerId === session.id),
     'and nothing is addressed to the agent instead'
   );
+});
+
+test('a question that failed is marked as such, and the error explaining it is not kept', async () => {
+  const A = makeNode('failed');
+  const { agent } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  const session = A.call('lanchat:createSession', { title: 'PTT PWA Lan', agentId: agent.id });
+
+  // One question that works, so the difference between the two is what is being
+  // proved rather than the whole thread being empty.
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'what is the time' });
+  await waitFor(() => A.store.read(session.id).length === 2, 5000, 'the first answer');
+
+  const asked = A.call('lanchat:sendChat', { peerId: session.id, text: 'fail:now' });
+  const error = await waitFor(
+    () => A.events.find((e) => e.type === 'chat' && /timed out/.test(e.payload?.text || ''))?.payload,
+    5000,
+    'the failure to reach the window'
+  );
+
+  // Shown once, with enough on it for the window to count it down and to know
+  // which question it was the outcome of.
+  assert.ok(error.error, 'the error says it is one');
+  assert.equal(error.failedRef, asked.id, 'and names the question that failed');
+  assert.match(error.text, /ACP call 'session\/prompt' timed out\./);
+
+  // And then nothing of it survives. The question does — it is what was asked,
+  // and it is still there to be re-sent — but it no longer claims to have been
+  // answered.
+  const kept = A.store.read(session.id);
+  assert.deepEqual(
+    kept.map((m) => `${m.direction}:${m.text}`),
+    ['out:what is the time', `in:echo:${A.log[0]}`, 'out:fail:now'],
+    'the error is never written to the session'
+  );
+  assert.equal(kept.find((m) => m.id === asked.id).failed, true, 'the question it failed is marked');
+  assert.equal(kept[0].failed, undefined, 'and the one that was answered is left alone');
+});
+
+test('sweeping old errors takes their commits with them, and says the context is gone', async () => {
+  const A = makeNode('sweep');
+  const { agent } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  const session = A.call('lanchat:createSession', { title: 'PTT PWA Lan', agentId: agent.id });
+
+  // Three questions asked, as an older version would have left them: two of them
+  // followed by an error it kept, and neither error naming the question it came
+  // from — that link did not exist yet, which is the whole problem.
+  for (const text of ['one', 'two', 'three']) {
+    A.call('lanchat:sendChat', { peerId: session.id, text });
+  }
+  await waitFor(() => A.store.read(session.id).length === 6, 5000, 'the three answers');
+  const legacy = [
+    { id: 'old-1', peerId: session.id, direction: 'in', kind: 'text', text: '⚠️ transport is down', ts: 9 },
+    { id: 'old-2', peerId: session.id, direction: 'in', kind: 'text', text: '⚠️ transport is down', ts: 10 },
+  ];
+  for (const m of legacy) A.store.append(session.id, m);
+
+  // Before: the box counts every question, including the two nothing answered.
+  const before = A.store.read(session.id);
+  assert.equal(commitCount(before), 3);
+
+  const res = A.call('lanchat:sweepSessionErrors', { id: session.id, ids: ['old-1', 'old-2'] });
+  assert.equal(res.ok, true);
+  assert.equal(res.removed, 2);
+
+  // After: the noise is gone from disk, the questions are not, and the count has
+  // come down by exactly the number of errors removed — without anything having
+  // guessed which question each belonged to.
+  const after = A.store.read(session.id);
+  assert.equal(after.filter((m) => (m.text || '').startsWith('⚠️')).length, 0, 'the errors are gone');
+  assert.equal(after.filter((m) => m.direction === 'out').length, 3, 'the questions are not');
+
+  const record = A.call('lanchat:listSessions').find((s) => s.id === session.id);
+  assert.equal(record.unlinkedFailures, 2);
+  assert.equal(commitCount(after) - record.unlinkedFailures, 1, 'three asked, two unanswered, one commit');
+
+  // And the session says it has lost context it cannot put back.
+  assert.equal(record.needsContext, true);
+
+  // Sweeping the same ids again must not take the total down twice.
+  const again = A.call('lanchat:sweepSessionErrors', { id: session.id, ids: ['old-1', 'old-2'] });
+  assert.equal(again.removed, 0);
+  assert.equal(
+    A.call('lanchat:listSessions').find((s) => s.id === session.id).unlinkedFailures,
+    2,
+    'the correction is applied once, not once per attempt'
+  );
+
+  // Asking something new re-establishes the context, so the warning goes — while
+  // the correction, which is about work that was never done, stays.
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'four' });
+  const fresh = A.call('lanchat:listSessions').find((s) => s.id === session.id);
+  assert.equal(fresh.needsContext, false, 'a new question clears the warning');
+  assert.equal(fresh.unlinkedFailures, 2, 'but not the correction');
 });
 
 test('a session with no agent refuses without swallowing the question', () => {

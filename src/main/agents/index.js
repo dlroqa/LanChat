@@ -10,7 +10,7 @@ const { discoverProfiles, hermesLaunchArgs } = require('./profiles');
 const { createCommandTransport } = require('./transports/command');
 const { createAcpTransport } = require('./transports/acp');
 const { createSshTransport } = require('./transports/ssh');
-const { heldLine, rotatedLine, busyLine, greetingLine } = require('./turnCopy');
+const { heldLine, rotatedLine, busyLine } = require('./turnCopy');
 
 // AgentHub owns the lifecycle of connected agents.
 //
@@ -508,7 +508,14 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   // addressing already implies — a session, which is a local workspace that asks
   // this agent and keeps its own conversation. Worked out once here and carried
   // to every place that reports back, rather than derived again at each of them.
-  async function deliver(agentId, text, origin = null, { thread = null } = {}) {
+  //
+  // `ref` is the id of the message this run is answering. It exists for one
+  // purpose: when a run fails, the question that failed has to be identifiable,
+  // so it can stop counting as work done. Carried explicitly rather than
+  // reconstructed as "the last thing asked" — that would be true today, because
+  // only one question is ever outstanding, and silently wrong the moment that
+  // stops being true.
+  async function deliver(agentId, text, origin = null, { thread = null, ref = null } = {}) {
     const entry = live.get(agentId);
     const record = registry.get(agentId);
     if (!record || !entry) return;
@@ -578,13 +585,20 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
           bus.emit('agent-typing', { agentId, threadId: liveId, isTyping: false });
           relayActivity(agentId, origin, false, null);
           emitStatus(agentId, 'error', describeError(err));
-          // Kept, like the output would have been: it is the result of a
-          // question somebody asked, and a thread showing a question with no
-          // reply beside it would be hiding what happened.
+          // Shown, then taken away — like a notice, and for the same reason.
+          //
+          // This used to be kept, on the grounds that a question with no reply
+          // beside it hides what happened. That was right about the moment and
+          // wrong about the week after: a timeout is worth reading once, and
+          // then it is a permanent line of noise in the context of every
+          // question asked below it. So it is reported and swept, and what it
+          // leaves behind is on the question instead — `failedRef` names the
+          // message this run was answering, which is how a failed ask stops
+          // counting as one.
           //
           // Only `err.message` is relayed onward — `err.detail` names things
           // that exist on this machine and stays here. See transports/resolve.js.
-          reply(agentId, `⚠️ ${err.message}`, origin, { keep: true, detail: err.detail, threadId });
+          reply(agentId, `⚠️ ${err.message}`, origin, { error: true, ref, detail: err.detail, threadId });
         },
       }
     );
@@ -610,7 +624,17 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     return err && err.detail ? `${err.message} ${err.detail}` : err && err.message;
   }
 
-  function reply(agentId, text, origin, { keep = false, detail = null, threadId: into = null } = {}) {
+  // `error` marks the one kind of transient message that is not just scheduling
+  // chatter: a run that failed. It is not kept, exactly like a notice — but the
+  // window treats it differently (a countdown, and then it goes), and it carries
+  // `failedRef` so the question it failed can stop counting. `keep` and `error`
+  // are opposite ends of the same axis, so an error is never also kept.
+  function reply(
+    agentId,
+    text,
+    origin,
+    { keep = false, error = false, ref = null, detail = null, threadId: into = null } = {}
+  ) {
     // A peer's conversation with the agent belongs in its own thread, not in the
     // human chat with that peer — otherwise asking an agent something graffitis
     // two real conversations. The owner still sees everything, just filed under
@@ -625,12 +649,23 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     const localText = detail ? `${text} ${detail}` : text;
     const message = { from: threadId, type: 'chat', id: crypto.randomUUID(), text: localText, ts: Date.now() };
     if (!keep) message.notice = true;
+    if (error) {
+      message.error = true;
+      // Only when there is one. A run started by a peer's `@name` has no local
+      // message to point at, and a `failedRef` of null would be a claim that
+      // something identifiable failed.
+      if (ref) message.failedRef = ref;
+    }
     message[LOCAL_ORIGIN] = true;
     bus.emit('peer-message', message);
     // If a remote peer asked, relay the answer back to that peer alone — never
     // to everyone, and never to a peer that did not ask. `agent-reply` rather
     // than `chat` so their copy lands in its own thread too.
     if (origin) {
+      // `failedRef` is deliberately not relayed: it names a message in a store on
+      // this machine and would mean nothing on theirs. The flag travels, the id
+      // does not — the asking machine matches the error against the question it
+      // has outstanding (see `pendingRef` in remote.js).
       hub.send(origin, {
         type: 'agent-reply',
         agentId,
@@ -638,6 +673,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
         text,
         ts: Date.now(),
         ...(!keep && { notice: true }),
+        ...(error && { error: true }),
       });
     }
   }
@@ -1063,42 +1099,35 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     return true;
   }
 
-  // The other tail: a summon is answered, not run.
+  // The other tail: a summon is a trigger, not a message.
   //
   // Nothing is spent. No turn is claimed — TURN_QUOTA exists to share out whatever
-  // capacity the agent has, and saying hello uses none of it, so charging a query
-  // for it would make the introduction cost the first question. For the same
-  // reason a summon never displaces a turn-holder and never joins the held queue:
-  // there is nothing here to be answered later.
+  // capacity the agent has, and being asked to be present uses none of it, so
+  // charging a query for it would make the introduction cost the first question.
+  // For the same reason a summon never displaces a turn-holder and never joins
+  // the held queue: there is nothing here to be answered later.
   //
   // And no transport runs. That is the whole point — a prompt of nothing produced
   // a run of nothing, and the run of nothing is what used to be reported.
+  //
+  // Nothing is written down either, on either machine. `@name` is how you open an
+  // agent, not something anybody said, and both halves of it used to be recorded:
+  // a synthesised `@name` bubble and a greeting to sit under it. Two lines of
+  // transcript per summon, in a thread whose whole purpose is to hold the
+  // questions and the answers. What is left is the one thing a summon is for —
+  // the delegate thread exists, so the agent is there to be opened.
   function greet(record, peerId) {
-    // Anti-flood still applies: a greeting is an outbound frame like any other and
-    // a peer must not be able to make us send one per keystroke. `busy` is false on
-    // purpose — nothing is being refused here, so this must not spend the
-    // busy-refusal budget, and the agent working for somebody else has no bearing
-    // on whether it can say hello.
+    // Anti-flood still applies. It costs nothing to answer now, but a peer must
+    // not be able to make us do it per keystroke: ensureDelegateIdentity below
+    // touches the roster, and a roster republished thirty times a second is a
+    // denial of service whether or not any words come with it.
+    //
+    // `busy` is false on purpose — nothing is being refused here, so this must
+    // not spend the busy-refusal budget, and the agent working for somebody else
+    // has no bearing on whether it can be summoned.
     if (checkThrottle(record.id, peerId, false, 'summon') === 'silent') return true;
 
-    const threadId = ensureDelegateIdentity(record, peerId);
-    // Noted after the throttle rather than before it, which is the opposite of
-    // accept(): what a flooding peer *asks* is worth seeing, but the same
-    // synthesised line thirty times over says nothing the first one did not.
-    //
-    // Synthesised from our own record, never relayed. The summon frame carries no
-    // text at all, so there is nothing here that a peer could have written.
-    bus.emit('agent-request', {
-      threadId,
-      agentId: record.id,
-      peerId,
-      text: `@${record.name}`,
-      ts: Date.now(),
-    });
-    // Kept rather than a notice. This is a real exchange — somebody said something
-    // and the agent answered — and a notice would be swept off their screen after
-    // NOTICE_TTL_MS, leaving a lone `@name` with nothing beside it.
-    reply(record.id, greetingLine(record.name), peerId, { keep: true });
+    ensureDelegateIdentity(record, peerId);
     // True even when the throttle swallowed it above: this message was addressed to
     // an agent and is finished with either way. Returning false would tell
     // ipc.js's chat branch that nobody consumed it, and the bare `@name` would land
@@ -1174,9 +1203,9 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     // answer. Everything a peer can reach still goes through the routers below,
     // which is where the sharing gates live; this path is local-only by
     // construction and reaches no further than `deliver`.
-    ask: (agentId, text, { thread = null } = {}) => {
+    ask: (agentId, text, { thread = null, ref = null } = {}) => {
       if (!live.has(agentId)) return false;
-      deliver(agentId, text, null, { thread });
+      deliver(agentId, text, null, { thread, ref });
       return true;
     },
     // Whether there is anything there to ask. Asked separately from ask() so a

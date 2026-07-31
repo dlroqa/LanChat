@@ -11,6 +11,7 @@ import DevPanel from './components/DevPanel.jsx';
 import AddPeerModal from './components/AddPeerModal.jsx';
 import UpdatePrompt from './components/UpdatePrompt.jsx';
 import UpdateBanner from './components/UpdateBanner.jsx';
+import ErrorSweepModal, { findKeptErrors } from './components/ErrorSweepModal.jsx';
 import { CallManager } from './lib/rtc.js';
 import { Ringer, playNotification, playCallEvent, playPttCue, playRejectCue } from './lib/sounds.js';
 import ConnectionPanel from './components/ConnectionPanel.jsx';
@@ -42,6 +43,22 @@ const NOTICE_TTL_MS = 60000;
 // render at all.
 const REJECT_LINGER_MS = 900;
 
+// How long a failed run stays on screen before it erases itself.
+//
+// Shorter than a queue notice, and counted down in the open rather than swept
+// quietly, because this one is worth reading and then worth losing: a timeout
+// kept in the thread becomes a permanent line of noise in the context of every
+// question asked below it. Ten seconds is long enough to read the sentence and
+// press re-send, and the question itself stays either way.
+const ERROR_TTL_MS = 10000;
+
+// How long the bubble takes to come apart once the count reaches zero. Removal
+// is driven by this timer and never by `animationend`: reduced motion disables
+// the animation outright (styles.css), and an event that never fires would leave
+// the error on screen forever — the one outcome this whole feature exists to
+// prevent.
+const DISSOLVE_MS = 620;
+
 // One shared empty list for threads with nothing attached, so the composer is
 // not handed a brand-new array on every render of a conversation.
 const EMPTY_DOCS = [];
@@ -64,6 +81,13 @@ export default function App() {
   const [messages, setMessages] = useState({}); // peerId -> [msg]
   const [typing, setTyping] = useState({});
   const [unread, setUnread] = useState({});
+  // Agents summoned and not yet opened: `threadId -> true`. Separate from
+  // `unread`, which counts messages — a summon produces none, so an unread count
+  // would stay at nought and the row would say nothing happened.
+  const [summoned, setSummoned] = useState({});
+  // A session found to be holding errors an older version kept:
+  // `{ threadId, ids }` while the offer to remove them is on screen.
+  const [sweep, setSweep] = useState(null);
   const [progress, setProgress] = useState({});
   const [toasts, setToasts] = useState([]);
   const [modal, setModal] = useState(null); // 'profile' | 'devgate' | 'devpanel' | 'settings' | 'addpeer'
@@ -124,6 +148,10 @@ export default function App() {
   const selectedPeerRef = useRef(null);
   const selfRef = useRef(null);
   const loadedPeers = useRef(new Set());
+  // Sessions whose history has already been scanned for errors an older version
+  // kept. Asked once per session per run: declining is an answer, and re-asking
+  // it every time the conversation is reopened would make it a nag.
+  const sweepOffered = useRef(new Set());
 
   configRef.current = config;
   selectedRef.current = selectedId;
@@ -246,6 +274,21 @@ export default function App() {
     setMessages((prev) => ({ ...prev, [peerId]: (prev[peerId] || []).filter((m) => m.id !== id) }));
   }
 
+  // Changes one bubble in place. A message with no matching id is left alone
+  // rather than appended: this is only ever used to say something more about a
+  // message already on screen.
+  function patchMessage(peerId, id, patch) {
+    setMessages((prev) => {
+      const list = prev[peerId];
+      if (!list) return prev;
+      const idx = list.findIndex((m) => m.id === id);
+      if (idx < 0) return prev;
+      const next = [...list];
+      next[idx] = { ...next[idx], ...patch };
+      return { ...prev, [peerId]: next };
+    });
+  }
+
   // Play the light on a thread. Every call plays it — there is no dedupe, because
   // summoning an agent twice is asking twice and both times deserve an answer.
   function showFlash(threadId, mode) {
@@ -270,6 +313,31 @@ export default function App() {
     // worth reading once and nothing afterwards. They are shown like any other
     // message and then taken away, so the thread keeps only what was really
     // said. Nothing to undo on disk: main never stored them.
+    //
+    // A failed run is swept the same way, but sooner and in the open: the bubble
+    // says how long it has left, and then comes apart rather than blinking out.
+    // Main never stored it either, so there is nothing to undo here — and the
+    // question it failed is marked in the same breath, so the commit box stops
+    // counting it the moment the error appears rather than after a reload.
+    if (msg.error) {
+      if (!noticeTimers.current[msg.id]) {
+        if (msg.failedRef) patchMessage(peerId, msg.failedRef, { failed: true });
+        noticeTimers.current[msg.id] = setTimeout(() => {
+          patchMessage(peerId, msg.id, { dissolving: true });
+          noticeTimers.current[msg.id] = setTimeout(
+            () => {
+              delete noticeTimers.current[msg.id];
+              removeMessage(peerId, msg.id);
+            },
+            prefersReducedMotion() ? 0 : DISSOLVE_MS
+          );
+        }, ERROR_TTL_MS);
+      }
+      // An error also arrives flagged as a notice, because main stores neither.
+      // It must not pick up the 60-second sweep as well: the countdown on screen
+      // would then be promising something a second timer had already done.
+      return;
+    }
     if (msg.notice && !noticeTimers.current[msg.id]) {
       noticeTimers.current[msg.id] = setTimeout(() => {
         delete noticeTimers.current[msg.id];
@@ -551,12 +619,42 @@ export default function App() {
     // whatever had been typed since.
     setDraft(null);
     setUnread((u) => ({ ...u, [selectedId]: 0 }));
+    // Opening the thread is what the pulse was asking for, so it stops here.
+    // Cleared on selection rather than on a timer: it is not an announcement that
+    // expires, it is a thing waiting to be looked at.
+    setSummoned((s) => (s[selectedId] ? { ...s, [selectedId]: false } : s));
     if (loadedPeers.current.has(selectedId)) return;
     loadedPeers.current.add(selectedId);
-    api.getHistory(selectedId).then((hist) => {
-      setMessages((prev) => ({ ...prev, [selectedId]: mergeHistory(hist, prev[selectedId]) }));
+    const thread = selectedId;
+    api.getHistory(thread).then((hist) => {
+      setMessages((prev) => ({ ...prev, [thread]: mergeHistory(hist, prev[thread]) }));
+      // Errors an older version kept. Only in sessions — the commit correction
+      // that goes with removing them has nowhere to live on any other thread —
+      // and only once per session per run, so declining is not asked again every
+      // time the conversation is reopened.
+      if (!isSessionThread(thread) || sweepOffered.current.has(thread)) return;
+      sweepOffered.current.add(thread);
+      const found = findKeptErrors(hist);
+      if (found.length) setSweep({ threadId: thread, ids: found.map((m) => m.id) });
     });
   }, [selectedId]);
+
+  // Removing them. Both halves happen together or neither does: main takes the
+  // messages out of the file and the same number off what the session claims to
+  // have asked, and only what it really removed is counted.
+  async function sweepErrors() {
+    if (!sweep) return;
+    const { threadId, ids } = sweep;
+    setSweep(null);
+    const res = await api.sweepSessionErrors(threadId, ids);
+    if (!res?.ok) {
+      toast('Could not clean up this history.', 'error');
+      return;
+    }
+    const gone = new Set(ids);
+    setMessages((prev) => ({ ...prev, [threadId]: (prev[threadId] || []).filter((m) => !gone.has(m.id)) }));
+    toast(`Removed ${res.removed} error message${res.removed === 1 ? '' : 's'}.`);
+  }
 
   // Deleting a conversation is irreversible and there is no undo, so it asks
   // first and names what goes. The in-memory copy is dropped alongside the file,
@@ -599,6 +697,22 @@ export default function App() {
   // than an agent, so it is not one of them.
   const askableAgents = useMemo(() => peers.filter((p) => p.kind === 'agent' && !p.delegate), [peers]);
 
+  // Agents the person whose chat is open is sharing, for `@` in the composer.
+  //
+  // Deliberately the same set main will route a mention to, and no wider. A card
+  // is here only because its owner sent an advert for it, and it goes the moment
+  // they stop sharing (agent-advert / agent-withdraw in ipc.js), so being on this
+  // list already means the agent exists and we are allowed to ask it. Online, so
+  // a name that cannot be reached is never offered — with nobody online the menu
+  // has nothing to show and no summon can be started from it.
+  //
+  // Empty in an agent thread or a session: `@name` is routed out of a *person's*
+  // chat, and nowhere else.
+  const mentionables = useMemo(
+    () => peers.filter((p) => p.kind === 'agent' && p.remote && p.online && p.viaId === selectedId),
+    [peers, selectedId]
+  );
+
   const selectedPeer = useMemo(() => {
     if (!selectedId) return null;
     // A session is not a contact and never appears in the roster: it is a
@@ -620,6 +734,10 @@ export default function App() {
         agentId: record.agentId,
         agentName: agent?.name || null,
         online: true,
+        // This session lost questions it cannot put back — see sweepErrors in
+        // sessions/index.js. Carried on the card so the pane can say so without
+        // having to know what a session record is.
+        needsContext: Boolean(record.needsContext),
       };
     }
     const live = peers.find((p) => p.id === selectedId);
@@ -631,10 +749,18 @@ export default function App() {
   // window already holds rather than stored on the record: the messages are the
   // only place it is ever true, and a stored number would be one restart away
   // from disagreeing with them.
-  const selectedCommits = useMemo(
-    () => (isSessionThread(selectedId) ? commitCount(messages[selectedId]) : 0),
-    [selectedId, messages]
-  );
+  //
+  // Less the corrections for questions that failed before a failure named the
+  // question it belonged to. Those cannot be marked individually — nothing links
+  // them — but each swept error was one run that did not answer, so the count of
+  // them comes off the total. Subtracted here rather than inside commitCount:
+  // that function counts a list of messages, and this is a fact about the session
+  // record, not about the messages left in it.
+  const selectedCommits = useMemo(() => {
+    if (!isSessionThread(selectedId)) return 0;
+    const record = sessions.find((s) => s.id === selectedId);
+    return Math.max(0, commitCount(messages[selectedId]) - (record?.unlinkedFailures || 0));
+  }, [selectedId, messages, sessions]);
 
   // Windows asks for the loopback address itself rather than the name for it:
   // there "localhost" resolves to ::1 first, while the service listens on
@@ -723,12 +849,27 @@ export default function App() {
       if (quoted) setContexts((c) => ({ ...c, [selectedId]: quoted }));
       return;
     }
+    // A bare `@name` was a summon rather than a question. There is no message:
+    // nothing was said, and nothing is written down on either machine — so this
+    // returns before appendMessage rather than after it.
+    //
+    // The agent's row is marked instead, and stays marked until it is opened. The
+    // conversation is not switched to: being taken somewhere else the instant you
+    // type is startling, and it would leave nothing to click. `summoned` is only
+    // true when the frame actually reached the owner, so a row that is pulsing is
+    // an agent that really was summoned.
+    if (msg.summoned) {
+      setSummoned((s) => ({ ...s, [msg.threadId]: true }));
+      return;
+    }
+    // Refused before it was sent: the owner was not reachable. Said out loud,
+    // because a summon that produced no bubble and no light would otherwise look
+    // exactly like one that worked.
+    if (msg.summoned === false && msg.threadId) {
+      toast('That agent could not be reached — its owner is offline.', 'error');
+      return;
+    }
     appendMessage(msg.peerId || selectedId, msg);
-    // A bare `@name` was a summon rather than a question: the agent's thread has
-    // just opened, and this is the moment the light is for. Keyed on the message's
-    // own thread rather than on what is selected, because a summon typed in the
-    // chat with the agent's owner is filed under the agent.
-    if (msg.summoned) showFlash(msg.peerId, 'connected');
     // Held locally and retried on reconnect. This machine has to still be
     // running for that to happen — there is no server to hold it for us.
     if (!msg.delivered) toast('Saved — it will send when they are back online', 'info');
@@ -830,6 +971,38 @@ export default function App() {
     const agentId = from.includes('#') ? from.slice(0, from.indexOf('#')) : from;
     const record = await newSession({ agentId });
     if (record) setContexts((c) => ({ ...c, [record.id]: quoted }));
+  }
+
+  // Putting a failed question back the way it was, the instant before it was
+  // sent.
+  //
+  // A restore rather than a re-send: the words go back into the composer instead
+  // of straight onto the wire. The same question failing twice in a row is
+  // likely enough that the useful next move is often to change it, and a button
+  // that fired immediately would take that away — as well as sending something
+  // the moment it was clicked, with nothing readable in between.
+  //
+  // This is the path a refused send already takes, reached from a different
+  // direction, so it uses the same two setters rather than a second mechanism.
+  function resendFrom(msg) {
+    const from = msg.peerId || selectedRef.current;
+    // Keyed on a fresh nonce, so pressing it twice restores twice — the composer
+    // effect deliberately ignores an unchanged draft.
+    setDraft({ threadId: from, text: msg.text, nonce: Date.now() });
+    // What the question was asking about comes back with it. Nothing to re-pin
+    // by hand: the excerpt may be a long way up a thread that has since moved on.
+    if (msg.context) setContexts((c) => ({ ...c, [from]: msg.context }));
+    // Documents are the one thing that cannot come back. History keeps their
+    // names and sizes so the bubble can still say what was sent, but never their
+    // paths — so they have to be found again, and saying so is better than a
+    // silent re-ask that the agent answers without them.
+    if (msg.docs?.length) {
+      toast(
+        msg.docs.length === 1
+          ? 'Attach the document again before sending'
+          : 'Attach the documents again before sending'
+      );
+    }
   }
 
   // Who said the thing being quoted, in the words the agent will read. Worked
@@ -1047,6 +1220,7 @@ export default function App() {
         tailnetStatus={tailnetStatus}
         selectedId={selectedId}
         unread={unread}
+        summoned={summoned}
         queued={queued}
         authFailures={authFailures}
         showAddresses={config.showAddresses}
@@ -1089,12 +1263,16 @@ export default function App() {
           context={contexts[selectedId] || null}
           onRemoveContext={() => setContexts((c) => ({ ...c, [selectedId]: null }))}
           agents={askableAgents}
+          mentionables={mentionables}
           onRenameSession={renameSession}
           onSetSessionAgent={setSessionAgent}
           onImportText={() => importSessionText(selectedId)}
           // Branching is offered where a question can be asked from: inside a
           // session, and in the agent threads a session can be started from.
           onFork={isThinkingThread(selectedId) ? forkFrom : undefined}
+          // Offered on the same threads, and for the same reason: only somewhere
+          // that can answer a question is there any point putting one back.
+          onResend={isThinkingThread(selectedId) ? resendFrom : undefined}
           onSend={sendText}
           onAttach={attach}
           onVoice={sendVoice}
@@ -1179,6 +1357,12 @@ export default function App() {
           onSave={saveSettings}
           onClose={() => setModal(null)}
         />
+      )}
+      {/* Only while that session is the one on screen. A history scan finishes
+          whenever it finishes, and a dialog about a conversation somebody has
+          already navigated away from would be asking about the wrong thing. */}
+      {sweep && sweep.threadId === selectedId && (
+        <ErrorSweepModal count={sweep.ids.length} onKeep={() => setSweep(null)} onRemove={sweepErrors} />
       )}
       {updateBanner && !firstRun && !update && (
         <UpdateBanner

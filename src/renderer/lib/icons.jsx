@@ -104,6 +104,25 @@ export const Refresh = (p) => (
     <path d="M3 21v-5h5" />
   </S>
 );
+// Something to be aware of before carrying on. A triangle rather than a circle,
+// which is the shape the rest of the world uses for a warning and the reason it
+// reads as one without having to be red.
+export const Alert = (p) => (
+  <S {...p}>
+    <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
+    <path d="M12 9v4" />
+    <path d="M12 17h.01" />
+  </S>
+);
+// Putting something back the way it was: one arrow curving anticlockwise to
+// where it started. Deliberately not Refresh, which goes round and round and
+// says "do it again" — this one has a beginning to return to.
+export const Restore = (p) => (
+  <S {...p}>
+    <path d="M3 12a9 9 0 1 0 2.6-6.4L3 8" />
+    <path d="M3 3v5h5" />
+  </S>
+);
 export const X = (p) => (
   <S {...p}>
     <line x1="18" y1="6" x2="6" y2="18" />

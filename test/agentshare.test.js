@@ -57,7 +57,6 @@ const { PeerHub } = require('../src/main/peers.js');
 const { createServer } = require('../src/main/server.js');
 const { MessageStore } = require('../src/main/store.js');
 const { createAgentHub } = require('../src/main/agents/index.js');
-const { greetingLine } = require('../src/main/agents/turnCopy.js');
 const { createIpc } = require('../src/main/ipc.js');
 
 const fakeSafeStorage = {
@@ -367,40 +366,29 @@ test('a bare @name introduces the agent instead of reporting no output', async (
   assert.equal(card.remote, true);
   assert.equal(card.online, true);
 
-  await waitFor(
-    () => B.store.read(remoteId).some((m) => m.direction === 'in'),
-    5000,
-    'the greeting to come back'
-  );
-
-  // The greeting, asserted against the one place it is written so the two
-  // machines cannot drift apart on the wording.
-  assert.deepEqual(
-    B.store.read(remoteId).map((m) => `${m.direction}:${m.text}`),
-    ['out:@Hermes', `in:${greetingLine('Hermes')}`]
-  );
-
   // The core of the bug: the agent was never run.
   assert.deepEqual(A.log, [], 'no prompt of nothing, so no run of nothing');
 
-  // And the string that started all this appears nowhere, in either direction.
+  // And nothing was written down, anywhere, on either machine. `@Hermes` is how
+  // an agent is opened rather than something anybody said — a thread that kept it
+  // would be keeping a keystroke, and it is the thread the questions live in.
+  assert.deepEqual(B.store.read(remoteId), [], 'nothing in the agent thread on B');
+  assert.deepEqual(A.store.read(`${agent.id}#${idB}`), [], 'nor in the delegate thread on A');
+  assert.deepEqual(A.store.read(agent.id), [], "nor in A's own thread with the agent");
+
+  // Agent talk stays out of the human conversation on both machines — the one
+  // place it must never go, and where a bare `@name` would land if the summon
+  // were not consumed.
+  assert.deepEqual(B.store.read(idA), [], 'the summon never entered B’s chat with A');
+  assert.deepEqual(A.store.read(idB), [], "and never entered A's chat with B");
+
+  // And neither the old empty-run report nor a greeting appears anywhere.
   const everything = [
-    ...B.store.read(remoteId).map((m) => m.text || ''),
-    ...A.store.read(`${agent.id}#${idB}`).map((m) => m.text || ''),
     ...B.events.map((e) => e.payload?.text || ''),
     ...A.events.map((e) => e.payload?.text || ''),
   ];
   assert.ok(!everything.some((t2) => /no output/i.test(t2)), everything.join(' | '));
-
-  // Agent talk stays out of the human conversation on both machines.
-  assert.deepEqual(B.store.read(idA), [], 'the summon never entered B’s chat with A');
-  assert.deepEqual(A.store.read(idB), [], "and never entered A's chat with B");
-  assert.deepEqual(
-    A.store.read(`${agent.id}#${idB}`).map((m) => `${m.direction}:${m.text}`),
-    ['in:@Hermes', `in:${greetingLine('Hermes')}`],
-    'A sees it filed under the delegate thread'
-  );
-  assert.deepEqual(A.store.read(agent.id), [], "A's own thread with the agent is untouched");
+  assert.ok(!everything.some((t2) => /Hello — Hermes here/.test(t2)), everything.join(' | '));
 
   // No turn was spent, observed from both ends: no standing was ever published to
   // B, and the owner still has B down for a full quota.
@@ -412,19 +400,68 @@ test('a bare @name introduces the agent instead of reporting no output', async (
   assert.equal(turnStanding(B.hub.identities.get(remoteId)), null, 'so the panel shows no turn box');
   assert.equal(A.agentHub.standingFor(agent.id, idB).remaining, A.agentHub.TURN_QUOTA);
 
-  // Summoning again greets again — every time, which is the point.
-  await waitFor(
-    () => {
-      B.call('lanchat:sendChat', { peerId: idA, text: '@Hermes' });
-      return B.store.read(remoteId).filter((m) => m.direction === 'in').length === 2;
-    },
-    8000,
-    'a second summon to be answered too'
-  );
+  // Summoning again is accepted again — every time, which is the point, and it
+  // still leaves no trace.
+  const again = B.call('lanchat:sendChat', { peerId: idA, text: '@Hermes' });
+  assert.equal(again.summoned, true, 'a second summon is recognised too');
+  assert.equal(again.threadId, remoteId, 'and points the window at the same thread');
   assert.deepEqual(A.log, [], 'and still nothing has been run');
+  assert.deepEqual(B.store.read(remoteId), [], 'and still nothing is written down');
 });
 
-test('a bare @name from an older peer still gets a greeting', async (t) => {
+// The case the whole summon design rests on.
+//
+// The window lights the agent's row the moment `summoned` comes back, without
+// waiting to hear from the owner — so `summoned` has to be false whenever the
+// summon did not actually leave, or a pulsing row would be claiming a connection
+// that never happened.
+test('a summon that cannot reach its owner is refused, and reveals nothing', async (t) => {
+  const A = makeNode('owner-unreachable', await freePort());
+  const B = makeNode('peer-unreachable', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idA = A.getIdentity().id;
+  const { agent } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  // Direct chat off, so the contact is not on B's roster until something reveals
+  // it. That is what makes "reveals nothing" a real assertion.
+  await A.agentHub.setSharing(agent.id, { networkWide: true, directChat: false });
+
+  // Watched rather than slept on. The summon can only be recognised once B has
+  // adopted the advert, and a send attempted before that falls through to an
+  // ordinary chat message — which would put `@Hermes` in the human conversation
+  // and quietly invalidate the last assertion in this test. ipc.js's own listener
+  // is registered first and runs adopt() synchronously on the same emit, so by
+  // the time this one fires the agent is known.
+  const adverts = [];
+  B.bus.on('peer-message', (m) => m.type === 'agent-advert' && adverts.push(m));
+  await connect(A, B);
+  await waitFor(() => adverts.length > 0, 5000, "A's advert to reach B");
+  assert.equal(remoteIdOn(B, idA, agent.id), null, 'the agent is known but not shown');
+
+  // The owner drops off between the advert arriving and the summon being typed.
+  // Simulated at the send, because that is exactly where it surfaces: hub.send
+  // reports false when there is no live connection to put the frame on.
+  const realSend = B.hub.send.bind(B.hub);
+  B.hub.send = (peerId, obj) => (obj && obj.type === 'agent-summon' ? false : realSend(peerId, obj));
+
+  const res = B.call('lanchat:sendChat', { peerId: idA, text: '@Hermes' });
+  assert.equal(res.summoned, false, 'the window is told the summon did not happen');
+  assert.equal(res.delivered, false);
+  assert.ok(res.threadId, 'and still which thread it was about, so it can say which agent');
+
+  assert.equal(remoteIdOn(B, idA, agent.id), null, 'a summon that never left reveals no contact');
+  assert.deepEqual(B.store.read(idA), [], 'and the bare @name does not fall into the human chat');
+  assert.deepEqual(B.store.read(res.threadId), [], 'nor into the agent thread');
+});
+
+test('a bare @name from an older peer is consumed rather than left in the chat', async (t) => {
   const A = makeNode('owner-legacy', await freePort());
   const B = makeNode('peer-legacy', await freePort());
   await A.server.start();
@@ -443,17 +480,17 @@ test('a bare @name from an older peer still gets a greeting', async (t) => {
   await connect(A, B);
 
   // A build with no summon frame sends the bare mention as ordinary chat — which
-  // is what every existing install does. The owner has to map it onto the same
-  // greeting rather than onto an empty run, or the fix only helps peers who have
-  // already updated.
+  // is what every existing install does. The owner has to treat it the same way,
+  // or the bare `@Hermes` lands in their conversation with that peer.
   B.hub.send(idA, { type: 'chat', id: 'legacy-1', text: '@Hermes', ts: Date.now() });
 
-  const remoteId = await waitFor(() => remoteIdOn(B, idA, agent.id), 5000, 'the contact to appear');
-  await waitFor(() => B.store.read(remoteId).some((m) => m.direction === 'in'), 5000, 'the greeting');
+  // Nothing comes back now, so the thing to wait for is the delegate thread
+  // appearing on A — which is what a summon produces, and all it produces.
+  await waitFor(() => A.hub.identities.has(`${agent.id}#${idB}`), 5000, 'the delegate thread on A');
 
-  assert.equal(B.store.read(remoteId)[0].text, greetingLine('Hermes'));
   assert.deepEqual(A.log, [], 'no empty run for an older asker either');
   assert.deepEqual(A.store.read(idB), [], 'and the bare mention was consumed, not stored as a human message');
+  assert.deepEqual(A.store.read(`${agent.id}#${idB}`), [], 'nor written into the delegate thread');
   assert.equal(A.agentHub.standingFor(agent.id, idB).remaining, A.agentHub.TURN_QUOTA, 'no turn spent');
 });
 
@@ -941,21 +978,30 @@ test('turn-queue notices are shown once and saved by neither side', async (t) =>
     'a genuine question and answer still survive'
   );
 
-  // A failed run is a result, not housekeeping: it says what became of a question
-  // somebody asked, so it is kept like the output would have been. Only the queue
-  // machinery is transient.
+  // A failed run is reported and then swept. It is worth reading once — the
+  // window gives it a countdown rather than dropping it silently, which is what
+  // `error` distinguishes — but a timeout kept forever is a permanent line of
+  // noise in the context of every question asked below it. What it leaves behind
+  // is the mark on the question, not the error itself.
   await new Promise((r) => setTimeout(r, 3100)); // past the anti-flood interval
   B.call('lanchat:sendChat', { peerId: bRemote, text: 'fail:now' });
+  const asked = B.store.read(bRemote).find((m) => m.text === 'fail:now');
   const failed = await waitFor(
     () => B.events.find((e) => e.type === 'chat' && /transport is down/.test(e.payload?.text || '')),
     5000,
     'the error to reach the renderer'
   );
-  assert.ok(!failed.payload.notice, 'an error is not treated as a notice');
+  assert.ok(failed.payload.error, 'the error is marked as one, so the window can count it down');
+  assert.equal(failed.payload.failedRef, asked.id, 'and names the question it is the outcome of');
   assert.deepEqual(
     B.store.read(bRemote).map((m) => `${m.direction}:${m.text}`),
-    ['out:what is the time', 'in:echo:what is the time', 'out:fail:now', 'in:⚠️ transport is down'],
-    'the question and the error explaining it are both kept'
+    ['out:what is the time', 'in:echo:what is the time', 'out:fail:now'],
+    'the question is kept and the error explaining it is not'
+  );
+  assert.equal(
+    B.store.read(bRemote).find((m) => m.id === asked.id).failed,
+    true,
+    'the question that failed is marked, so it stops counting as one that was answered'
   );
 
   // The flag is honoured only for a locally produced agent message. A peer must
@@ -1440,8 +1486,11 @@ test('a failing agent tells the peer what happened without telling them about th
   const remoteId = await waitFor(() => remoteIdOn(B, idA, agent.id), 5000, "B to see A's agent");
   B.call('lanchat:sendChat', { peerId: remoteId, text: 'faildetail:now' });
 
+  // Shown rather than stored, on both machines: a failure is swept once it has
+  // been read. So the split is asserted where it now happens — on the way to each
+  // window — rather than in two history files.
   const seen = await waitFor(
-    () => B.store.read(remoteId).find((m) => m.direction === 'in'),
+    () => B.events.find((e) => e.type === 'chat' && e.payload?.peerId === remoteId)?.payload,
     5000,
     'the failure to reach B over the wire'
   );
@@ -1452,11 +1501,20 @@ test('a failing agent tells the peer what happened without telling them about th
   assert.match(seen.text, /could not be started/, 'B learns the agent failed');
   assert.doesNotMatch(seen.text, /home\/owner/, 'but never sees a path on A');
   assert.doesNotMatch(seen.text, /Command not found/, 'nor which command A is missing');
+  assert.equal(B.store.read(remoteId).filter((m) => m.direction === 'in').length, 0, 'and it is not kept');
 
   // The owner, on the same failure, gets the part that says how to fix it.
   const delegate = `${agent.id}#${idB}`;
-  const kept = A.store.read(delegate).map((m) => m.text).join('\n');
-  assert.match(kept, /Command not found: \/home\/owner\/\.local\/bin\/hermes/, 'A keeps the detail');
+  const told = A.events
+    .filter((e) => e.type === 'chat' && e.payload?.peerId === delegate)
+    .map((e) => e.payload.text)
+    .join('\n');
+  assert.match(told, /Command not found: \/home\/owner\/\.local\/bin\/hermes/, 'A is told the detail');
+  assert.doesNotMatch(
+    A.store.read(delegate).map((m) => m.text).join('\n'),
+    /Command not found/,
+    'and the detail is not written to disk either'
+  );
 });
 
 test('an owner going offline takes their agents with them, without a runaway presence loop', async (t) => {
