@@ -48,8 +48,10 @@ export default function ChatPane({
   // Sessions: the agents one can be pointed at, renaming it, loading a saved
   // conversation into it, and branching a new question off any bubble.
   agents = [],
-  // Agents this peer is sharing, offered while an `@` is typed at them.
+  // Agents this peer is sharing, offered while an `@` is typed at them, and what
+  // choosing one does.
   mentionables = [],
+  onSummon,
   onRenameSession,
   onSetSessionAgent,
   onImportText,
@@ -355,6 +357,7 @@ export default function ChatPane({
               : undefined
         }
         mentionables={mentionables}
+        onSummon={onSummon}
         docs={docs}
         onRemoveDoc={onRemoveDoc}
         // What a fork pinned: shown above the input until it is sent or

@@ -873,6 +873,29 @@ export default function App() {
     setModal(null);
   }
 
+  // An agent chosen from the composer's `@` menu.
+  //
+  // Deliberately not routed through sendText. Nothing is being sent: a summon is
+  // not a message, so there is no draft to clear, no documents to attach and no
+  // quoted context to carry — and going through the send path would take all
+  // three away from a chat where somebody may have been part-way through
+  // composing something.
+  //
+  // By id, so the agent that was picked is the agent that is reached. Turning the
+  // choice back into `@Name` for main to re-parse is the version of this that can
+  // miss and leave a bare mention in a conversation with a person.
+  async function summonAgent(item) {
+    const res = await api.summonAgent(item.id);
+    if (res?.summoned) {
+      setSummoned((s) => ({ ...s, [res.threadId]: true }));
+      return;
+    }
+    // Its owner went offline, or stopped sharing it, between the menu being drawn
+    // and the key being pressed. Said out loud: a summon that produced no bubble
+    // and no light would otherwise look exactly like one that worked.
+    toast(`${item.name} could not be reached — its owner is offline.`, 'error');
+  }
+
   async function sendText(text) {
     if (!selectedId) return;
     // Asking an agent means waiting on it, and that is knowable here without a
@@ -1342,6 +1365,7 @@ export default function App() {
           onRemoveContext={() => setContexts((c) => ({ ...c, [selectedId]: null }))}
           agents={askableAgents}
           mentionables={mentionables}
+          onSummon={summonAgent}
           onRenameSession={renameSession}
           onSetSessionAgent={setSessionAgent}
           onImportText={() => importSessionText(selectedId)}

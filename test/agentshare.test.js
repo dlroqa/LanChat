@@ -575,6 +575,85 @@ test('the same sentence as a real answer is kept, because a question was asked',
   );
 });
 
+// Choosing an agent from the `@` menu summons it by id.
+//
+// The menu knows exactly which agent was picked, so the id is what travels.
+// Writing `@Name` and having matchMention read it back is the version that can
+// miss — on a name that stopped being advertised, or two agents sharing a prefix
+// — and a mention that fails to match falls through to the chat frame, putting a
+// bare `@Name` in the conversation with a person.
+test('an agent picked from the menu is summoned by id, leaving nothing behind', async (t) => {
+  const A = makeNode('pick-owner', await freePort());
+  const B = makeNode('pick-peer', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idA = A.getIdentity().id;
+  const { agent } = await A.agentHub.add({ name: 'Tessie', kind: 'http', config: {} });
+  await A.agentHub.setSharing(agent.id, { networkWide: true, directChat: false });
+  await connect(A, B);
+  const offered = await waitFor(
+    () => B.events.filter((e) => e.type === 'peer-agents').pop()?.payload?.[idA]?.[0],
+    5000,
+    "A's agent to be offered"
+  );
+
+  const res = B.call('lanchat:summonAgent', { threadId: offered.id });
+  assert.equal(res.summoned, true, 'the summon went');
+  assert.equal(res.threadId, offered.id, 'and names the thread the window should light');
+
+  // Nothing was said, so nothing is written down — on either machine.
+  assert.deepEqual(B.store.read(offered.id), [], 'nothing in the agent thread');
+  assert.deepEqual(B.store.read(idA), [], 'and nothing in the chat with its owner');
+  assert.deepEqual(A.store.read(`${agent.id}#${B.getIdentity().id}`), [], 'nor on the owner');
+  assert.deepEqual(A.log, [], 'and the agent was never run');
+
+  // What it did produce: the agent is a contact now, ready to be opened.
+  assert.ok(remoteIdOn(B, idA, agent.id), 'the agent is on the roster');
+});
+
+test('summoning an agent that is no longer there is refused rather than guessed at', async (t) => {
+  const A = makeNode('pick-gone-owner', await freePort());
+  const B = makeNode('pick-gone-peer', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idA = A.getIdentity().id;
+  const { agent } = await A.agentHub.add({ name: 'Tessie', kind: 'http', config: {} });
+  await A.agentHub.setSharing(agent.id, { networkWide: true, directChat: false });
+  await connect(A, B);
+  const offered = await waitFor(
+    () => B.events.filter((e) => e.type === 'peer-agents').pop()?.payload?.[idA]?.[0],
+    5000,
+    "A's agent to be offered"
+  );
+
+  // Withdrawn between the menu being drawn and the key being pressed.
+  await A.agentHub.setSharing(agent.id, { networkWide: false, directChat: false });
+  await waitFor(
+    () => !B.events.filter((e) => e.type === 'peer-agents').pop()?.payload?.[idA],
+    5000,
+    'the withdrawal to land'
+  );
+
+  const res = B.call('lanchat:summonAgent', { threadId: offered.id });
+  assert.equal(res.summoned, false, 'refused rather than sent somewhere');
+  assert.equal(res.threadId, offered.id, 'and still says which agent it was about');
+  assert.deepEqual(B.store.read(idA), [], 'no bare mention lands in the human chat');
+});
+
 test('a summon that cannot reach its owner is refused, and reveals nothing', async (t) => {
   const A = makeNode('owner-unreachable', await freePort());
   const B = makeNode('peer-unreachable', await freePort());

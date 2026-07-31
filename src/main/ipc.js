@@ -598,6 +598,24 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     return { ok: true, removed };
   });
 
+  // Summoning an agent chosen from the composer's `@` menu.
+  //
+  // By thread id rather than by writing `@Name` and letting matchMention read it
+  // back. The menu already knows exactly which agent was picked, and turning that
+  // into text only to parse it again introduces a way for it to go wrong: two
+  // agents whose names share a prefix, a name that stopped being advertised
+  // between the menu opening and the key being pressed, or any mention that fails
+  // to match and falls through to the chat frame below — which would drop a bare
+  // `@Name` into the conversation with a person, the one place agent traffic must
+  // never go.
+  ipcMain.handle('lanchat:summonAgent', (_e, { threadId }) => {
+    const remote = remoteAgents.resolveThread(threadId);
+    // Gone between the menu being drawn and this arriving. Refused rather than
+    // guessed at, and the window says so.
+    if (!remote) return { summoned: false, delivered: false, threadId };
+    return remoteAgents.summon(remote.ownerPeerId, remote.entry);
+  });
+
   // Taking named messages out of any thread.
   //
   // Separate from sweepSessionErrors above, which also corrects a session's

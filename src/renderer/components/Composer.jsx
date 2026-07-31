@@ -29,6 +29,9 @@ export default function Composer({
   // mention to — App does the filtering, because knowing which agents belong to
   // the open thread is its business and not the composer's.
   mentionables = [],
+  // Summoning one of them. Chosen from the menu with Enter or a click, which
+  // reaches the agent rather than writing its name down.
+  onSummon = () => {},
 }) {
   // Recording needs MediaRecorder with an Opus-capable container; hide the
   // affordance entirely where that is missing rather than failing on press.
@@ -137,10 +140,34 @@ export default function Composer({
     setCaret(e.target.selectionStart);
   }
 
-  // Completing a mention. The trailing space is the point: `@Name` alone is a
-  // summon and `@Name …` is a question, so leaving the caret ready to ask one is
-  // what makes the menu a way of reaching an agent rather than just of naming it.
-  function pick(item) {
+  // Choosing an agent summons it, there and then.
+  //
+  // Picking a name out of this list is the whole gesture — the point of it is to
+  // reach the agent, and a summon is not a message, so there is nothing to
+  // compose and nothing to send. It leaves no bubble here and none on the owner's
+  // machine; what it produces is the agent's thread, waiting on the left.
+  //
+  // The half-typed mention goes with it. Anything after the caret is kept, since
+  // that was never part of the name being chosen.
+  function summon(item) {
+    const rest = text.slice(caret);
+    setText(rest);
+    setCaret(0);
+    setDismissed(false);
+    onSummon(item);
+    const el = ref.current;
+    if (el) {
+      el.focus();
+      requestAnimationFrame(() => el.setSelectionRange(0, 0));
+    }
+  }
+
+  // Completing the name instead, without sending anything.
+  //
+  // The other thing a mention can be: `@Name …` is a question rather than a
+  // summon, and this is how one is written from the menu. The trailing space is
+  // what makes it that — it closes the mention and leaves the caret ready to ask.
+  function complete(item) {
     const rest = text.slice(caret);
     const head = `@${item.name} `;
     setText(head + rest);
@@ -188,9 +215,20 @@ export default function Composer({
         setActive((i) => (i - 1 + matches.length) % matches.length);
         return;
       }
-      if (e.key === 'Enter' || e.key === 'Tab') {
+      // Enter summons the highlighted agent immediately — the list is a way of
+      // reaching one, and needing a second keystroke to act on a choice already
+      // made is a step that earns nothing.
+      if (e.key === 'Enter') {
         e.preventDefault();
-        pick(matches[active]);
+        summon(matches[active]);
+        return;
+      }
+      // Tab writes the name out instead, for the other thing a mention can be:
+      // `@Name …` is a question. Without this there would be no way to ask one
+      // from the menu.
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        complete(matches[active]);
         return;
       }
       if (e.key === 'Escape') {
@@ -208,9 +246,10 @@ export default function Composer({
   return (
     <div className="composer-wrap">
       {/* Above the input, because that is where there is room for it — a list
-          below would be off the bottom of the window. */}
+          below would be off the bottom of the window. Clicking a row does what
+          Enter does: it is the same choice made with a different hand. */}
       {menuOpen && (
-        <MentionMenu id={menuId} items={matches} active={active} onPick={pick} onHover={setActive} />
+        <MentionMenu id={menuId} items={matches} active={active} onPick={summon} onHover={setActive} />
       )}
       {/* What a fork is asking about. Above the words for the same reason the
           documents are: it is part of the message being written, and seeing it
