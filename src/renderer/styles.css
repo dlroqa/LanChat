@@ -210,6 +210,20 @@ textarea {
   height: var(--header-h);
   box-sizing: border-box;
   padding: 0 14px;
+}
+/* What you do to this machine, rather than to a conversation: profile,
+   developer, settings, and starting a session. Under the name instead of beside
+   it — three targets already crowded that row against the window edge, and a
+   fourth had nowhere to go. The line that used to close the name block closes
+   this one instead, so the two still read as one header.
+
+   The first glyph sits on the same left edge as the avatar above it: the button
+   is 34px around an 18px icon, so 6px of padding puts the mark at 14px. */
+.me-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px 8px;
   border-bottom: 1px solid var(--border-soft);
 }
 .me .meta {
@@ -619,6 +633,90 @@ input:focus-visible {
   gap: 4px;
 }
 
+/* ---- sessions -------------------------------------------------------------
+   A session is a workspace rather than a correspondent: no face, no presence,
+   and a name you write yourself. The mark stands where an avatar would, in the
+   accent colour, so a glance down the roster tells the two apart without
+   reading either. */
+.session-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+  color: var(--primary);
+}
+.peer.session .session-mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+}
+/* The title is read far more often than it is written, so it is a piece of text
+   until it is clicked. Both states share a box of the same height and the same
+   left edge — renaming a session should not make the header jump. */
+.session-title,
+.session-title-input {
+  font: inherit;
+  font-weight: 600;
+  color: var(--fg);
+  line-height: 20px;
+  height: 22px;
+  box-sizing: border-box;
+  max-width: 100%;
+}
+.session-title {
+  display: block;
+  padding: 0 4px;
+  margin-left: -4px;
+  border-radius: 6px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background 0.12s ease;
+}
+.session-title:hover {
+  background: var(--surface-hover);
+}
+.session-title-input {
+  width: 100%;
+  padding: 0 4px;
+  margin-left: -4px;
+  border: 1px solid var(--primary);
+  border-radius: 6px;
+  background: var(--surface);
+  outline: none;
+}
+/* The one thing a session has to be told. It sits in the subtitle because that
+   is where a thread says what it is talking to. */
+.session-sub {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.session-agent {
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 1px 4px;
+  max-width: 220px;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.session-agent:hover {
+  background: var(--surface-hover);
+  border-color: var(--border);
+}
+.session-agent option {
+  color: var(--fg);
+  background: var(--bg-2);
+}
+
 /* Holds the scrolling message list and the connection light that plays behind it.
    The light cannot live inside .messages: `inset: 0` in a scrolling box resolves
    against the scrolled content, so it would be as tall as the whole conversation
@@ -702,6 +800,81 @@ input:focus-visible {
 }
 .bubble-row.out .bubble .time {
   color: rgba(255, 255, 255, 0.75);
+}
+
+/* ---- forking --------------------------------------------------------------
+   Carrying one thing that was said into a new question: the quote inside the
+   bubble that asked, and the button that offers to take it.
+
+   Both are tinted from `currentColor` rather than from a fixed colour, so the
+   same rules read correctly on the received side and on the blue of a sent one
+   without either having to know which side it is on. */
+.bubble-quote {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding: 6px 9px;
+  border-left: 2px solid color-mix(in srgb, currentColor 45%, transparent);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  font-size: 12.5px;
+}
+.bubble-quote-mark {
+  flex: none;
+  opacity: 0.5;
+  line-height: 1.2;
+}
+/* Four lines of it. A quoted answer can be pages long, and the point of showing
+   it is to say which answer, not to reprint it above the question. */
+.bubble-quote-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+  opacity: 0.85;
+}
+/* Outside the bubble and beside it, so it never sits on the words it is
+   offering to carry. Hidden until the row is pointed at — and until the button
+   itself is focused, which is how it is reached without a mouse. */
+.bubble-fork {
+  flex: none;
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  margin: 0 2px 2px;
+  border-radius: 50%;
+  color: var(--fg-faint);
+  opacity: 0;
+  transform: scale(0.92);
+  transition: opacity 0.14s ease, transform 0.14s ease, background 0.12s ease, color 0.12s ease;
+}
+.bubble-row:hover .bubble-fork,
+.bubble-fork:focus-visible {
+  opacity: 1;
+  transform: none;
+}
+.bubble-fork:hover {
+  background: var(--surface-hover);
+  color: var(--primary);
+}
+/* On a sent row the bubble is against the right edge, so the button goes on the
+   inside of it rather than off the end of the pane. */
+.bubble-row.out .bubble-fork {
+  order: -1;
+}
+.imported-mark {
+  margin-left: 5px;
+  opacity: 0.75;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bubble-fork {
+    transition: opacity 0.14s ease;
+    transform: none;
+  }
 }
 
 /* ---- links in messages ----------------------------------------------------
@@ -984,6 +1157,44 @@ input:focus-visible {
   padding: 12px 16px 0;
   max-height: var(--composer-max);
   overflow-y: auto;
+}
+/* What a fork is asking about, above the words being written about it. Two
+   lines of it: enough to see which answer was picked up, not so much that the
+   composer becomes the conversation. */
+.composer-context {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 12px 16px 0;
+  padding: 7px 8px 7px 10px;
+  border-left: 2px solid var(--primary);
+  border-radius: 0 8px 8px 0;
+  background: var(--surface);
+  font-size: 12.5px;
+  color: var(--fg-muted);
+  animation: doc-chip-in 0.16s ease both;
+}
+.composer-quote-mark {
+  flex: none;
+  opacity: 0.6;
+  line-height: 1.3;
+}
+.composer-quote-text {
+  flex: 1;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+}
+.composer-context b {
+  color: var(--fg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-context {
+    animation: none;
+  }
 }
 .composer-doc {
   display: inline-flex;

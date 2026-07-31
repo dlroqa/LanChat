@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { formatTime, formatBytes, isImage, isVideo, isAudio } from '../lib/util.js';
-import { FileIcon, Download } from '../lib/icons.jsx';
+import { FileIcon, Download, Fork } from '../lib/icons.jsx';
 import { linkify } from '../lib/linkify.js';
 import LinkPreview from './LinkPreview.jsx';
 
@@ -18,6 +18,10 @@ export default function MessageBubble({
   onOpenLink,
   linkPreview,
   onPreviewShown,
+  // Carrying this bubble into a question. Given only where there is something
+  // that can answer one — a session, or an agent thread a session can be
+  // started from — so a chat with a person never grows the affordance.
+  onFork,
 }) {
   const out = msg.direction === 'out';
 
@@ -45,9 +49,27 @@ export default function MessageBubble({
   // only in this window and only for a moment — long enough to be seen going.
   const rejected = out && msg.rejected === true;
 
+  // Only text can be quoted into a question: a file is a thing on disk, and
+  // "here is a photo I once sent" is not a context an agent can read.
+  const forkable = Boolean(onFork) && msg.kind !== 'file' && Boolean(msg.text) && !msg.notice && !rejected;
+
   return (
     <div className={`bubble-row ${out ? 'out' : 'in'} ${grouped ? 'grouped' : ''}`}>
       <div className={`bubble ${queued ? 'queued' : ''} ${rejected ? 'rejected' : ''}`}>
+        {/* What this question was asked about. Stored on the message rather than
+            folded into its text, so the transcript keeps the question somebody
+            typed and shows separately what it was carrying. */}
+        {msg.context && (
+          <div className="bubble-quote">
+            <span className="bubble-quote-mark" aria-hidden="true">
+              ❝
+            </span>
+            <span className="bubble-quote-text">
+              {msg.context.speaker ? <b>{msg.context.speaker}: </b> : null}
+              {msg.context.text}
+            </span>
+          </div>
+        )}
         {/* Documents handed to an agent. The bubble names them rather than
             reproducing them: what the agent read was a whole PDF, and a
             transcript that quoted it back would be unreadable. */}
@@ -74,6 +96,15 @@ export default function MessageBubble({
         )}
         <div className="time">
           {formatTime(msg.ts)}
+          {/* Loaded from a file rather than said here. Marked because a session
+              is a place where both kinds of message sit together, and one that
+              was imported must not be able to pass itself off as something the
+              agent just replied. */}
+          {msg.imported && (
+            <span className="imported-mark" title={msg.source ? `Imported from ${msg.source}` : 'Imported'}>
+              · imported
+            </span>
+          )}
           {queued && (
             <span className="queued-mark" title="Waiting for them to come online">
               · queued
@@ -86,6 +117,19 @@ export default function MessageBubble({
           )}
         </div>
       </div>
+      {/* Outside the bubble, beside it. Inside, it would sit on top of the words
+          it is offering to carry. Revealed on hover and on focus, so it is
+          reachable by keyboard as well as by mouse. */}
+      {forkable && (
+        <button
+          className="bubble-fork"
+          onClick={() => onFork(msg)}
+          title="Ask about this"
+          aria-label="Ask about this"
+        >
+          <Fork size={15} />
+        </button>
+      )}
     </div>
   );
 }

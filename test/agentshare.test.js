@@ -172,6 +172,7 @@ function makeNode(name, port) {
     pip: null,
     agentHub,
     outbox: { enqueue: () => {}, pendingCount: () => 0, counts: () => ({}) },
+    userDataDir: dir,
     downloadsDir: path.join(dir, 'dl'),
     getWindow: () => ({
       isDestroyed: () => false,

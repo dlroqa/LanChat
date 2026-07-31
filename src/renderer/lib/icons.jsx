@@ -184,3 +184,29 @@ export const Code = (p) => (
     <polyline points="8 6 2 12 8 18" />
   </S>
 );
+// Stacked sheets: a session is a conversation kept to one side of the others.
+export const Sessions = (p) => (
+  <S {...p}>
+    <rect x="3" y="7" width="14" height="14" rx="2" />
+    <path d="M7 4h12a1 1 0 0 1 1 1v12" />
+  </S>
+);
+// A branch leaving the line it grew from — the shape of taking one thing that
+// was said and carrying on from there.
+export const Fork = (p) => (
+  <S {...p}>
+    <circle cx="6" cy="5" r="2.5" />
+    <circle cx="6" cy="19" r="2.5" />
+    <circle cx="18" cy="12" r="2.5" />
+    <path d="M6 7.5v9" />
+    <path d="M8.5 5H12a3.5 3.5 0 0 1 3.5 3.5v1" />
+  </S>
+);
+// Upload: the mirror of Download, arrow going the other way.
+export const Upload = (p) => (
+  <S {...p}>
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="7 8 12 3 17 8" />
+    <line x1="12" y1="3" x2="12" y2="15" />
+  </S>
+);

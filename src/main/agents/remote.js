@@ -158,7 +158,10 @@ function createRemoteAgents({ hub, store }) {
   // differ only when documents are attached, and the split is the point: the
   // documents' text has to travel to the owner's machine to reach the agent,
   // but a transcript that kept it would be a transcript of a PDF.
-  function send(ownerPeerId, entry, text, { prompt, docs = [] } = {}) {
+  // `thread` is a session asking through this agent: the local copy is filed
+  // there instead of in the agent's own thread, and so is the answer.
+  function send(ownerPeerId, entry, text, { prompt, docs = [], thread = null, context = null } = {}) {
+    const into = thread || entry.id;
     // Asking again while the question we already sent is still waiting to be
     // read. It would not be answered any sooner, so it is refused here rather
     // than sent: never written down, never on the wire, and the text goes back
@@ -181,7 +184,7 @@ function createRemoteAgents({ hub, store }) {
         docs: docs.map((d) => ({ path: d.path, name: d.name, bytes: d.bytes })),
         notice: {
           id: crypto.randomUUID(),
-          peerId: entry.id,
+          peerId: into,
           direction: 'in',
           kind: 'text',
           text: busyLine(entry.name, entry.standing.position),
@@ -194,15 +197,25 @@ function createRemoteAgents({ hub, store }) {
     show(ownerPeerId, entry);
     const message = {
       id: crypto.randomUUID(),
-      peerId: entry.id,
+      peerId: into,
       direction: 'out',
       kind: 'text',
       text,
       ts: Date.now(),
       ...(docs.length && { docs: docs.map((d) => ({ name: d.name, bytes: d.bytes })) }),
+      ...(context && { context }),
     };
+    // Where the answer to *this* question goes. The frame carries no id we could
+    // match a reply against, and adding one would only work against peers whose
+    // build echoes it — so the correlation is kept here instead, and it is sound
+    // because there is only ever one question outstanding: a second one, asked
+    // while the first is still waiting to be read, is refused above before it
+    // reaches the wire. An entry that goes away takes this with it, because drop()
+    // deletes the whole record. If concurrent questions are ever allowed, this
+    // has to become a `ref` echoed by the owner rather than a field here.
+    entry.pendingThread = thread || null;
     const ok = hub.send(ownerPeerId, { type: 'agent-chat', agentId: entry.agentId, text: prompt ?? text });
-    store.append(entry.id, message);
+    store.append(into, message);
     return { ...message, delivered: ok };
   }
 
@@ -250,16 +263,22 @@ function createRemoteAgents({ hub, store }) {
     // dropped rather than kept. This is the copy the asking peer actually reads,
     // so it is where the queue chatter would otherwise pile up.
     const notice = msg.notice === true;
+    // A session asked this, so the answer belongs there and not in the agent's
+    // own thread. Queue chatter goes to the same place — it is about the
+    // question that is waiting — but only a real answer ends the correlation:
+    // being told you are third in line does not mean you have been answered.
+    const into = entry.pendingThread || entry.id;
+    if (!notice) entry.pendingThread = null;
     const message = {
       id: crypto.randomUUID(),
-      peerId: entry.id,
+      peerId: into,
       direction: 'in',
       kind: 'text',
       text: msg.text,
       ts: msg.ts || Date.now(),
       ...(notice && { notice: true }),
     };
-    if (!notice) store.append(entry.id, message);
+    if (!notice) store.append(into, message);
     return message;
   }
 
@@ -302,6 +321,24 @@ function createRemoteAgents({ hub, store }) {
     return entry;
   }
 
+  // Where anything about the question we are waiting on should be shown: the
+  // session that asked it, or the agent's own thread when nothing else did.
+  function threadFor(entry) {
+    if (!entry) return null;
+    return entry.pendingThread || entry.id;
+  }
+
+  // Their run finished with nothing in it. That is an answer — an empty one —
+  // so it is shown wherever the answer would have gone and it ends the
+  // correlation, exactly as a reply does.
+  function emptyRun(ownerPeerId, agentId) {
+    const entry = get(ownerPeerId, agentId);
+    if (!entry) return null;
+    const into = threadFor(entry);
+    entry.pendingThread = null;
+    return into;
+  }
+
   function resolveThread(threadId) {
     if (!isRemoteAgentId(threadId)) return null;
     const parts = parseRemoteAgentId(threadId);
@@ -322,6 +359,8 @@ function createRemoteAgents({ hub, store }) {
     setStanding,
     setActivity,
     resolveThread,
+    threadFor,
+    emptyRun,
     isRemoteAgentId,
   };
 }

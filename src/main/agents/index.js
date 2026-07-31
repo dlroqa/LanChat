@@ -503,17 +503,29 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   // ---- inbound: a message addressed to the agent ----
 
   // `origin` is null for the local user, or the peer id when relayed from the LAN.
-  async function deliver(agentId, text, origin = null) {
+  //
+  // `thread` is where the answer is to be filed when that is not the thread the
+  // addressing already implies — a session, which is a local workspace that asks
+  // this agent and keeps its own conversation. Worked out once here and carried
+  // to every place that reports back, rather than derived again at each of them.
+  async function deliver(agentId, text, origin = null, { thread = null } = {}) {
     const entry = live.get(agentId);
     const record = registry.get(agentId);
     if (!record || !entry) return;
 
+    const threadId = thread || (origin ? delegateIdFor(agentId, origin) : agentId);
+
     if (entry.busy) {
-      reply(agentId, 'I am still working on the previous message — one at a time, please.', origin);
+      reply(agentId, 'I am still working on the previous message — one at a time, please.', origin, { threadId });
       return;
     }
     entry.busy = true;
-    bus.emit('agent-typing', { agentId, isTyping: true });
+    // Live feedback — thinking and streamed words — is addressed to the thread a
+    // reader is actually looking at. A session gets its own; everything else
+    // keeps going out under the agent's id, exactly as it always has, so a
+    // delegate thread's indicator does not move house on the strength of this.
+    const liveId = thread || agentId;
+    bus.emit('agent-typing', { agentId, threadId: liveId, isTyping: true });
     // A peer asking from another machine has no view of the agent at all, so
     // working state is relayed to them. Without it their end can only show
     // "online" and a silence, with no way to tell thinking from stuck.
@@ -525,7 +537,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
       {
         onDelta: (delta) => {
           streamed += delta;
-          bus.emit('agent-delta', { agentId, delta });
+          bus.emit('agent-delta', { agentId, threadId: liveId, delta });
         },
         onStatus: (status) => {
           emitStatus(agentId, status ? 'working' : 'ready', status);
@@ -540,7 +552,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
         onDone: ({ text: output }) => {
           entry.busy = false;
           entry.pendingApproval = null;
-          bus.emit('agent-typing', { agentId, isTyping: false });
+          bus.emit('agent-typing', { agentId, threadId: liveId, isTyping: false });
           relayActivity(agentId, origin, false, null);
           // A run can finish with genuinely nothing in it: a CLI exiting 0 with an
           // empty stdout, or an ACP session stopping for a normal reason having
@@ -554,8 +566,8 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
           // shown once, in the space where the answer would have been, and then
           // gone. Nothing stored, no unread, no notification sound.
           const text = output || streamed;
-          if (text) reply(agentId, text, origin, { keep: true });
-          else signalEmptyRun(agentId, origin);
+          if (text) reply(agentId, text, origin, { keep: true, threadId });
+          else signalEmptyRun(agentId, origin, threadId);
           // Hand over as soon as the last query of a turn finishes, so whoever
           // is next is told immediately rather than on their next attempt.
           if (origin) releaseIfSpent(agentId);
@@ -563,7 +575,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
         onError: (err) => {
           entry.busy = false;
           entry.pendingApproval = null;
-          bus.emit('agent-typing', { agentId, isTyping: false });
+          bus.emit('agent-typing', { agentId, threadId: liveId, isTyping: false });
           relayActivity(agentId, origin, false, null);
           emitStatus(agentId, 'error', describeError(err));
           // Kept, like the output would have been: it is the result of a
@@ -572,7 +584,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
           //
           // Only `err.message` is relayed onward — `err.detail` names things
           // that exist on this machine and stays here. See transports/resolve.js.
-          reply(agentId, `⚠️ ${err.message}`, origin, { keep: true, detail: err.detail });
+          reply(agentId, `⚠️ ${err.message}`, origin, { keep: true, detail: err.detail, threadId });
         },
       }
     );
@@ -598,12 +610,16 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     return err && err.detail ? `${err.message} ${err.detail}` : err && err.message;
   }
 
-  function reply(agentId, text, origin, { keep = false, detail = null } = {}) {
+  function reply(agentId, text, origin, { keep = false, detail = null, threadId: into = null } = {}) {
     // A peer's conversation with the agent belongs in its own thread, not in the
     // human chat with that peer — otherwise asking an agent something graffitis
     // two real conversations. The owner still sees everything, just filed under
     // "Agent · via <peer>" instead of smeared through their chat with them.
-    const threadId = origin ? delegateIdFor(agentId, origin) : agentId;
+    //
+    // `into` is deliver()'s answer to the same question, worked out once at the
+    // top of the run; the expression below is what it falls back to for a caller
+    // that has no run behind it.
+    const threadId = into || (origin ? delegateIdFor(agentId, origin) : agentId);
     // `detail` is local-only, so it is folded into the copy kept here and left
     // out of the frame below. The two must never be built from one string.
     const localText = detail ? `${text} ${detail}` : text;
@@ -637,8 +653,8 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   // Both halves are addressed the same way reply() addresses its two: the local
   // thread by id, and the asking peer alone — never everyone, never a peer who
   // did not ask.
-  function signalEmptyRun(agentId, origin) {
-    bus.emit('agent-empty', { threadId: origin ? delegateIdFor(agentId, origin) : agentId });
+  function signalEmptyRun(agentId, origin, into = null) {
+    bus.emit('agent-empty', { threadId: into || (origin ? delegateIdFor(agentId, origin) : agentId) });
     if (origin) hub.send(origin, { type: 'agent-empty', agentId });
   }
 
@@ -1152,6 +1168,22 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     },
     answerApproval,
     stopRun,
+    // Asking from this machine, on behalf of a thread that is not the agent's
+    // own — a session. False when the agent is not running, so the caller can
+    // say so rather than leaving a question in a transcript that nothing will
+    // answer. Everything a peer can reach still goes through the routers below,
+    // which is where the sharing gates live; this path is local-only by
+    // construction and reaches no further than `deliver`.
+    ask: (agentId, text, { thread = null } = {}) => {
+      if (!live.has(agentId)) return false;
+      deliver(agentId, text, null, { thread });
+      return true;
+    },
+    // Whether there is anything there to ask. Asked separately from ask() so a
+    // caller can write the question down before putting it, rather than after:
+    // a transport that answers immediately would otherwise have its reply filed
+    // above the question it was answering.
+    isRunning: (agentId) => live.has(agentId),
     routeFromPeer,
     routeDirect,
     routeSummon,

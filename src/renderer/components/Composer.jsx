@@ -18,6 +18,11 @@ export default function Composer({
   // because a file can also arrive by being dropped anywhere on the window.
   docs = [],
   onRemoveDoc,
+  // The excerpt a fork pinned: `{ text, speaker, ts }`, travelling with the next
+  // message as context. Held by App for the same reason the documents are — it
+  // is pinned from a bubble, which is not this component's to know about.
+  context = null,
+  onRemoveContext,
   placeholder,
 }) {
   // Recording needs MediaRecorder with an Opus-capable container; hide the
@@ -118,6 +123,29 @@ export default function Composer({
 
   return (
     <div className="composer-wrap">
+      {/* What a fork is asking about. Above the words for the same reason the
+          documents are: it is part of the message being written, and seeing it
+          is what stops the next question being typed as though the agent could
+          already see what you meant. */}
+      {context && (
+        <div className="composer-context">
+          <span className="composer-quote-mark" aria-hidden="true">
+            ❝
+          </span>
+          <span className="composer-quote-text">
+            {context.speaker ? <b>{context.speaker}: </b> : null}
+            {context.text}
+          </span>
+          <button
+            className="composer-doc-remove"
+            onClick={onRemoveContext}
+            title="Ask without this context"
+            aria-label="Ask without this context"
+          >
+            <X size={13} />
+          </button>
+        </div>
+      )}
       {/* Staged documents sit above the input rather than inside it: they are
           part of the message being written, and stay visible while it is. */}
       {docs.length > 0 && (

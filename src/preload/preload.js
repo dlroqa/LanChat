@@ -36,7 +36,17 @@ contextBridge.exposeInMainWorld('lanchat', {
   getHistory: (peerId) => invoke('lanchat:getHistory', peerId),
   clearHistory: (peerId) => invoke('lanchat:clearHistory', { peerId }),
   exportHistory: (peerId, name) => invoke('lanchat:exportHistory', { peerId, name }),
-  sendChat: (peerId, text, docPaths) => invoke('lanchat:sendChat', { peerId, text, docPaths }),
+  sendChat: (peerId, text, docPaths, context) => invoke('lanchat:sendChat', { peerId, text, docPaths, context }),
+
+  // Sessions: local workspaces that ask an agent. Their messages travel the
+  // ordinary chat channels — these are only the list and the way a saved
+  // conversation gets loaded back in.
+  listSessions: () => invoke('lanchat:listSessions'),
+  createSession: (draft) => invoke('lanchat:createSession', draft || {}),
+  renameSession: (id, title) => invoke('lanchat:renameSession', { id, title }),
+  setSessionAgent: (id, agentId) => invoke('lanchat:setSessionAgent', { id, agentId }),
+  deleteSession: (id) => invoke('lanchat:deleteSession', { id }),
+  importSessionText: (id) => invoke('lanchat:importSessionText', { id }),
   sendTyping: (peerId, isTyping) => invoke('lanchat:sendTyping', { peerId, isTyping }),
   sendSignal: (peerId, signal) => invoke('lanchat:sendSignal', { peerId, signal }),
 

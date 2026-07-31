@@ -281,6 +281,7 @@ async function startServices() {
     netScope,
     outbox,
     devGate,
+    userDataDir: app.getPath('userData'),
     downloadsDir,
     getWindow,
     revealWindow: showWindow,

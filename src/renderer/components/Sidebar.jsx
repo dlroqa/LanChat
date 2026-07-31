@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import Avatar from './Avatar.jsx';
 import QueueBadge from './QueueBadge.jsx';
-import { Settings, Plus, Search, Refresh, Users, GroupCall, Code } from '../lib/icons.jsx';
+import { Settings, Plus, Search, Refresh, Users, GroupCall, Code, Sessions } from '../lib/icons.jsx';
 import { platformLabel } from '../lib/util.js';
 
 // Why a peer could not connect, in words rather than a code.
@@ -38,10 +38,12 @@ export default function Sidebar({
   queued = {},
   authFailures = {},
   showAddresses,
+  sessions = [],
   onSelect,
   onOpenProfile,
   onOpenDev,
   onOpenSettings,
+  onNewSession,
   onAddPeer,
   onRefresh,
   onNewGroupCall,
@@ -66,6 +68,41 @@ export default function Sidebar({
 
   // Tailnet devices that are online but not running LanChat (informational).
   const noApp = useMemo(() => (tailnet || []).filter((t) => t.online && !t.hasApp), [tailnet]);
+
+  // Sessions answer the search box too. One that kept showing every session
+  // while the people below it disappeared would read as a filter that had half
+  // failed.
+  const shownSessions = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    return s ? sessions.filter((x) => (x.title || '').toLowerCase().includes(s)) : sessions;
+  }, [sessions, q]);
+
+  // What a session is for, in the line under its name: the agent it asks, or
+  // that it has not been given one yet. The agent's name comes from the roster
+  // rather than from the record, so a renamed agent is renamed here too.
+  const sessionRow = (s) => {
+    const agent = s.agentId ? peers.find((p) => p.id === s.agentId) : null;
+    return (
+      <div
+        key={s.id}
+        className={`peer session ${s.id === selectedId ? 'active' : ''}`}
+        onClick={() => onSelect(s.id)}
+      >
+        <span className="session-mark" aria-hidden="true">
+          <Sessions size={17} />
+        </span>
+        <div className="meta">
+          <div className="name">
+            <span className="name-text">{s.title}</span>
+          </div>
+          <div className="sub">
+            {s.agentId ? `Session · ${agent ? agent.name : 'agent unavailable'}` : 'Session · no agent yet'}
+          </div>
+        </div>
+        {unread[s.id] > 0 && <span className="unread-dot">{unread[s.id]}</span>}
+      </div>
+    );
+  };
 
   const peerRow = (p) => (
     <div
@@ -127,14 +164,24 @@ export default function Sidebar({
           <div className="name">{self?.name || 'You'}</div>
           <div className="sub">{self?.hostname} · {platformLabel(self?.platform)}</div>
         </div>
-        <button className="icon-btn" onClick={onOpenProfile} title="Edit profile">
+      </div>
+
+      {/* The things you do to this machine rather than to a conversation, on
+          their own line under the name. They used to share the row with it,
+          which left three targets crowded against the edge and no room for a
+          fourth. */}
+      <div className="me-actions">
+        <button className="icon-btn" onClick={onOpenProfile} title="Edit profile" aria-label="Edit profile">
           <Users size={18} />
         </button>
-        <button className="icon-btn" onClick={onOpenDev} title="Developer">
+        <button className="icon-btn" onClick={onOpenDev} title="Developer" aria-label="Developer">
           <Code size={18} />
         </button>
-        <button className="icon-btn" onClick={onOpenSettings} title="Settings">
+        <button className="icon-btn" onClick={onOpenSettings} title="Settings" aria-label="Settings">
           <Settings size={18} />
+        </button>
+        <button className="icon-btn" onClick={onNewSession} title="New session" aria-label="New session">
+          <Sessions size={18} />
         </button>
       </div>
 
@@ -154,6 +201,19 @@ export default function Sidebar({
       </div>
 
       <div className="peer-list">
+        {/* Work in progress before correspondents: a session is something you
+            are in the middle of, and the button that starts one is directly
+            above. Like the agents below, the heading only exists when there is
+            something under it. */}
+        {shownSessions.length > 0 && (
+          <>
+            <div className="section-label">
+              <span>Sessions</span>
+            </div>
+            {shownSessions.map(sessionRow)}
+          </>
+        )}
+
         {/* Agents first, so the panel opens on them. The section only exists
             when there is an agent to put in it — an empty heading would read
             as something missing. */}

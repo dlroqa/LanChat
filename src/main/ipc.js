@@ -8,6 +8,7 @@ const { guessMime } = require('./fileTransfer');
 const { readDocument, composePrompt } = require('./documents');
 const { LOCAL_ORIGIN: AGENT_LOCAL_ORIGIN } = require('./agents');
 const { createRemoteAgents } = require('./agents/remote');
+const { createSessions, isSessionId } = require('./sessions');
 const { normalizeWebUrl } = require('./webLinks');
 const { createLinkPreview } = require('./linkPreview');
 const { fingerprint } = require('./authProto');
@@ -74,7 +75,7 @@ const SETTABLE_KEYS = Object.freeze([
 //   - bus events -> webContents 'lanchat:event' : main -> renderer notifications
 // The renderer only ever sees the small, explicit surface exposed in preload.js.
 
-function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, updater, linkStats, pip, agentHub, outbox, devGate, deviceKey, pins, netScope, downloadsDir, getWindow, revealWindow, applyLoginItem, onUnread }) {
+function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, updater, linkStats, pip, agentHub, outbox, devGate, deviceKey, pins, netScope, userDataDir, downloadsDir, getWindow, revealWindow, applyLoginItem, onUnread }) {
   function emit(type, payload) {
     const win = getWindow();
     if (win && !win.isDestroyed()) win.webContents.send('lanchat:event', { type, payload });
@@ -83,6 +84,16 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   // Agents other peers have shared with us. Purely a receiver of adverts — it
   // never assumes a grant that was not sent.
   const remoteAgents = createRemoteAgents({ hub, store });
+
+  // Sessions: local workspaces that ask an agent — one of ours or one a peer
+  // shared. Built here rather than in main.js because reaching a shared agent
+  // means reaching `remoteAgents`, which lives here and nowhere else.
+  const sessions = createSessions({ userDataDir, store, agentHub, remoteAgents });
+
+  // Threads that exist only on this machine. Nothing off the wire may claim one.
+  function isLocalThreadId(id) {
+    return Boolean((agentHub && agentHub.isAgent(id)) || isSessionId(id));
+  }
 
   // A peer's request to one of our agents. Stored under that agent's own thread
   // so the human chat with them stays clean, while still showing us in full what
@@ -130,7 +141,9 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   bus.on('agent-status', (s) => emit('agent-status', s));
   bus.on('agent-delta', (d) => emit('agent-delta', d));
   bus.on('agent-approval', (a) => emit('agent-approval', a));
-  bus.on('agent-typing', ({ agentId, isTyping }) => emit('typing', { peerId: agentId, isTyping }));
+  // Addressed to the thread that is waiting on the run rather than to the agent,
+  // which are the same id unless a session asked. See deliver() in agents/index.js.
+  bus.on('agent-typing', ({ agentId, threadId, isTyping }) => emit('typing', { peerId: threadId || agentId, isTyping }));
   // A run that finished with nothing in it. Carries a thread id rather than an
   // agent id because a peer's conversation with a local agent lives in its own
   // delegate thread, and that is the thread the window has to answer in.
@@ -180,17 +193,43 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   bus.on('peer-message', (msg) => {
     const from = msg.from;
     if (!from) return;
-    // Agent ids are namespaced `agent:` and only ever originate locally. A frame
-    // off the wire claiming one is a peer impersonating an agent — drop it. The
-    // marker is a Symbol, so JSON.parse cannot forge it (see agents/index.js).
-    if (agentHub && agentHub.isAgent(from) && !msg[AGENT_LOCAL_ORIGIN]) {
-      console.warn('[ipc] dropped a wire frame claiming an agent id:', from);
+    // Agent and session ids are namespaced and only ever originate locally: an
+    // agent is a connector on this machine and a session is a workspace in this
+    // window, and neither is reachable from the network by design. A frame off
+    // the wire claiming one is a peer impersonating a local thread — drop it.
+    // The marker is a Symbol, so JSON.parse cannot forge it (see
+    // agents/index.js).
+    //
+    // Both namespaces are checked in one place on purpose. A session receives
+    // agent replies through this same bus, so the guard had to admit it; a guard
+    // that admitted it by name would have been a hole in the one rule that keeps
+    // local threads local.
+    if (isLocalThreadId(from) && !msg[AGENT_LOCAL_ORIGIN]) {
+      console.warn('[ipc] dropped a wire frame claiming a local thread id:', from);
       return;
     }
     // Link-quality control frames are consumed here, never shown as chat.
     if (linkStats && linkStats.handleMessage(msg)) return;
     switch (msg.type) {
       case 'chat': {
+        // An answer an agent gave a session. It is already addressed to the
+        // thread it belongs in, and it must not be offered to the agent routers
+        // below: an answer that happened to open with "@" would otherwise be
+        // read as a fresh question and asked all over again.
+        if (isSessionId(from)) {
+          const answer = {
+            id: msg.id || crypto.randomUUID(),
+            peerId: from,
+            direction: 'in',
+            kind: 'text',
+            text: msg.text,
+            ts: msg.ts || Date.now(),
+            ...(msg.notice === true && { notice: true }),
+          };
+          if (!answer.notice) store.append(from, answer);
+          emit('chat', answer);
+          break;
+        }
         // A message from a real peer may be addressed to a local agent, gated on
         // that agent's reach and enabled state. When it is, the request belongs
         // in that agent's own thread rather than in the human chat — otherwise
@@ -236,8 +275,9 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       // light play on somebody else's thread. An id that does not resolve is a
       // frame to drop, not one to guess at.
       case 'agent-empty': {
-        const entry = remoteAgents && remoteAgents.get(from, msg.agentId);
-        if (entry) emit('agent-empty', { peerId: entry.id });
+        // Shown wherever the answer would have gone — a session, if one asked.
+        const into = remoteAgents && remoteAgents.emptyRun(from, msg.agentId);
+        if (into) emit('agent-empty', { peerId: into });
         break;
       }
       // An agent owned by another peer is offering, or retracting, itself.
@@ -255,7 +295,9 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       // "thinking" rather than an unexplained silence.
       case 'agent-activity': {
         const entry = remoteAgents.setActivity(from, msg);
-        if (entry) emit('typing', { peerId: entry.id, isTyping: msg.busy === true });
+        // In the thread that is waiting on it: the session that asked, or the
+        // agent's own thread.
+        if (entry) emit('typing', { peerId: remoteAgents.threadFor(entry), isTyping: msg.busy === true });
         break;
       }
       // The answer to something we asked a remote agent. It is filed under that
@@ -344,6 +386,10 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
 
   ipcMain.handle('lanchat:removeAgent', async (_e, { id }) => {
     const removed = await agentHub.remove(id);
+    // A session that asked this agent keeps its conversation — it is a real
+    // record of what was said — but it stops claiming it can carry on, and the
+    // header offers another agent instead of a name that no longer exists.
+    if (removed && sessions.unbindAgent(id)) publishSessions();
     return { ok: removed, agents: agentHub.list() };
   });
 
@@ -477,7 +523,84 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     return { ok: cleared };
   });
 
-  ipcMain.handle('lanchat:sendChat', (_e, { peerId, text, docPaths }) => {
+  // ---- sessions ----
+  //
+  // A session is a local workspace with a conversation in it: no presence, no
+  // key, no address, and nothing on the wire. Its messages live in the ordinary
+  // store under its own id, so history, export and delete need nothing here —
+  // only the list itself, and the one way text gets into one from outside.
+
+  function publishSessions() {
+    emit('sessions', sessions.list());
+  }
+
+  ipcMain.handle('lanchat:listSessions', () => sessions.list());
+
+  ipcMain.handle('lanchat:createSession', (_e, draft) => {
+    const record = sessions.create(draft || {});
+    publishSessions();
+    return record;
+  });
+
+  ipcMain.handle('lanchat:renameSession', (_e, { id, title }) => {
+    const record = sessions.rename(id, title);
+    if (record) publishSessions();
+    return record;
+  });
+
+  ipcMain.handle('lanchat:setSessionAgent', (_e, { id, agentId }) => {
+    const record = sessions.setAgent(id, agentId);
+    if (record) publishSessions();
+    return record;
+  });
+
+  // The record and the conversation go together — see sessions/index.js.
+  ipcMain.handle('lanchat:deleteSession', (_e, { id }) => {
+    const ok = sessions.remove(id);
+    if (ok) publishSessions();
+    return { ok };
+  });
+
+  // Loading a saved conversation back in. Read through readDocument, which is
+  // already the app's answer to "turn this file into text somebody can be asked
+  // about": it refuses binaries by name, decodes what Notepad writes, extracts
+  // from PDFs, and fails with a sentence fit to show. A transcript is exactly
+  // that kind of file, so it gets exactly that treatment.
+  ipcMain.handle('lanchat:importSessionText', async (_e, { id }) => {
+    if (!sessions.get(id)) return { ok: false, error: 'That session no longer exists.' };
+    const result = await dialog.showOpenDialog(getWindow(), {
+      title: 'Upload a conversation',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Text', extensions: ['txt', 'md', 'log', 'json', 'csv'] },
+        { name: 'PDF', extensions: ['pdf'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    });
+    if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true };
+    const file = result.filePaths[0];
+    let doc;
+    try {
+      doc = readDocument(file);
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+    // The file's own time, so an imported conversation sits in the past where it
+    // belongs rather than claiming to have happened just now. Only the
+    // plain-text path needs it; an export carries its own clock.
+    let at = Date.now();
+    try {
+      at = fs.statSync(file).mtimeMs;
+    } catch {
+      // Unreadable timestamp on a file we just read: not worth failing an
+      // import over, so it keeps the default.
+    }
+    const imported = sessions.importText(id, doc.text, { source: doc.name, at });
+    if (imported.ok) publishSessions();
+    return imported;
+  });
+
+  ipcMain.handle('lanchat:sendChat', (_e, { peerId, text, docPaths, context }) => {
     // Attached documents become part of the prompt, because there is nowhere
     // else for them to go: no agent transport carries attachments. What is sent
     // and what is remembered therefore differ, and deliberately so — `prompt`
@@ -485,6 +608,11 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     // the person actually typed and is what the transcript keeps. Storing the
     // prompt instead would put a whole PDF in the message list and in history.
     const { docs, prompt } = withDocuments(peerId, text, docPaths);
+
+    // A session asks the agent it was given, whether that is one of ours or one
+    // a peer shared. The quoted context a fork carries travels the same way the
+    // documents do — as words in the prompt, and not into the transcript.
+    if (isSessionId(peerId)) return sessions.send(peerId, text, { prompt, docs, context });
 
     // Talking to an agent somebody else shared: the frame goes to its owner, and
     // our copy is filed under the agent's thread rather than under the chat with
@@ -751,8 +879,13 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     return linkPreview.get(rawUrl);
   });
 
+  // Threads whose far end is something that reads rather than someone who
+  // receives files. A session is one of them: it asks an agent, so a document
+  // staged in one has somewhere to go.
   function isAgentThread(peerId) {
-    return Boolean((agentHub && agentHub.isAgent(peerId)) || remoteAgents.isRemoteAgentId(peerId));
+    return Boolean(
+      (agentHub && agentHub.isAgent(peerId)) || remoteAgents.isRemoteAgentId(peerId) || isSessionId(peerId)
+    );
   }
 
   // Reads the documents staged against a message and folds them into the prompt.

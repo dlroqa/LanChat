@@ -80,8 +80,18 @@ function buildPage(cssPath) {
   <div class="sidebar">
     <div class="me"><div class="avatar">M</div>
       <div class="meta"><div class="name">MacMini</div><div class="sub">macmini · macOS</div></div></div>
+    <div class="me-actions">
+      <button class="icon-btn" aria-label="Edit profile">P</button>
+      <button class="icon-btn" aria-label="Developer">D</button>
+      <button class="icon-btn" aria-label="Settings">S</button>
+      <button class="icon-btn" aria-label="New session">N</button>
+    </div>
     <div class="sidebar-search"><input placeholder="Search people" /></div>
     <div class="peer-list">
+      <div class="section-label">Sessions</div>
+      <div class="peer session"><span class="session-mark">S</span>
+        <div class="meta"><div class="name"><span class="name-text">why the turn moved</span></div>
+        <div class="sub">Session · Hermes</div></div></div>
       <div class="section-label">People</div>
       ${Array.from({ length: PEERS }, (_, i) => peerRow(i)).join('\n')}
     </div>
@@ -144,6 +154,16 @@ function buildPage(cssPath) {
     // length, and whether the row it sits in still holds its fixed height.
     labelFontSize: parseFloat(getComputedStyle(document.querySelector('.agent-state-label')).fontSize),
     labelRow: rect('.agent-state'),
+    // The row of actions under the name. It carries four targets in a column
+    // that can be as narrow as 260px, so what is worth knowing is that they are
+    // all still their full size, all still inside the sidebar, and that the
+    // search box below them has not been pushed anywhere.
+    meActions: rect('.me-actions'),
+    actionButtons: [...document.querySelectorAll('.me-actions .icon-btn')].map((b) => {
+      const r = b.getBoundingClientRect();
+      return { x: Math.round(r.x), w: Math.round(r.width), h: Math.round(r.height), right: Math.round(r.right) };
+    }),
+    search: rect('.sidebar-search'),
   };
 
   const pre = document.createElement('pre');

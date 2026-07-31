@@ -120,8 +120,21 @@ test('the harness mirrors the nesting the app actually renders', () => {
   assert.ok(wrap > -1 && list > wrap, '.messages should still be inside .messages-wrap');
   assert.ok(composer > list, 'the composer should still follow the conversation inside .chat');
 
+  // The sidebar's vertical stack, for the same reason: the profile block, the
+  // row of actions under it, the search box and the list are four rows in a
+  // column, and a harness missing one of them measures a sidebar the app does
+  // not have.
+  const sidebar = fs.readFileSync(path.join(SRC, 'components', 'Sidebar.jsx'), 'utf8');
+  const order = ['className="me"', 'className="me-actions"', 'className="sidebar-search"', 'className="peer-list"'];
+  let at = -1;
+  for (const marker of order) {
+    const next = sidebar.indexOf(marker);
+    assert.ok(next > at, `${marker} should still come after the row above it in Sidebar.jsx`);
+    at = next;
+  }
+
   const markup = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'layout-harness.js'), 'utf8');
-  for (const cls of ['chat-wrap', 'chat-header', 'messages-wrap', 'messages', 'typing', 'composer-wrap']) {
+  for (const cls of ['chat-wrap', 'chat-header', 'messages-wrap', 'messages', 'typing', 'composer-wrap', 'me-actions']) {
     assert.match(markup, new RegExp(`class="${cls}"`), `the harness should still build .${cls}`);
   }
 });
@@ -184,6 +197,37 @@ test('laid out in a browser: the composer is on screen at every window size', as
     for (const part of ['sidebar', 'chatWrap', 'peerList', 'messages']) {
       assert.ok(m[part].bottom <= m.viewport.h + 1, `${where}: .${part} runs ${m[part].bottom - m.viewport.h}px past the bottom`);
     }
+  }
+});
+
+test('laid out in a browser: the four actions under the name are whole at every width', async () => {
+  const result = await laidOut();
+  if (skipped(result)) return;
+
+  for (const [name, m] of Object.entries(result.sizes)) {
+    const where = `${name} (${m.viewport.w}x${m.viewport.h})`;
+    assert.equal(m.actionButtons.length, 4, `${where}: all four actions should be in the row`);
+
+    for (const b of m.actionButtons) {
+      // Full-size targets. The row exists because three of these were already
+      // crowded against the window edge beside the name; a fourth that only fits
+      // by shrinking would have been no better than leaving them there.
+      assert.equal(b.w, 34, `${where}: an action button is ${b.w}px wide`);
+      assert.equal(b.h, 34, `${where}: an action button is ${b.h}px tall`);
+      assert.ok(
+        b.right <= m.sidebar.x + m.sidebar.w,
+        `${where}: an action button runs ${b.right - (m.sidebar.x + m.sidebar.w)}px past the sidebar`
+      );
+    }
+
+    // Eight of the 34px sit inside each button, so the first glyph lands on the
+    // same left edge as the avatar above it rather than a few pixels in.
+    assert.equal(m.actionButtons[0].x, m.sidebar.x + 6, `${where}: the row does not line up with the name above it`);
+
+    // And the row is a row: the search box follows it, rather than being pushed
+    // out of the sidebar by it.
+    assert.ok(m.search.top >= m.meActions.bottom, `${where}: the search box overlaps the actions above it`);
+    assert.ok(m.peerList.top >= m.search.bottom, `${where}: the list overlaps the search box`);
   }
 });
 

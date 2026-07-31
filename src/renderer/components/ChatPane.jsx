@@ -5,7 +5,8 @@ import MessageBubble from './MessageBubble.jsx';
 import Composer from './Composer.jsx';
 import AgentApproval from './AgentApproval.jsx';
 import AgentFlash from './AgentFlash.jsx';
-import { Phone, Video, Trash, Download } from '../lib/icons.jsx';
+import SessionTitle from './SessionTitle.jsx';
+import { Phone, Video, Trash, Download, Upload, Sessions } from '../lib/icons.jsx';
 import { useQueueLabel } from './QueueBadge.jsx';
 import { useAgentPhrase } from '../lib/agentPhrase.js';
 import { formatDay, platformLabel } from '../lib/util.js';
@@ -27,6 +28,9 @@ export default function ChatPane({
   // Documents staged against the next message to an agent.
   docs,
   onRemoveDoc,
+  // The excerpt a fork pinned, travelling with the next message as context.
+  context,
+  onRemoveContext,
   // Links in messages: how one is opened, and how one is unfurled (undefined
   // when the user has previews turned off).
   onOpenLink,
@@ -41,6 +45,13 @@ export default function ChatPane({
   onVideoCall,
   onClearHistory,
   onExportHistory,
+  // Sessions: the agents one can be pointed at, renaming it, loading a saved
+  // conversation into it, and branching a new question off any bubble.
+  agents = [],
+  onRenameSession,
+  onSetSessionAgent,
+  onImportText,
+  onFork,
   approval,
   agentStream,
   onApprove,
@@ -58,10 +69,16 @@ export default function ChatPane({
   // Live while a handover is counting down, so both sides see the same number.
   const queueLabel = useQueueLabel(peer);
   // An agent thinks rather than types, and it does not send keepalives — so its
-  // indicator is driven by whether we are actually waiting on it.
+  // indicator is driven by whether we are actually waiting on it. A session asks
+  // an agent, so it waits the same way.
   const isAgent = peer?.kind === 'agent';
-  const working = isAgent ? Boolean(typing || awaiting) : Boolean(typing);
-  const phrase = useAgentPhrase(isAgent && working);
+  const isSession = peer?.kind === 'session';
+  const thinks = isAgent || isSession;
+  const working = thinks ? Boolean(typing || awaiting) : Boolean(typing);
+  const phrase = useAgentPhrase(thinks && working);
+  // The agent a session asks, by name, for the indicator and the placeholder.
+  const sessionAgent = isSession && peer.agentId ? agents.find((a) => a.id === peer.agentId) : null;
+  const thinkerName = isSession ? sessionAgent?.name || 'The agent' : peer?.name || 'The agent';
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -97,16 +114,56 @@ export default function ChatPane({
   return (
     <div className="chat">
       <div className="chat-header">
-        <Avatar name={peer.name} id={peer.id} avatar={peer.avatar} online={peer.online} />
+        {/* A session has no face and no presence: it is a workspace, and the
+            mark says so where an avatar would otherwise imply somebody is
+            there. */}
+        {isSession ? (
+          <span className="session-mark large" aria-hidden="true">
+            <Sessions size={20} />
+          </span>
+        ) : (
+          <Avatar name={peer.name} id={peer.id} avatar={peer.avatar} online={peer.online} />
+        )}
         <div className="meta">
           <div className="name">
-            {peer.name || peer.hostname}
+            {isSession ? (
+              <SessionTitle title={peer.name} onRename={(title) => onRenameSession(peer.id, title)} />
+            ) : (
+              peer.name || peer.hostname
+            )}
             {peer.shared && (
               <span className="tag" title="Shared with you from another tailnet">
                 shared
               </span>
             )}
           </div>
+          {/* Which agent this session asks — the one thing a session has to be
+              told, and the only thing that stops it being able to ask. Kept in
+              the header rather than behind a dialog because it is read as often
+              as it is set. */}
+          {isSession ? (
+            <div className="sub session-sub">
+              <span>Session ·</span>
+              <select
+                className="session-agent"
+                aria-label="The agent this session asks"
+                value={peer.agentId || ''}
+                onChange={(e) => onSetSessionAgent(peer.id, e.target.value || null)}
+              >
+                <option value="">choose an agent…</option>
+                {agents.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+                {/* The agent this session was pointed at has gone — switched
+                    off, removed, or belonging to a peer who stopped sharing it.
+                    Saying so is better than a picker that reads as though
+                    nobody was ever chosen. */}
+                {peer.agentId && !sessionAgent && <option value={peer.agentId}>an agent that is no longer here</option>}
+              </select>
+            </div>
+          ) : (
           <div className="sub">
             {peer.kind === 'agent'
               ? // A delegate thread is a transcript of somebody else's
@@ -125,10 +182,11 @@ export default function ChatPane({
             {queueLabel}
             {showAddresses && peer.address ? ` · ${peer.address}` : ''}
           </div>
+          )}
         </div>
         <div className="chat-actions">
-          {/* Agents are text-only participants; there is nothing to call. */}
-          {peer.kind !== 'agent' && (
+          {/* Agents and sessions are text-only; there is nothing to call. */}
+          {!isAgent && !isSession && (
             <>
               <button className="icon-btn" onClick={onVoiceCall} disabled={!peer.online} title="Voice call">
                 <Phone size={19} />
@@ -138,11 +196,34 @@ export default function ChatPane({
               </button>
             </>
           )}
+          {/* The way back in. Everything else here writes a conversation out or
+              takes it away; this is the one thing that brings one in, so it sits
+              beside them. */}
+          {isSession && (
+            <button
+              className="icon-btn"
+              onClick={onImportText}
+              title="Upload a saved conversation as text"
+              aria-label="Upload a saved conversation as text"
+            >
+              <Upload size={19} />
+            </button>
+          )}
           {/* Available for every kind of thread, agents and transcripts too. */}
-          <button className="icon-btn" onClick={onExportHistory} title="Save chat history as a text file">
+          <button
+            className="icon-btn"
+            onClick={onExportHistory}
+            title="Save chat history as a text file"
+            aria-label="Save chat history as a text file"
+          >
             <Download size={19} />
           </button>
-          <button className="icon-btn danger" onClick={onClearHistory} title="Delete chat history">
+          <button
+            className="icon-btn danger"
+            onClick={onClearHistory}
+            title={isSession ? 'Delete this session' : 'Delete chat history'}
+            aria-label={isSession ? 'Delete this session' : 'Delete chat history'}
+          >
             <Trash size={19} />
           </button>
         </div>
@@ -172,6 +253,11 @@ export default function ChatPane({
                   onOpenLink={onOpenLink}
                   linkPreview={linkPreview}
                   onPreviewShown={keepAtBottom}
+                  // Branching off a bubble is offered where there is something
+                  // that can answer: a session, and the agent threads a session
+                  // can be started from. Never in a chat with a person — there
+                  // is nothing there to carry a context to.
+                  onFork={onFork}
                 />
               </React.Fragment>
             );
@@ -180,7 +266,7 @@ export default function ChatPane({
           {/* Live agent output, replaced by the stored message once the run ends. */}
           {agentStream && <div className="agent-stream">{agentStream}</div>}
 
-          <AgentApproval request={approval} agentName={peer.name || 'The agent'} onAnswer={onApprove} />
+          <AgentApproval request={approval} agentName={thinkerName} onAnswer={onApprove} />
         </div>
 
         {/* Inside the wrapper, so the light behind it reaches the composer instead
@@ -190,7 +276,7 @@ export default function ChatPane({
         <div className="typing">
           {working && (
             <>
-              {isAgent ? `${peer.name || 'The agent'} is ${phrase.toLowerCase()}` : `${peer.name || 'Peer'} is typing`}
+              {thinks ? `${thinkerName} is ${phrase.toLowerCase()}` : `${peer.name || 'Peer'} is typing`}
               {/* Three staggered dots. The container keeps its height whether or
                   not this is showing, so the message list never jumps. */}
               <span className="typing-dots" aria-hidden="true">
@@ -224,14 +310,28 @@ export default function ChatPane({
         onSend={onSend}
         onAttach={onAttach}
         onTyping={onTyping}
-        onVoice={peer.kind === 'agent' || !peer.online ? undefined : onVoice}
-        disabled={peer.kind === 'agent' && !peer.online}
-        offline={!peer.online}
-        canAttach={peer.online && !peer.delegate}
-        attachTitle={isAgent ? 'Attach a document for the agent to read' : 'Send file, photo or video'}
-        placeholder={isAgent ? 'Ask the agent…  (Enter to send, Shift+Enter for newline)' : undefined}
+        onVoice={thinks || !peer.online ? undefined : onVoice}
+        // A session with no agent yet has nothing to ask; an agent that is off
+        // is the same case reached a different way.
+        disabled={isSession ? !peer.agentId : isAgent && !peer.online}
+        offline={!isSession && !peer.online}
+        canAttach={isSession ? Boolean(peer.agentId) : peer.online && !peer.delegate}
+        attachTitle={thinks ? 'Attach a document for the agent to read' : 'Send file, photo or video'}
+        placeholder={
+          isSession
+            ? peer.agentId
+              ? `Ask ${thinkerName}…  (Enter to send, Shift+Enter for newline)`
+              : 'Choose an agent above to ask something'
+            : isAgent
+              ? 'Ask the agent…  (Enter to send, Shift+Enter for newline)'
+              : undefined
+        }
         docs={docs}
         onRemoveDoc={onRemoveDoc}
+        // What a fork pinned: shown above the input until it is sent or
+        // dismissed, in the same row the document chips use.
+        context={context}
+        onRemoveContext={onRemoveContext}
       />
     </div>
   );

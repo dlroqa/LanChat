@@ -61,6 +61,7 @@ function bridge(appVersion = '9.9.9') {
     pip: null,
     agentHub: { list: () => [], on: () => {} },
     outbox: { enqueue: () => {}, pendingCount: () => 0, counts: () => ({}) },
+    userDataDir: dir,
     downloadsDir: path.join(dir, 'dl'),
     getWindow: () => null,
     revealWindow: () => {},

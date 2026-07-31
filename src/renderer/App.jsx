@@ -21,7 +21,7 @@ import GroupInvite from './components/GroupInvite.jsx';
 import NewGroupCallModal from './components/NewGroupCallModal.jsx';
 import { GroupCallManager } from './lib/groupCall.js';
 import { listDevices, labelFor } from './lib/devices.js';
-import { isAgentThread } from './lib/agentPhrase.js';
+import { isSessionThread, isThinkingThread } from './lib/sessionIds.js';
 import { flashDuration, prefersReducedMotion } from './lib/connectFlash.js';
 import { useAgentMusic } from './lib/agentMusic.js';
 import { trackUrl, DEFAULT_TRACK } from './lib/agentMusicTrack.js';
@@ -92,6 +92,14 @@ export default function App() {
   // switching away and back finds what you had queued up still waiting — and so
   // a file dropped on one agent never goes to another.
   const [attachments, setAttachments] = useState({}); // threadId -> [{ path, name, bytes }]
+  // Sessions: local workspaces, each with a title, an agent and a conversation.
+  // The list comes from main and is republished whenever it changes there, so
+  // this window never has to guess at it.
+  const [sessions, setSessions] = useState([]);
+  // What a fork pinned, per thread: the excerpt the next question carries. Kept
+  // beside the documents because it is the same kind of thing — something staged
+  // against a message that has not been written yet.
+  const [contexts, setContexts] = useState({}); // threadId -> { text, speaker, ts }
   // The connection light, per thread: { nonce, mode, ms }. The nonce is what makes
   // summoning twice play it twice, and what makes the second play replace the
   // first rather than run alongside it. `ms` is resolved once, when the trigger
@@ -277,6 +285,9 @@ export default function App() {
       setConfigured(state.configured);
       setConfig(state.config);
       setPeers(state.presence || []);
+      // Sessions are local and always there, so the list is read once at start
+      // and kept current by the `sessions` event rather than polled.
+      api.listSessions().then((list) => setSessions(list || []));
       // Windows only: start from whatever has already been measured, rather than
       // an empty panel until the next round trip lands. A window opened from the
       // tray after hours of uptime should not look like a link that has never
@@ -367,13 +378,14 @@ export default function App() {
           break;
         case 'chat':
           appendMessage(payload.peerId, payload);
-          // The finished reply supersedes the streamed preview.
-          if (payload.peerId.startsWith('agent:')) {
+          // The finished reply supersedes the streamed preview. A session gets
+          // the stream under its own id, so it ends the same way.
+          if (payload.peerId.startsWith('agent:') || isSessionThread(payload.peerId)) {
             setAgentStatus((s) => ({ ...s, [payload.peerId]: { ...s[payload.peerId], streaming: '' } }));
             setApprovals((a) => (a[payload.peerId] ? { ...a, [payload.peerId]: null } : a));
           }
           // An answer — or a refusal explaining the queue — ends the wait.
-          if (payload.direction === 'in' && isAgentThread(payload.peerId)) {
+          if (payload.direction === 'in' && isThinkingThread(payload.peerId)) {
             setAwaiting((a) => (a[payload.peerId] ? { ...a, [payload.peerId]: false } : a));
           }
           if (payload.direction === 'in') {
@@ -400,7 +412,7 @@ export default function App() {
           // expired if the frames stop. An agent says "working" once and may
           // then think for a minute, and says "done" explicitly — expiring that
           // made the indicator vanish seconds into every reply.
-          if (payload.isTyping && !isAgentThread(payload.peerId)) {
+          if (payload.isTyping && !isThinkingThread(payload.peerId)) {
             typingTimers.current[payload.peerId] = setTimeout(
               () => setTyping((t) => ({ ...t, [payload.peerId]: false })),
               4000
@@ -467,12 +479,21 @@ export default function App() {
           setApprovals((a) => ({ ...a, [payload.agentId]: payload }));
           setSelectedId(payload.agentId);
           break;
-        case 'agent-delta':
+        case 'agent-delta': {
           // Live typing; the authoritative reply arrives as a normal 'chat' event.
+          // Filed under the thread that asked, which is the agent's own id unless
+          // a session did — see deliver() in main's agents/index.js.
+          const into = payload.threadId || payload.agentId;
           setAgentStatus((s) => ({
             ...s,
-            [payload.agentId]: { ...s[payload.agentId], streaming: (s[payload.agentId]?.streaming || '') + payload.delta },
+            [into]: { ...s[into], streaming: (s[into]?.streaming || '') + payload.delta },
           }));
+          break;
+        }
+        // The list of sessions changed — one was started, renamed, pointed at
+        // another agent, or deleted.
+        case 'sessions':
+          setSessions(payload || []);
           break;
         // A run came back with nothing in it. There is no message, so the light is
         // the whole of what is shown — and because no 'chat' event is coming, the
@@ -574,10 +595,24 @@ export default function App() {
 
   const selectedPeer = useMemo(() => {
     if (!selectedId) return null;
+    // A session is not a contact and never appears in the roster: it is a
+    // workspace in this window. It is given the same shape as a peer here so the
+    // conversation pane can render it without knowing what it is looking at —
+    // the same trick already used for an id nobody has seen before.
+    if (isSessionThread(selectedId)) {
+      const record = sessions.find((s) => s.id === selectedId);
+      if (!record) return null;
+      return { id: record.id, kind: 'session', name: record.title, agentId: record.agentId, online: true };
+    }
     const live = peers.find((p) => p.id === selectedId);
     const base = live || knownPeers.current[selectedId] || { id: selectedId, name: 'Unknown' };
     return { ...base, online: live ? live.online : false };
-  }, [selectedId, peers]);
+  }, [selectedId, peers, sessions]);
+
+  // Agents this machine can point a session at: our own, and the ones peers have
+  // shared with us. A delegate thread is somebody else's conversation rather
+  // than an agent, so it is not one of them.
+  const askableAgents = useMemo(() => peers.filter((p) => p.kind === 'agent' && !p.delegate), [peers]);
 
   // Windows asks for the loopback address itself rather than the name for it:
   // there "localhost" resolves to ::1 first, while the service listens on
@@ -617,16 +652,21 @@ export default function App() {
     // Asking an agent means waiting on it, and that is knowable here without a
     // round trip. Relying only on the owner's relay left the far side reading
     // "Ready" while it was plainly working.
-    if (isAgentThread(selectedId)) setAwaiting((a) => ({ ...a, [selectedId]: true }));
+    if (isThinkingThread(selectedId)) setAwaiting((a) => ({ ...a, [selectedId]: true }));
     // Cleared before the round trip, so the chips go the moment Send is pressed
     // rather than lingering while a slow agent is reached. A refusal puts them
     // back below, alongside the words.
     const staged = attachments[selectedId] || [];
     if (staged.length) setAttachments((a) => ({ ...a, [selectedId]: [] }));
+    // The quoted excerpt goes the same way the documents do, and comes back the
+    // same way if the send is refused.
+    const quoted = contexts[selectedId] || null;
+    if (quoted) setContexts((c) => ({ ...c, [selectedId]: null }));
     const msg = await api.sendChat(
       selectedId,
       text,
-      staged.map((d) => d.path)
+      staged.map((d) => d.path),
+      quoted
     );
     // Refused: a question of ours is already waiting to be read, and this one
     // would not be answered any sooner. Shown and then taken away rather than
@@ -656,6 +696,9 @@ export default function App() {
       if (msg.docs?.length || staged.length) {
         setAttachments((a) => ({ ...a, [selectedId]: msg.docs?.length ? msg.docs : staged }));
       }
+      // And so does what the fork was asking about, for the same reason: it was
+      // pinned by a gesture on a bubble that may now be a long way up the page.
+      if (quoted) setContexts((c) => ({ ...c, [selectedId]: quoted }));
       return;
     }
     appendMessage(msg.peerId || selectedId, msg);
@@ -669,11 +712,118 @@ export default function App() {
     if (!msg.delivered) toast('Saved — it will send when they are back online', 'info');
   }
 
+  // --- Sessions ---
+
+  // A new session opens straight away rather than waiting to be clicked in the
+  // list: pressing the button is already the decision to work in one.
+  //
+  // It starts pointed at the only agent there is, when there is only one. That
+  // is not a guess — with a single candidate there is nothing to choose, and
+  // making somebody pick from a list of one before they can ask anything is
+  // ceremony. With two or more it stays unset and the header asks.
+  async function newSession(seed = {}) {
+    const only = askableAgents.length === 1 ? askableAgents[0].id : null;
+    const record = await api.createSession({ agentId: seed.agentId || only, title: seed.title });
+    if (!record) {
+      toast('Could not start a session.', 'error');
+      return null;
+    }
+    setSessions((list) => [record, ...list.filter((s) => s.id !== record.id)]);
+    setSelectedId(record.id);
+    return record;
+  }
+
+  async function renameSession(id, title) {
+    const record = await api.renameSession(id, title);
+    if (record) setSessions((list) => list.map((s) => (s.id === record.id ? record : s)));
+  }
+
+  async function setSessionAgent(id, agentId) {
+    const record = await api.setSessionAgent(id, agentId);
+    if (record) setSessions((list) => list.map((s) => (s.id === record.id ? record : s)));
+  }
+
+  // Loading a saved conversation in. The messages are written in main, so the
+  // thread is re-read rather than patched here — one source for what is in it,
+  // whether it arrived by import or by being said.
+  async function importSessionText(id) {
+    const res = await api.importSessionText(id);
+    if (res?.canceled) return;
+    if (!res?.ok) {
+      toast(res?.error || 'Could not read that file.', 'error');
+      return;
+    }
+    const hist = await api.getHistory(id);
+    setMessages((prev) => ({ ...prev, [id]: mergeHistory(hist, prev[id]) }));
+    loadedPeers.current.add(id);
+    toast(
+      res.mode === 'lanchat'
+        ? `Loaded ${res.count} message${res.count === 1 ? '' : 's'}.`
+        : `Loaded ${res.count} block${res.count === 1 ? '' : 's'} of text.`
+    );
+  }
+
+  // Deleting a session takes the conversation in it with the record, so it asks
+  // first and names what goes — the same bargain as clearing a chat, and the
+  // same button.
+  async function deleteSession(id) {
+    const record = sessions.find((s) => s.id === id);
+    const ok = window.confirm(
+      `Delete the session “${record?.title || 'this session'}”?\n\n` +
+        'Everything in it goes with it, including anything imported into it. This cannot be undone.'
+    );
+    if (!ok) return;
+    const res = await api.deleteSession(id);
+    if (!res?.ok) {
+      toast('Could not delete the session.', 'error');
+      return;
+    }
+    setSessions((list) => list.filter((s) => s.id !== id));
+    setMessages((prev) => ({ ...prev, [id]: [] }));
+    loadedPeers.current.delete(id);
+    if (selectedRef.current === id) setSelectedId(null);
+    toast('Session deleted.');
+  }
+
+  // Carrying one bubble into a new question.
+  //
+  // Inside a session, the excerpt is pinned to the composer and the conversation
+  // carries on where it is. From an agent's own thread there is nowhere to
+  // branch to yet, so a session is started for it — bound to that agent, seeded
+  // with the excerpt, and named after nothing until somebody names it.
+  async function forkFrom(msg) {
+    const from = msg.peerId || selectedRef.current;
+    const quoted = {
+      text: msg.text,
+      speaker: msg.speaker || speakerFor(msg, from),
+      ts: msg.ts,
+    };
+    if (isSessionThread(from)) {
+      setContexts((c) => ({ ...c, [from]: quoted }));
+      return;
+    }
+    // A delegate thread is a transcript of somebody else's conversation with one
+    // of our agents. Branching off it asks *the agent*, so the session is bound
+    // to the agent rather than to the transcript, which nothing can be asked of.
+    const agentId = from.includes('#') ? from.slice(0, from.indexOf('#')) : from;
+    const record = await newSession({ agentId });
+    if (record) setContexts((c) => ({ ...c, [record.id]: quoted }));
+  }
+
+  // Who said the thing being quoted, in the words the agent will read. Worked
+  // out from the thread rather than stored on the message, because a message
+  // knows its direction and its thread knows the rest.
+  function speakerFor(msg, threadId) {
+    if (msg.direction === 'out') return selfRef.current?.name || 'Me';
+    const peer = peersRef.current.find((p) => p.id === threadId);
+    return peer?.name || null;
+  }
+
   // The attach button. To a person it sends a file; to an agent it stages a
   // document for the agent to read, which goes with whatever you type next.
   async function attach() {
     if (!selectedId) return;
-    if (!isAgentThread(selectedId)) {
+    if (!isThinkingThread(selectedId)) {
       await api.pickAndSendFile(selectedId);
       return;
     }
@@ -777,11 +927,16 @@ export default function App() {
     // nothing if this ever runs somewhere that still has it.
     const paths = [...e.dataTransfer.files].map((f) => api.getPathForFile?.(f) || f.path).filter(Boolean);
     if (!paths.length) return;
-    if (!isAgentThread(selectedId)) {
+    if (!isThinkingThread(selectedId)) {
       api.sendFilePaths(selectedId, paths);
       return;
     }
-    if (!selectedPeer?.online) {
+    // A session with no agent has nowhere to put a document either.
+    if (isSessionThread(selectedId) && !selectedPeer?.agentId) {
+      toast('Choose an agent for this session first', 'error');
+      return;
+    }
+    if (!isSessionThread(selectedId) && !selectedPeer?.online) {
       toast('That agent is off — turn it on to give it something to read', 'error');
       return;
     }
@@ -815,8 +970,8 @@ export default function App() {
   // Nor `peer.agentBusy`, which for a shared agent means somebody else's
   // question is running on somebody else's machine.
   const agentWorking = useMemo(() => {
-    for (const [id, on] of Object.entries(typing)) if (on && isAgentThread(id)) return true;
-    for (const [id, on] of Object.entries(awaiting)) if (on && isAgentThread(id)) return true;
+    for (const [id, on] of Object.entries(typing)) if (on && isThinkingThread(id)) return true;
+    for (const [id, on] of Object.entries(awaiting)) if (on && isThinkingThread(id)) return true;
     return false;
   }, [typing, awaiting]);
 
@@ -873,10 +1028,12 @@ export default function App() {
         queued={queued}
         authFailures={authFailures}
         showAddresses={config.showAddresses}
+        sessions={sessions}
         onSelect={setSelectedId}
         onOpenProfile={() => setModal('profile')}
         onOpenDev={() => setModal('devgate')}
         onOpenSettings={() => setModal('settings')}
+        onNewSession={() => newSession()}
         onAddPeer={() => setModal('addpeer')}
         onNewGroupCall={() => setModal('newgroup')}
         onRefresh={() => (api.refresh(), toast('Refreshing…'))}
@@ -907,11 +1064,22 @@ export default function App() {
           draft={draft && draft.threadId === selectedId ? draft : null}
           docs={attachments[selectedId] || EMPTY_DOCS}
           onRemoveDoc={(docPath) => removeAttachment(selectedId, docPath)}
+          context={contexts[selectedId] || null}
+          onRemoveContext={() => setContexts((c) => ({ ...c, [selectedId]: null }))}
+          agents={askableAgents}
+          onRenameSession={renameSession}
+          onSetSessionAgent={setSessionAgent}
+          onImportText={() => importSessionText(selectedId)}
+          // Branching is offered where a question can be asked from: inside a
+          // session, and in the agent threads a session can be started from.
+          onFork={isThinkingThread(selectedId) ? forkFrom : undefined}
           onSend={sendText}
           onAttach={attach}
           onVoice={sendVoice}
           onTyping={onTyping}
-          onClearHistory={clearHistory}
+          // In a session the same button means the same thing it always did —
+          // "this conversation goes" — and the session is the conversation.
+          onClearHistory={isSessionThread(selectedId) ? () => deleteSession(selectedId) : clearHistory}
           onExportHistory={exportHistory}
           onOpenFile={(p) => p && api.openFile(p)}
           onRevealFile={(p) => p && api.revealFile(p)}
@@ -920,7 +1088,9 @@ export default function App() {
         />
         {dragOver && (
           <div className="drop-overlay">
-            {isAgentThread(selectedId) ? `Drop to give ${selectedPeer?.name || 'the agent'} a document` : 'Drop to send'}
+            {isThinkingThread(selectedId)
+              ? `Drop to give ${selectedPeer?.name || 'the agent'} a document`
+              : 'Drop to send'}
           </div>
         )}
       </div>
