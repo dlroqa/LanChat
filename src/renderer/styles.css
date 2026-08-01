@@ -72,6 +72,17 @@
   --prism-3: #ff9ad5;
   --prism-4: #ffc93d;
   --prism-5: #6ff0d0;
+  /* The grey the search results are lit by as they open.
+     It passes *under* the text, so how bright it may be is set by the dimmest
+     text it passes under — not by the names. Those are --fg and were never in
+     danger; the line beneath them is --fg-muted at a relative luminance of
+     0.369, and holding that at 4.5:1 caps the band at L = 0.369/4.5 − 0.05, or
+     about 0.043. Hence this, measured at 4.7:1 for the dimmest line in the
+     panel and 9.9:1 for a name. A lighter grey was tried and the subtitles came
+     out at 2.7:1 — legible only if you already knew what they said.
+     Against the near-black panel it is still four times the luminance around
+     it, which on this background is plainly a light sweeping across. */
+  --prism-grey: #383838;
 
   /* The sidebar's profile block and the chat header sit side by side, so their
      bottom borders have to land on the same line. Pinning both to one height
@@ -287,20 +298,131 @@ input:focus-visible {
   outline-offset: 1px;
 }
 
+/* ---- the search box --------------------------------------------------------
+   One box for everything under it, with a chip on the left saying which of the
+   four categories it is aimed at.
+
+   The box carries the border now and the input inside it carries none: a chip
+   and a field sharing one outline read as one control, which is what they are.
+
+   Every rule here is written against `.search-box` rather than against
+   `.sidebar-search input` on its own. There is a second, later declaration of
+   that exact selector in the modal-field block further down this file, and being
+   later it wins — a rule written the obvious way here would appear to do nothing
+   and there would be no error to say why. */
 .sidebar-search {
   padding: 10px 12px;
 }
-.sidebar-search input {
-  width: 100%;
+.sidebar-search .search-box {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 2px 2px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 9px 12px;
-  outline: none;
   transition: border 0.12s ease;
 }
-.sidebar-search input:focus {
+.sidebar-search .search-box:focus-within {
   border-color: var(--primary);
+}
+.sidebar-search .search-box input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 7px 6px;
+  outline: none;
+}
+
+.search-scope {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+.scope-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 132px;
+  padding: 5px 5px 5px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-faint);
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+.scope-chip:hover {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+/* Aimed at one category, the chip stops being a quiet magnifier and starts being
+   a statement: this box is not searching everything. */
+.scope-chip.set {
+  background: var(--primary-soft);
+  color: var(--fg);
+}
+.scope-name {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scope-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-faint);
+  cursor: pointer;
+}
+.scope-clear:hover {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+/* The menu is shaped like the @ menu in the composer — same tokens, same
+   comfortable row height, same fill-and-bar highlight, because colour alone
+   cannot say which option is the current one. */
+.scope-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  min-width: 168px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  box-shadow: var(--shadow);
+}
+.scope-item {
+  padding: 7px 9px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.scope-item:hover {
+  background: var(--surface);
+}
+.scope-item.active {
+  background: var(--surface-hover);
+  box-shadow: inset 2px 0 0 var(--primary);
 }
 
 .peer-list {
@@ -493,14 +615,67 @@ input:focus-visible {
     background-position: 100% 0;
   }
 }
+/* The glass the lit letters sit on.
+   The prism alone lights the glyphs and leaves the row they are in unchanged.
+   This is the rest of it: a plate across the whole heading, with the same light
+   travelling over it — one source crossing the row rather than two animations
+   that happen to overlap, which is why it borrows the title's keyframe, duration
+   and easing rather than declaring its own.
+
+   Behind the text, not over it. `.sb-head` is sticky with a z-index, so it
+   already opens a stacking context: the parent's own --bg-2 paints first, then
+   this at z-index -1, then the title above it. Nothing here can cover a word.
+
+   How bright it may be is arithmetic. The dimmest stop in the prism is
+   --prism-2, at a relative luminance of 0.453, so for the title to hold 4.5:1
+   the plate may reach L = 0.5034/4.5 − 0.05 = 0.062 and no further. The peak
+   below — the 5% base with the 9% band over it, about 13.5% white — composites
+   to L ≈ 0.040 on --bg-2 and measures 5.6:1. It is checked in pixels rather than
+   trusted: dimmestSlice() in scripts/sidebar-harness.js reads the darkest part
+   of each slice of the word, which is this plate.
+
+   The grip and the lock would be under 3:1 on it, and never meet it: both are
+   invisible until hovered or focused, and both of those open the category —
+   an open category is not flashing. */
+.sb-section.flash .sb-head::before {
+  content: '';
+  position: absolute;
+  inset: 2px 4px;
+  z-index: -1;
+  border-radius: 8px;
+  pointer-events: none;
+  background-color: rgba(255, 255, 255, 0.05);
+  background-image: linear-gradient(
+    100deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.045) 45%,
+    rgba(255, 255, 255, 0.09) 50%,
+    rgba(255, 255, 255, 0.045) 55%,
+    transparent 70%
+  );
+  background-size: 260% 100%;
+  background-position: 0 0;
+  animation: sb-prism 2.6s ease-in-out infinite alternate;
+}
 @media (prefers-reduced-motion: reduce) {
   /* The global switch already stops the sweep. What is left is the prism held
-     still — the title is still lit differently from the three around it, and the
-     count beside it says the same thing in a number. Nothing here depends on
-     having seen the light move. */
-  .sb-section.flash .sb-title {
+     still and the plate held still — the title is still lit differently from the
+     three around it, it still sits on glass, and the count beside it says the
+     same thing in a number. Nothing here depends on having seen the light move.
+     The plate in particular stays: with motion off it is most of what marks the
+     category. */
+  .sb-section.flash .sb-title,
+  .sb-section.flash .sb-head::before {
     animation: none;
   }
+}
+
+/* Said quietly: the search box is aimed at another category. Not hidden and not
+   disabled — pointing at one still opens it — just plainly not what is being
+   asked about. A flashing category never gets this class: something arrived for
+   you, and a filter applied to the panel does not get to decide otherwise. */
+.sb-section.quiet .sb-title {
+  color: var(--fg-faint);
 }
 
 /* Where a dragged category would land. Drawn on the heading rather than between
@@ -1200,7 +1375,14 @@ input:focus-visible {
 
    The current hit is marked by a fill *and* a ring, never by colour alone — the
    same rule the mention list follows. */
-mark.find-hit {
+/* The roster's search marks its hits with this too. A word found in a
+   conversation and the same word found in a name are the same event, and there
+   is no reason for them to look like two different features — nor to work out a
+   second pair of colours when this pair has already been measured everywhere a
+   hit can land. The 1px of padding is part of it: 2px puts a visible gap inside
+   a word and "Tessie" comes apart into three pieces. */
+mark.find-hit,
+mark.result-hit {
   background: color-mix(in srgb, var(--warn) 55%, var(--fg));
   color: var(--bg);
   border-radius: 3px;
@@ -1958,6 +2140,205 @@ mark.find-hit.current {
   margin: 8px;
   pointer-events: none;
 }
+
+/* ---------------- Search results ----------------
+   What the search found, in the room where there is space to read it.
+
+   Over the conversation rather than instead of it. ChatPane stays mounted
+   underneath: it keeps its scroll position, and the composer keeps whatever was
+   being typed in it — a search that cost somebody a half-written message would
+   be a poor trade for a list of names. Hence an opaque fill; there is a live
+   conversation under here that must not show through.
+
+   z-index 20 sits below the drop overlay at 30, so dragging a file onto the
+   window still says what it will do. */
+.search-results {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+/* The light, once, left to right, and then gone.
+   A band that is translated rather than a background that is repositioned:
+   transform is the one thing that moves without touching layout, and a
+   percentage in background-position slides the visible window the *opposite*
+   way from the number, which makes "left to right" a thing you have to work out
+   rather than read.
+
+   It is *under* the rows — they are already drawn when it passes — so it can be
+   opaque without hiding a word. How bright it may be is arithmetic rather than
+   taste: the text over it is --fg at a relative luminance of 0.79, so for 4.5:1
+   the band may reach L = (0.79 + 0.05)/4.5 − 0.05 = 0.137, which is about
+   #676767. A genuinely pale grey would put that text at 1:1 and the rows would
+   blink out as the light crossed them.
+
+   At rest it is off the left edge and fully transparent, so when the global
+   reduced-motion switch stops the animation the band is simply never seen rather
+   than parked across the panel. */
+.search-shine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 45%;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateX(-120%);
+  background: linear-gradient(90deg, transparent, var(--prism-grey), transparent);
+  animation: search-shine 620ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+@keyframes search-shine {
+  0% {
+    transform: translateX(-120%);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(320%);
+    opacity: 0;
+  }
+}
+
+.results-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: var(--header-h);
+  box-sizing: border-box;
+  padding: 0 14px 0 20px;
+  border-bottom: 1px solid var(--border);
+  position: relative;
+  z-index: 1;
+}
+.results-count {
+  flex: 1;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.results-scope {
+  margin-left: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg-muted);
+}
+
+.results-list {
+  flex: 1;
+  /* The same rule as every other scroller in a column: without it the list
+     refuses to shrink below its contents and runs past the window. */
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px 20px;
+  position: relative;
+  z-index: 1;
+}
+.results-empty {
+  max-width: 60ch;
+  padding: 18px 8px;
+  color: var(--fg-muted);
+  line-height: 1.6;
+}
+
+.result-group + .result-group {
+  margin-top: 18px;
+}
+.result-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.result-group-count {
+  font-weight: 500;
+  color: var(--fg-muted);
+}
+
+/* Roomier than a sidebar row, because that is the whole point of being here:
+   three lines fit, and the third is what makes an unexpected hit make sense. */
+.result {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 12px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.result:hover,
+.result.active {
+  background: var(--surface);
+}
+/* The keyboard's place in the list, marked by a bar as well as a fill — the same
+   reason the @ menu has one: two dark blues are not a signal on their own. */
+.result.active {
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+/* A tailnet device is a machine that is not running LanChat. There is no
+   conversation to open, so the row must not offer one. */
+.result.inert {
+  cursor: default;
+}
+.result.inert:hover,
+.result.inert.active {
+  background: transparent;
+  box-shadow: none;
+}
+.result-meta {
+  min-width: 0;
+  flex: 1;
+}
+.result-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.result-sub {
+  font-size: 12.5px;
+  color: var(--fg-muted);
+  margin-top: 2px;
+}
+/* Why this row is here, when the reason is not its name. Monospaced because
+   what it usually holds is a hostname or an address, and those are read
+   character by character.
+
+   --fg-muted rather than --fg-faint, and the same goes for the two labels
+   below. Nothing in this panel is allowed to be dimmer than --fg-muted: a light
+   passes behind all of it, and the dimmest text is what decides how bright that
+   light may be. At --fg-faint it measured 2.5:1 with the band underneath. */
+.result-why {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.result-note {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+/* The matched characters are marked by mark.find-hit, up in the find bar's
+   block, which this shares outright — see the note there. */
 
 /* ---------------- The logo mark ----------------
    One definition of the LanChat mark, shared by the in-app welcome state and

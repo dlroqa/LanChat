@@ -84,12 +84,70 @@ test('the flash on a shut category keeps its title readable, moving or not', () 
   assert.match(flash, /animation:\s*sb-prism/);
   assert.doesNotMatch(flash, /opacity/);
 
-  // And it survives motion being turned off: the sweep stops, the prism stays,
-  // and the count beside the title says the same thing in a number.
+  // The glass behind the letters. Negative z-index is the whole safety of it —
+  // it puts the plate under the title inside .sb-head's stacking context, so a
+  // decoration can never end up over the word it is decorating.
+  const plate = block('.sb-section.flash .sb-head::before');
+  assert.ok(plate, 'the plate rule should be in styles.css');
+  assert.match(plate, /z-index:\s*-1/);
+  assert.match(plate, /animation:\s*sb-prism/, 'plate and title share one light source');
+  assert.match(plate, /pointer-events:\s*none/);
+
+  // And it survives motion being turned off: the sweep stops, the prism and the
+  // plate stay, and the count beside the title says the same thing in a number.
   const reduced = css.slice(css.indexOf('@keyframes sb-prism'));
   assert.match(
     reduced,
-    /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.sb-section\.flash \.sb-title\s*\{[^}]*animation:\s*none/
+    /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.sb-section\.flash \.sb-title,\s*\n\s*\.sb-section\.flash \.sb-head::before\s*\{[^}]*animation:\s*none/
+  );
+});
+
+test('the search results cover the conversation without displacing it', () => {
+  // Absolutely positioned inside .chat-wrap, which is already `position:
+  // relative` — the panel lies over a pane that is still mounted, so the
+  // composer keeps whatever was being typed in it.
+  const panel = block('.search-results');
+  assert.ok(panel, '.search-results should be in styles.css');
+  assert.match(panel, /position:\s*absolute/);
+  assert.match(panel, /inset:\s*0/);
+  assert.match(block('.chat-wrap'), /position:\s*relative/, 'or the panel would escape the column');
+
+  // Opaque. There is a live conversation underneath that must not show through.
+  assert.match(panel, /background:\s*var\(--bg\)/);
+
+  // Under the drop overlay, so dragging a file in still says what it will do.
+  const z = (rules) => Number(rules.match(/z-index:\s*(\d+)/)[1]);
+  assert.ok(z(panel) < z(block('.drop-overlay')), 'the file-drop sheet must stay on top of the results');
+
+  const shine = block('.search-shine');
+  assert.ok(shine, 'the sweep should be in styles.css');
+  // Under the rows, never over them: it is opaque, and its whole safety is that
+  // the text is drawn on top of it.
+  assert.ok(z(shine) < z(block('.results-list')), 'the light belongs behind the results');
+  // One pass. Decorative motion in this app never repeats — only signals do —
+  // and `animation` without a count means exactly one.
+  assert.doesNotMatch(shine, /animation:[^;]*infinite/);
+  // And its resting state is invisible and off the edge, which is what makes it
+  // safe when the global reduced-motion switch stops the animation dead.
+  assert.match(shine, /opacity:\s*0/);
+  assert.match(shine, /transform:\s*translateX\(-\d+%\)/);
+  // Moved with a transform rather than a background position: the one property
+  // that animates without touching layout.
+  assert.doesNotMatch(shine, /animation:[^;]*background-position/);
+
+  // Nothing in this panel may be dimmer than --fg-muted. A light passes behind
+  // all of it, and the dimmest text is what caps how bright that light can be —
+  // one --fg-faint label anywhere in here would quietly undo the measurement
+  // that set the grey.
+  const from = css.indexOf('/* ---------------- Search results');
+  assert.ok(from > -1, 'the search-results block should be findable in styles.css');
+  const next = css.indexOf('/* ----------------', from + 10);
+  const results = css.slice(from, next > -1 ? next : css.length);
+  assert.match(results, /\.result-why/, 'and it should be the block that holds the results rows');
+  assert.doesNotMatch(
+    results,
+    /color:\s*var\(--fg-faint\)/,
+    'no text in the results panel may be dimmer than --fg-muted'
   );
 });
 
@@ -97,7 +155,7 @@ test('every scroller in a column may shrink below what is in it', () => {
   // A `flex: 1` element that scrolls needs `min-height: 0`, or it refuses to go
   // below its content height and pushes its siblings out of the window instead
   // of scrolling. Both of the app's long lists are one of these.
-  for (const selector of ['.messages', '.peer-list']) {
+  for (const selector of ['.messages', '.peer-list', '.results-list']) {
     const rules = block(selector);
     assert.ok(rules, `${selector} should still be in styles.css`);
     assert.match(rules, /min-height:\s*0/, `${selector} needs min-height: 0 to scroll instead of spilling`);

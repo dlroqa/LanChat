@@ -23,6 +23,10 @@ export default function SidebarSection({
   title,
   expanded,
   locked,
+  // Said quietly: the search is aimed at another category. Never true of one
+  // that is flashing — a filter applied to the panel does not get to decide
+  // whether you hear that something arrived.
+  quiet = false,
   flashing,
   count = 0,
   alert = false,
@@ -99,6 +103,7 @@ export default function SidebarSection({
     'sb-section',
     expanded ? 'open' : '',
     locked ? 'locked' : '',
+    quiet ? 'quiet' : '',
     flashing ? 'flash' : '',
     dropEdge ? `drop-${dropEdge}` : '',
   ]

@@ -28,6 +28,26 @@ export function counselNames(names, max = MAX_NAMED) {
   return `${list.slice(0, max).join(', ')} and ${rest} other${rest === 1 ? '' : 's'}`;
 }
 
+// Who a session asks, resolved from the roster rather than from the record.
+//
+// The record keeps ids; a roster row is what has a name, and an id whose agent
+// has gone resolves to nothing — which is the same state as never having chosen
+// it, since either way there is nobody there to ask. A session set to ask
+// whoever is available resolves to whoever is available, that being the whole of
+// what the setting means.
+//
+// It lives beside the sentences for the same reason they do: the sidebar row and
+// the search results both have to name a counsel, and two surfaces each working
+// it out from `agentIds` is how one of them goes stale the day that field grows
+// a third shape.
+export function sessionCounsel(session, agents) {
+  const roster = agents || [];
+  if (!session) return [];
+  if (session.allAgents) return roster;
+  const ids = session.agentIds || (session.agentId ? [session.agentId] : []);
+  return ids.map((id) => roster.find((a) => a.id === id)).filter(Boolean);
+}
+
 // The header chip: what this session asks, short enough to sit on one line beside
 // the title.
 //

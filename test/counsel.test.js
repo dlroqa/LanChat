@@ -138,7 +138,8 @@ test('an answer too long to carry is truncated rather than dropped', () => {
 // test/sessions.test.js uses for the commit arithmetic.
 const copy = new Function(
   `${fs.readFileSync(path.join(SRC, 'lib', 'counselCopy.js'), 'utf8').replace(/^export\s+/gm, '')}
-   return { counselNames, chipLabel, sessionSubLine, askPlaceholder, thinkingLine, roundSummary };`
+   return { counselNames, chipLabel, sessionSubLine, askPlaceholder, thinkingLine, roundSummary,
+            sessionCounsel };`
 )();
 
 test('a list of agents is read out the way a person would say it', () => {
@@ -323,4 +324,53 @@ test('mounted in a browser: ticking a counsel together, and nothing lost on the 
   for (const [name, step] of Object.entries(s)) {
     assert.equal(step.draft, 'half a question', `the half-written question survived ${name}`);
   }
+});
+
+test('who a session asks is resolved in one place, from the roster', () => {
+  const roster = [
+    { id: 'a1', name: 'Tessie' },
+    { id: 'a2', name: 'Hermes' },
+  ];
+
+  // The record keeps ids; the roster is what has names.
+  assert.deepEqual(
+    copy.sessionCounsel({ agentIds: ['a2', 'a1'] }, roster).map((a) => a.name),
+    ['Hermes', 'Tessie']
+  );
+
+  // An id whose agent has gone resolves to nothing, which is the same state as
+  // never having chosen one — either way there is nobody there to ask.
+  assert.deepEqual(
+    copy.sessionCounsel({ agentIds: ['a1', 'gone'] }, roster).map((a) => a.name),
+    ['Tessie']
+  );
+  assert.deepEqual(copy.sessionCounsel({ agentIds: [] }, roster), []);
+
+  // A session set to ask whoever is available asks whoever is available.
+  assert.deepEqual(copy.sessionCounsel({ allAgents: true }, roster), roster);
+
+  // The single-agent record every build before counsels wrote still reads.
+  assert.deepEqual(
+    copy.sessionCounsel({ agentId: 'a1' }, roster).map((a) => a.name),
+    ['Tessie']
+  );
+
+  assert.deepEqual(copy.sessionCounsel(null, roster), []);
+  assert.deepEqual(copy.sessionCounsel({ agentIds: ['a1'] }, undefined), []);
+});
+
+test('the sidebar row and the search result say the same thing about a session', () => {
+  // Two surfaces, one sentence. counselCopy exists because four of them each
+  // phrasing it their own way is how somebody comes to believe they are asking a
+  // different set of agents than they are — and the results panel is a fifth.
+  const sidebar = fs.readFileSync(path.join(SRC, 'components', 'Sidebar.jsx'), 'utf8');
+  const results = fs.readFileSync(path.join(SRC, 'components', 'SearchResults.jsx'), 'utf8');
+  for (const [name, src] of [
+    ['Sidebar', sidebar],
+    ['SearchResults', results],
+  ]) {
+    assert.match(src, /sessionSubLine\(/, `${name} should say it with counselCopy's sentence`);
+    assert.match(src, /sessionCounsel\(/, `${name} should resolve the counsel through counselCopy`);
+  }
+  assert.doesNotMatch(results, /\?\s*'Session'\s*:/, 'the results panel should not have its own word for it');
 });

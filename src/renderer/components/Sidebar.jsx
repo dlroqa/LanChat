@@ -2,12 +2,16 @@ import React, { useState, useMemo } from 'react';
 import Avatar from './Avatar.jsx';
 import QueueBadge from './QueueBadge.jsx';
 import SidebarSection from './SidebarSection.jsx';
-import { Settings, Plus, Search, Refresh, Users, GroupCall, Code, Sessions } from '../lib/icons.jsx';
+import SearchScope from './SearchScope.jsx';
+import { Settings, Plus, Refresh, Users, GroupCall, Code, Sessions } from '../lib/icons.jsx';
 import { platformLabel } from '../lib/util.js';
-import { sessionSubLine } from '../lib/counselCopy.js';
+import { sessionCounsel, sessionSubLine } from '../lib/counselCopy.js';
 import {
+  SCOPE_ALL,
   normalizeOrder,
   moveSection,
+  searchPlaceholder,
+  searchSection,
   sectionForThread,
   sectionSignal,
   sectionTitle,
@@ -71,6 +75,10 @@ export default function Sidebar({
   sectionOrder = [],
   lockedSections = [],
   onSectionPrefs = () => {},
+  // The search box, owned by App because the middle panel shows what it finds.
+  // `{ q, scope }`: what was typed, and which category it is aimed at.
+  search = { q: '', scope: SCOPE_ALL },
+  onSearch = () => {},
   onSelect,
   onOpenProfile,
   onOpenDev,
@@ -80,41 +88,31 @@ export default function Sidebar({
   onRefresh,
   onNewGroupCall,
 }) {
-  const [q, setQ] = useState('');
+  const q = search.q || '';
+  const scope = search.scope || SCOPE_ALL;
 
-  const filtered = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    const list = [...peers].sort((a, b) => {
-      if (a.online !== b.online) return a.online ? -1 : 1;
-      return (a.name || '').localeCompare(b.name || '');
-    });
-    if (!s) return list;
-    return list.filter((p) => (p.name || '').toLowerCase().includes(s) || (p.hostname || '').toLowerCase().includes(s));
-  }, [peers, q]);
+  const sorted = useMemo(
+    () =>
+      [...peers].sort((a, b) => {
+        if (a.online !== b.online) return a.online ? -1 : 1;
+        return (a.name || '').localeCompare(b.name || '');
+      }),
+    [peers]
+  );
 
   // Agents live in their own section at the top rather than among the people —
   // they are a different kind of correspondent, and anything that arrives as an
   // agent lands here without the list needing to know about it in advance.
-  const agents = useMemo(() => filtered.filter((p) => p.kind === 'agent'), [filtered]);
-  const people = useMemo(() => filtered.filter((p) => p.kind !== 'agent'), [filtered]);
-
-  // Tailnet devices that are online but not running LanChat (informational).
-  const noApp = useMemo(() => (tailnet || []).filter((t) => t.online && !t.hasApp), [tailnet]);
-
-  // Sessions answer the search box too. One that kept showing every session
-  // while the people below it disappeared would read as a filter that had half
-  // failed.
-  const shownSessions = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    return s ? sessions.filter((x) => (x.title || '').toLowerCase().includes(s)) : sessions;
-  }, [sessions, q]);
-
-  // The same two splits again, before the search box has had them. A heading is
+  //
+  // These are the whole lists, before the search box has had them. A heading is
   // the only thing a shut category shows, so what it counts has to be everything
   // inside it — a search for "eli" must not quietly take the flashing off People
   // because the person with the unread message is not called Eli.
-  const allAgents = useMemo(() => peers.filter((p) => p.kind === 'agent'), [peers]);
-  const allPeople = useMemo(() => peers.filter((p) => p.kind !== 'agent'), [peers]);
+  const allAgents = useMemo(() => sorted.filter((p) => p.kind === 'agent'), [sorted]);
+  const allPeople = useMemo(() => sorted.filter((p) => p.kind !== 'agent'), [sorted]);
+
+  // Tailnet devices that are online but not running LanChat (informational).
+  const noApp = useMemo(() => (tailnet || []).filter((t) => t.online && !t.hasApp), [tailnet]);
 
   const onlineTailnet = useMemo(() => (tailnet || []).filter((t) => t.online).length, [tailnet]);
 
@@ -137,16 +135,36 @@ export default function Sidebar({
   );
 
   const searching = q.trim().length > 0;
+  const scoped = scope !== SCOPE_ALL;
   const activeSection = useMemo(
     () => sectionForThread(selectedId, { sessions, peers }),
     [selectedId, sessions, peers]
   );
 
+  // What each category has to show, and what it matched on.
+  //
+  // A category the search is not aimed at is not searched: pointing the box at
+  // Sessions and then opening People should show the people, all of them. The
+  // query is about the category it was aimed at, and nothing else.
+  //
+  // Tailnet devices are in here now. They used to be the one list the box could
+  // not touch — it filtered the three above them and left the machines below
+  // untouched, which read as a search that had stopped working halfway down.
+  const hits = useMemo(() => {
+    const qFor = (id) => (!scoped || scope === id ? q : '');
+    return {
+      sessions: searchSection('sessions', sessions, qFor('sessions'), platformLabel),
+      agents: searchSection('agents', allAgents, qFor('agents'), platformLabel),
+      people: searchSection('people', allPeople, qFor('people'), platformLabel),
+      tailnet: searchSection('tailnet', noApp, qFor('tailnet'), platformLabel),
+    };
+  }, [sessions, allAgents, allPeople, noApp, q, scope, scoped]);
+
   const shownCount = {
-    sessions: shownSessions.length,
-    agents: agents.length,
-    people: people.length,
-    tailnet: 0,
+    sessions: hits.sessions.length,
+    agents: hits.agents.length,
+    people: hits.people.length,
+    tailnet: hits.tailnet.length,
   };
 
   const signals = {
@@ -159,9 +177,23 @@ export default function Sidebar({
   // Everything shuts while a category is being carried: four headings are a
   // short list to drop into, and a list that grew and shrank under the pointer
   // as it passed each category would be a moving target.
+  //
+  // Aiming the box at a category takes over from the locks and from the
+  // conversation you have open, so exactly one category is showing and it is the
+  // one being searched. They come back the moment the scope is cleared — nothing
+  // was unlocked, it was only overruled. Pointing at any heading still opens it:
+  // the scope narrows what the box is asking, not what you may look at.
   const isExpanded = (id) =>
     !drag.id &&
-    (locked.includes(id) || hovered === id || id === activeSection || (searching && shownCount[id] > 0));
+    (hovered === id ||
+      (scoped
+        ? id === scope
+        : locked.includes(id) || id === activeSection || (searching && shownCount[id] > 0)));
+
+  // The categories the search is not about, said quietly. A flashing one is
+  // never quietened: something arrived for you, and a filter you applied to the
+  // panel does not get to decide you should not hear about it.
+  const isQuiet = (id) => scoped && id !== scope && !signals[id].alert;
 
   const onHover = (id, open) => setHovered((h) => (open ? id : h === id ? null : h));
 
@@ -208,11 +240,7 @@ export default function Sidebar({
   // than from the record, so a renamed agent is renamed here too — and an agent
   // that has gone drops out of the line rather than being counted in it.
   const sessionRow = (s) => {
-    const names = s.allAgents
-      ? askableAgents.map((a) => a.name)
-      : (s.agentIds || (s.agentId ? [s.agentId] : []))
-          .map((id) => askableAgents.find((a) => a.id === id)?.name)
-          .filter(Boolean);
+    const names = sessionCounsel(s, askableAgents).map((a) => a.name);
     return (
       <div
         key={s.id}
@@ -321,19 +349,23 @@ export default function Sidebar({
   // that came and went with its contents would move the others under the
   // pointer, and could not be given a place to sit at all.
   const sectionBody = (id) => {
-    if (searching && shownCount[id] === 0 && id !== 'tailnet') {
+    const rows = hits[id];
+    // A category that is being searched and found nothing says so about the
+    // search, not about itself: "no sessions yet" would be a lie told to
+    // somebody who has plenty and simply mistyped one.
+    if (searching && (!scoped || scope === id) && rows.length === 0) {
       return <div className="empty-hint">Nothing here matches “{q.trim()}”.</div>;
     }
     switch (id) {
       case 'sessions':
-        return shownSessions.length ? (
-          shownSessions.map(sessionRow)
+        return rows.length ? (
+          rows.map((h) => sessionRow(h.item))
         ) : (
           <div className="empty-hint">No sessions yet. The button above starts one.</div>
         );
       case 'agents':
-        return agents.length ? (
-          agents.map(peerRow)
+        return rows.length ? (
+          rows.map((h) => peerRow(h.item))
         ) : (
           <div className="empty-hint">
             No agents yet. One appears here when you connect an agent on this machine, or when a peer shares
@@ -341,8 +373,8 @@ export default function Sidebar({
           </div>
         );
       case 'people':
-        return people.length ? (
-          people.map(peerRow)
+        return rows.length ? (
+          rows.map((h) => peerRow(h.item))
         ) : (
           <div className="empty-hint">
             No LanChat users found yet. People on your Tailscale network or LAN who run LanChat show up here
@@ -364,7 +396,7 @@ export default function Sidebar({
             </div>
           );
         }
-        if (!noApp.length) {
+        if (!rows.length) {
           return (
             <div className="empty-hint">
               {onlineTailnet
@@ -373,7 +405,7 @@ export default function Sidebar({
             </div>
           );
         }
-        return noApp.map((t) => (
+        return rows.map(({ item: t }) => (
           <div key={t.ip} className="peer offline" title="Online on Tailscale but not running LanChat">
             <Avatar name={t.hostname} id={t.ip} />
             <div className="meta">
@@ -416,17 +448,27 @@ export default function Sidebar({
         </button>
       </div>
 
+      {/* One box for everything under it. The chip on the left says which of the
+          four categories it is asking — or none of them, which means all four —
+          and the placeholder says the same thing in words, because a chip
+          showing a magnifier and a chevron is not a sentence. */}
       <div className="sidebar-search">
-        <div style={{ position: 'relative' }}>
-          <span style={{ position: 'absolute', left: 10, top: 9, color: 'var(--fg-faint)' }}>
-            <Search size={16} />
-          </span>
+        <div className="search-box">
+          <SearchScope scope={scope} order={order} onChange={(id) => onSearch({ scope: id })} />
           <input
             value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search people"
-            style={{ paddingLeft: 32 }}
-            aria-label="Search people"
+            onChange={(e) => onSearch({ q: e.target.value })}
+            onKeyDown={(e) => {
+              // Escape undoes the search one step at a time: the words first,
+              // then what they were aimed at. Clearing both at once would take
+              // away a scope somebody set deliberately because they mistyped.
+              if (e.key !== 'Escape') return;
+              e.stopPropagation();
+              if (q) onSearch({ q: '' });
+              else if (scoped) onSearch({ scope: SCOPE_ALL });
+            }}
+            placeholder={searchPlaceholder(scope)}
+            aria-label={searchPlaceholder(scope)}
           />
         </div>
       </div>
@@ -439,6 +481,7 @@ export default function Sidebar({
             title={sectionTitle(id)}
             expanded={isExpanded(id)}
             locked={locked.includes(id)}
+            quiet={isQuiet(id)}
             flashing={!isExpanded(id) && signals[id].alert}
             count={signals[id].count}
             alert={signals[id].alert}

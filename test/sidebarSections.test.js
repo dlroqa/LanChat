@@ -13,11 +13,30 @@ const path = require('node:path');
 // being lost. Both run in the renderer (ESM for the browser), so the `export`
 // keywords come off the same way test/findInThread.test.js loads the scanner.
 const SRC = path.join(__dirname, '..', 'src', 'renderer');
-const { SECTIONS, SECTION_IDS, sectionTitle, normalizeOrder, moveSection, sectionForThread, sectionSignal } =
-  new Function(
-    `${fs.readFileSync(path.join(SRC, 'lib', 'sidebarSections.js'), 'utf8').replace(/^export\s+/gm, '')}
-   return { SECTIONS, SECTION_IDS, sectionTitle, normalizeOrder, moveSection, sectionForThread, sectionSignal };`
-  )();
+const {
+  SECTIONS,
+  SECTION_IDS,
+  SCOPE_ALL,
+  sectionTitle,
+  normalizeOrder,
+  moveSection,
+  sectionForThread,
+  sectionSignal,
+  searchPlaceholder,
+  scopeOptions,
+  searchFields,
+  matchIn,
+  searchSection,
+} = new Function(
+  `${fs.readFileSync(path.join(SRC, 'lib', 'sidebarSections.js'), 'utf8').replace(/^export\s+/gm, '')}
+   return { SECTIONS, SECTION_IDS, SCOPE_ALL, sectionTitle, normalizeOrder, moveSection, sectionForThread,
+            sectionSignal, searchPlaceholder, scopeOptions, searchFields, matchIn, searchSection };`
+)();
+
+// The one the renderer passes in. Kept as a stub rather than loaded from
+// util.js: what is being pinned here is that the label is searched at all, not
+// how a platform is spelled.
+const label = (p) => ({ win32: 'Windows', darwin: 'macOS', linux: 'Linux' })[p] || '';
 
 const DEFAULT_ORDER = ['sessions', 'agents', 'people', 'tailnet'];
 
@@ -131,6 +150,115 @@ test('a shut heading counts what is behind it, and says when there is nothing to
   assert.deepEqual(sectionSignal(people, { p1: 0 }, {}), { count: 0, alert: false });
 
   assert.deepEqual(sectionSignal(undefined, undefined, undefined), { count: 0, alert: false });
+});
+
+test('the box says which category it is pointed at', () => {
+  // The four strings the search box can offer, and the one it starts on.
+  assert.equal(searchPlaceholder(SCOPE_ALL), 'Search everything');
+  assert.equal(searchPlaceholder(undefined), 'Search everything');
+  assert.equal(searchPlaceholder('sessions'), 'Search Sessions');
+  assert.equal(searchPlaceholder('agents'), 'Search Agents');
+  assert.equal(searchPlaceholder('people'), 'Search People');
+  assert.equal(searchPlaceholder('tailnet'), 'Search On your tailnet');
+
+  // The menu is a picture of the panel: same categories, same order, with
+  // "everything" in front. A menu that listed them in the source order would
+  // disagree with the column beside it the moment anything was dragged.
+  assert.deepEqual(
+    scopeOptions(['people', 'tailnet', 'sessions', 'agents']).map((o) => o.id),
+    ['all', 'people', 'tailnet', 'sessions', 'agents']
+  );
+  assert.equal(scopeOptions([])[0].title, 'Everything');
+  assert.equal(scopeOptions(['nonsense']).length, 5, 'a junk order still offers all four');
+  assert.ok(!SECTION_IDS.includes(SCOPE_ALL), 'the "everything" id must not collide with a category');
+});
+
+test('a row is searched by everything it is, and says which part matched', () => {
+  const elijah = {
+    id: 'p1',
+    name: 'Elijah',
+    hostname: 'elijah-pc',
+    platform: 'win32',
+    address: '100.64.0.5:47100',
+  };
+  const tessie = {
+    id: 'a1',
+    name: 'Tessie',
+    hostname: 'server',
+    platform: 'linux',
+    kind: 'agent',
+    agentKind: 'acp',
+  };
+  const device = { ip: '100.64.0.9', hostname: 'hermes', os: 'linux' };
+  const session = { id: 's1', title: 'why the turn moved' };
+
+  // The name first, and case makes no difference either way round.
+  assert.deepEqual(matchIn('people', elijah, 'eli', label), { field: 'name', text: 'Elijah' });
+  assert.deepEqual(matchIn('people', elijah, 'ELIJAH', label), { field: 'name', text: 'Elijah' });
+
+  // Then the things the row may not be showing. Each is reported by name, which
+  // is what stops a hit on an address from looking like a bug.
+  assert.deepEqual(matchIn('people', elijah, '-pc', label), { field: 'hostname', text: 'elijah-pc' });
+  assert.deepEqual(matchIn('people', elijah, 'windows', label), { field: 'platform', text: 'Windows' });
+  assert.deepEqual(matchIn('people', elijah, '100.64', label), {
+    field: 'address',
+    text: '100.64.0.5:47100',
+  });
+  assert.deepEqual(matchIn('agents', tessie, 'acp', label), { field: 'connector', text: 'acp' });
+
+  // A tailnet device is only ever called by its hostname, so that is its name.
+  assert.deepEqual(matchIn('tailnet', device, 'herm', label), { field: 'name', text: 'hermes' });
+  assert.deepEqual(matchIn('tailnet', device, 'linux', label), { field: 'platform', text: 'Linux' });
+  assert.deepEqual(matchIn('tailnet', device, '100.64.0.9', label), { field: 'address', text: '100.64.0.9' });
+
+  // A session has a title and nothing else — and the title is its name.
+  assert.deepEqual(matchIn('sessions', session, 'turn', label), {
+    field: 'name',
+    text: 'why the turn moved',
+  });
+
+  // Earlier fields win, so "server" on an agent whose hostname is server is
+  // reported as the hostname rather than as something further down the list.
+  assert.deepEqual(matchIn('agents', tessie, 'server', label), { field: 'hostname', text: 'server' });
+
+  // And nothing matches nothing.
+  assert.equal(matchIn('people', elijah, 'zzz', label), null);
+  assert.equal(matchIn('people', elijah, '   ', label), null);
+  assert.equal(matchIn('people', null, 'eli', label), null);
+  assert.equal(matchIn('nonsense', elijah, 'eli', label), null);
+  assert.deepEqual(searchFields('nonsense', elijah, label), []);
+
+  // A field the row does not have is skipped rather than matching the empty
+  // string — otherwise every search would hit every row with a missing field.
+  assert.equal(matchIn('people', { id: 'x', name: 'Ana' }, '', label), null);
+  assert.deepEqual(matchIn('people', { id: 'x', name: 'Ana' }, 'a', label), { field: 'name', text: 'Ana' });
+});
+
+test('a category answers a search with only the rows that matched', () => {
+  const people = [
+    { id: 'p1', name: 'Elijah', hostname: 'elijah-pc', platform: 'win32' },
+    { id: 'p2', name: 'Server', hostname: 'server', platform: 'linux' },
+    { id: 'p3', name: 'Ana', hostname: 'ana-air', platform: 'darwin' },
+  ];
+
+  const hits = searchSection('people', people, 'lin', label);
+  assert.deepEqual(
+    hits.map((h) => [h.item.name, h.field]),
+    [['Server', 'platform']]
+  );
+
+  // An empty box is not a search: everything comes back, and comes back
+  // unmatched, so nothing claims to have been found.
+  const all = searchSection('people', people, '  ', label);
+  assert.equal(all.length, 3);
+  assert.deepEqual(
+    all.map((h) => h.field),
+    [null, null, null]
+  );
+
+  assert.deepEqual(searchSection('people', people, 'zzz', label), []);
+  assert.deepEqual(searchSection('people', undefined, 'a', label), []);
+  assert.deepEqual(searchSection('people', undefined, '', label), []);
 });
 
 test('the panel renders the categories from the saved order and nothing else', () => {

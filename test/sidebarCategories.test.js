@@ -138,6 +138,16 @@ test('mounted in a browser: pointing, pinning, dragging, and a title that keeps 
   assert.match(shown(s.flashing, 'people').titleClip, /text/, 'clipped to the glyphs, which stay opaque');
   assert.equal(shown(s.flashing, 'agents').flashing, false, 'an open category does not flash');
 
+  // The glass the lit letters sit on. Behind the text rather than over it, and
+  // lit by the *same* animation as the title — one light crossing the row, not
+  // two that happen to overlap.
+  const plate = shown(s.flashing, 'people').plate;
+  assert.equal(plate.present, true, 'a flashing heading should have its plate');
+  assert.equal(plate.z, '-1', 'the plate belongs behind the text, never over it');
+  assert.equal(plate.image, 'gradient', 'and it carries the travelling band');
+  assert.equal(plate.animation, 'sb-prism', 'plate and title share one light source');
+  assert.equal(shown(s.flashing, 'agents').plate.present, false, 'a category not flashing has no plate');
+
   // Looking at it is not reading it. The flash pauses while the category is
   // open — there is nothing to point at when the rows are on screen — and comes
   // back when the pointer leaves, because nothing has changed.

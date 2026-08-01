@@ -109,6 +109,9 @@ const saves = [];
 let unread = {};
 let summoned = {};
 let selectedId = 'a1';
+// The search box belongs to App now — the middle panel shows what it finds — so
+// the panel is told what was typed rather than keeping it to itself.
+let search = { q: '', scope: 'all' };
 
 const props = () => ({
   self: { id: 'me', name: 'MacMini', hostname: 'macmini', platform: 'darwin' },
@@ -119,6 +122,8 @@ const props = () => ({
   sectionOrder: config.sidebarOrder,
   lockedSections: config.sidebarLocked,
   onSectionPrefs: (patch) => { saves.push(patch); config = { ...config, ...patch }; draw(); },
+  search,
+  onSearch: (patch) => { search = { ...search, ...patch }; draw(); },
   onSelect: (id) => { selectedId = id; unread = { ...unread, [id]: 0 }; draw(); },
   onOpenProfile: () => {}, onOpenDev: () => {}, onOpenSettings: () => {},
   onNewSession: () => {}, onAddPeer: () => {}, onRefresh: () => {}, onNewGroupCall: () => {},
@@ -185,6 +190,18 @@ function state() {
       // the category is being dealt with. :hover cannot be checked from here —
       // a dispatched mouseover moves no real pointer, so the pseudo-class never
       // matches — but :focus-within is the same rule and focus is real.
+      // The glass under the title. It only exists while the category is
+      // flashing, so on any other heading its content computes to none.
+      // (No backticks in here: this whole page is a template literal.)
+      plate: (() => {
+        const cs = getComputedStyle(el.querySelector('.sb-head'), '::before');
+        return {
+          present: cs.content !== 'none',
+          z: cs.zIndex,
+          animation: cs.animationName,
+          image: cs.backgroundImage === 'none' ? 'none' : 'gradient',
+        };
+      })(),
       gripOpacity: Number(getComputedStyle(el.querySelector('.sb-grip')).opacity),
       lockOpacity: Number(getComputedStyle(el.querySelector('.sb-lock')).opacity),
       actionsOpacity: Number(getComputedStyle(el.querySelector('.sb-actions')).opacity),

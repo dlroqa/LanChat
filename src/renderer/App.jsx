@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Sidebar from './components/Sidebar.jsx';
 import ChatPane from './components/ChatPane.jsx';
+import SearchResults from './components/SearchResults.jsx';
 import CallOverlay from './components/CallOverlay.jsx';
 import IncomingCall from './components/IncomingCall.jsx';
 import ProfileModal from './components/ProfileModal.jsx';
@@ -147,6 +148,14 @@ export default function App() {
   // The list comes from main and is republished whenever it changes there, so
   // this window never has to guess at it.
   const [sessions, setSessions] = useState([]);
+  // The search box: what was typed, and which category it is aimed at. It lives
+  // here rather than in the sidebar because what it finds is shown in the middle
+  // panel — one search, read in two places.
+  //
+  // Deliberately not saved: the arrangement of the panel is a setting, a search
+  // is a moment. Opening the app into a filter set days ago, with most of the
+  // roster missing and no memory of why, is a trap.
+  const [search, setSearch] = useState({ q: '', scope: 'all' });
   // What a fork pinned, per thread: the excerpt the next question carries. Kept
   // beside the documents because it is the same kind of thing — something staged
   // against a message that has not been written yet.
@@ -1498,6 +1507,8 @@ export default function App() {
         sectionOrder={config.sidebarOrder}
         lockedSections={config.sidebarLocked}
         onSectionPrefs={saveSectionPrefs}
+        search={search}
+        onSearch={(patch) => setSearch((s) => ({ ...s, ...patch }))}
         onSelect={setSelectedId}
         onOpenProfile={() => setModal('profile')}
         onOpenDev={() => setModal('devgate')}
@@ -1568,6 +1579,25 @@ export default function App() {
               ? `Drop to give ${selectedPeer?.name || 'the agent'} a document`
               : 'Drop to send'}
           </div>
+        )}
+
+        {/* What the search found, in the room with space to read it. It lies
+            *over* the conversation rather than instead of it: the composer keeps
+            what was being typed in its own state, so a pane swapped out for
+            results and back would take a half-written message with it. Closing
+            this returns to the same draft at the same scroll position. */}
+        {search.q.trim() && (
+          <SearchResults
+            search={search}
+            sessions={sessions}
+            askableAgents={askableAgents}
+            peers={peers}
+            tailnet={tailnet}
+            unread={unread}
+            order={config.sidebarOrder}
+            onSelect={setSelectedId}
+            onClose={() => setSearch((s) => ({ ...s, q: '' }))}
+          />
         )}
       </div>
 

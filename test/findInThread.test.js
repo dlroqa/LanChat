@@ -465,7 +465,12 @@ test('mounted in a browser: Escape puts the bar away and the cursor back', async
 });
 
 test('the current hit is marked by more than its colour, and the count does not wobble', () => {
-  assert.match(block('mark.find-hit {'), /background:\s*color-mix/);
+  // One treatment for one event: the roster's search marks its hits with this
+  // same rule, so a word found in a name looks like a word found in a message
+  // and neither needed a second pair of colours measured. The block therefore
+  // begins at the shared selector rather than at find-hit's own.
+  assert.match(css, /mark\.find-hit,\s*\n\s*mark\.result-hit \{/, 'the two searches should share one mark');
+  assert.match(block('mark.result-hit {'), /background:\s*color-mix/);
   const current = block('mark.find-hit.current {');
   assert.match(current, /background:\s*var\(--warn\)/);
   assert.match(current, /box-shadow/, 'a fill and a ring — never colour alone');
