@@ -4,6 +4,14 @@ import { startRecording, pickFormat, formatDuration } from '../lib/voice.js';
 import { formatBytes } from '../lib/util.js';
 import MentionMenu, { mentionQuery, matchMentions } from './MentionMenu.jsx';
 
+// Joins a dictated phrase onto what is already in the box. Trailing whitespace
+// is dropped first so a half-typed line does not collect a double space, and an
+// empty box stays empty-headed rather than starting with one.
+export function joinSpoken(existing, addition) {
+  const head = (existing || '').replace(/\s+$/, '');
+  return head ? `${head} ${addition}` : addition;
+}
+
 // Message composer: auto-growing textarea, Enter to send, attach and voice.
 export default function Composer({
   draft,
@@ -113,15 +121,19 @@ export default function Composer({
   // start over.
   useEffect(() => {
     if (!draft) return;
-    setText(draft.text);
-    setCaret(draft.text.length);
+    const el = ref.current;
+    // Dictation adds to what is already written instead of replacing it, so
+    // speaking a second sentence continues the message rather than wiping the
+    // first. The box itself is the authority on what is currently in it.
+    const next = draft.mode === 'append' ? joinSpoken(el ? el.value : '', draft.text) : draft.text;
+    setText(next);
+    setCaret(next.length);
     // Text put back by the app is not text somebody is typing, so it must not
     // pop the mention list open over a question that was already written.
     setDismissed(true);
-    const el = ref.current;
     if (!el) return;
     el.focus();
-    el.setSelectionRange(draft.text.length, draft.text.length);
+    el.setSelectionRange(next.length, next.length);
     // Keyed on the nonce alone, deliberately: the whole point is that asking the
     // same thing twice restores it twice, which a dependency on `draft` itself
     // would not do — the object is equal and the effect would not re-run.

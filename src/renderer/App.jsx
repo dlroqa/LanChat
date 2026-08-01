@@ -18,6 +18,9 @@ import { Ringer, playNotification, playCallEvent, playPttCue, playRejectCue } fr
 import ConnectionPanel from './components/ConnectionPanel.jsx';
 import PttBar from './components/PttBar.jsx';
 import { PttManager, attachPttKey, defaultPttKey } from './lib/ptt.js';
+import { DictationManager, shouldDictate, holdMode } from './lib/dictation.js';
+import { toWavBytes } from './lib/wav.js';
+import { startRecording } from './lib/voice.js';
 import GroupCallView from './components/GroupCallView.jsx';
 import GroupInvite from './components/GroupInvite.jsx';
 import NewGroupCallModal from './components/NewGroupCallModal.jsx';
@@ -31,6 +34,10 @@ import { useAgentMusic } from './lib/agentMusic.js';
 import { trackUrl, DEFAULT_TRACK } from './lib/agentMusicTrack.js';
 
 const api = window.lanchat;
+
+// Dictation transcribes on this machine through FluidAudio, which is macOS-only.
+// Everywhere else the push-to-talk key keeps doing exactly what it did before.
+const IS_MAC_HOST = navigator.platform.toLowerCase().includes('mac');
 
 // How long a turn-queue notice stays on screen. It is never written to history,
 // so this is only about when the bubble goes — a saved conversation is clean
@@ -115,6 +122,10 @@ export default function App() {
   const [callFullscreen, setCallFullscreen] = useState(false);
   const [pipMode, setPipMode] = useState(false);
   const [ptt, setPtt] = useState({ transmitting: false, connecting: false, talkers: [], inboundStreams: [] });
+  const [dictation, setDictation] = useState({ phase: 'idle', threadId: null, startedAt: 0, error: null });
+  // null = not asked yet, and treated as ready: a check that has not come back
+  // must not make the key dead for the moment after launch.
+  const [dictationReady, setDictationReady] = useState(null);
   const [group, setGroup] = useState({ status: 'idle', participants: [], count: 0 });
   const [agentStatus, setAgentStatus] = useState({}); // agentId -> {status, detail}
   const [approvals, setApprovals] = useState({}); // agentId -> pending approval request
@@ -177,6 +188,14 @@ export default function App() {
   const callRef = useRef(null);
   const ringerRef = useRef(null);
   const pttRef = useRef(null);
+  const dictationRef = useRef(null);
+  // Which of the two things the key does was actually started by the hold in
+  // progress. Release routes on this rather than on the current thread, so
+  // switching conversation mid-hold cannot end a recording as a transmission.
+  const holdModeRef = useRef(null);
+  // Read from the keydown handler, which is attached once and would otherwise
+  // close over whatever the answer was when the listeners went on.
+  const dictationReadyRef = useRef(null);
   const groupRef = useRef(null);
   const inCallRef = useRef(false);
   const groupActiveRef = useRef(false);
@@ -194,6 +213,7 @@ export default function App() {
 
   configRef.current = config;
   selectedRef.current = selectedId;
+  dictationReadyRef.current = dictationReady;
   selfRef.current = self;
 
   // --- Call manager + ringer (created once) ---
@@ -251,6 +271,25 @@ export default function App() {
       onCue: (kind) => playPttCue(kind, { volume: configRef.current.notificationVolume ?? 0.6 }),
     });
   }
+  if (!dictationRef.current) {
+    // The same gesture as push-to-talk, for threads whose far end reads rather
+    // than listens: record while held, transcribe on release, and put the words
+    // in the message box rather than sending them.
+    dictationRef.current = new DictationManager({
+      record: ({ audioInputId }) => startRecording({ deviceId: audioInputId }),
+      encode: (blob) => toWavBytes(blob),
+      transcribe: async (bytes) => {
+        const res = await api.dictate(bytes);
+        if (!res || !res.ok) throw new Error((res && res.error) || 'Transcription failed.');
+        return res.text;
+      },
+      getDevices: () => ({ audioInputId: configRef.current.audioInputId || null }),
+      onState: (s) => setDictation(s),
+      onResult: (text, threadId) => applyTranscript(text, threadId),
+      onError: (msg) => toast(msg, 'error'),
+      onCue: (kind) => playPttCue(kind, { volume: configRef.current.notificationVolume ?? 0.6 }),
+    });
+  }
 
   // Ring while a call is pending; stop the moment it connects or ends.
   useEffect(() => {
@@ -290,12 +329,78 @@ export default function App() {
         config.pttEnabled !== false &&
         call.status === 'idle' &&
         Boolean(selectedPeerRef.current && selectedPeerRef.current.online),
-      onDown: () => pttRef.current.setTransmitting(true, selectedPeerRef.current),
-      onUp: () => pttRef.current.setTransmitting(false),
+      // Dictation writes into the composer, so it is the one mode that must
+      // still fire while the composer has focus.
+      allowWhileTyping: () => dictates(),
+      onDown: holdStart,
+      onUp: holdEnd,
     });
+    // Everything the handlers need is read from a ref when the key is pressed,
+    // so the selected thread is deliberately not a dependency here — re-running
+    // this on every conversation change would drop the listeners mid-hold.
   }, [config.pttKey, config.pttCustomCode, config.pttEnabled, call.status]);
 
   useEffect(() => () => pttRef.current?.closeAll(), []);
+  useEffect(() => () => dictationRef.current?.cancel(), []);
+
+  // Whether the transcriber is actually installed, asked once rather than found
+  // out by holding a key and getting nothing back. Re-asked when the configured
+  // path changes, which is the only thing that can change the answer.
+  useEffect(() => {
+    if (!IS_MAC_HOST || config.dictationEnabled === false) return undefined;
+    let live = true;
+    api
+      .probeDictation(config.dictationCliPath || null)
+      .then((r) => live && setDictationReady(Boolean(r && r.ok)))
+      .catch(() => live && setDictationReady(false));
+    return () => {
+      live = false;
+    };
+  }, [config.dictationEnabled, config.dictationCliPath]);
+
+  // Which thing the key does here. An agent or a session has nothing to listen
+  // with, so holding the key at one dictates; holding it at a person still opens
+  // the voice channel it always did.
+  function dictates() {
+    return shouldDictate({
+      isMac: IS_MAC_HOST,
+      enabled: configRef.current.dictationEnabled,
+      thinkingThread: isThinkingThread(selectedRef.current),
+    });
+  }
+
+  function holdStart() {
+    const mode = holdMode({
+      isMac: IS_MAC_HOST,
+      enabled: configRef.current.dictationEnabled,
+      thinkingThread: isThinkingThread(selectedRef.current),
+      ready: dictationReadyRef.current,
+    });
+    holdModeRef.current = mode;
+    if (mode === 'dictate') dictationRef.current.start(selectedRef.current);
+    else if (mode === 'radio') pttRef.current.setTransmitting(true, selectedPeerRef.current);
+  }
+
+  function holdEnd() {
+    const mode = holdModeRef.current;
+    holdModeRef.current = null;
+    if (mode === 'dictate') dictationRef.current.stop();
+    // `null` lands here too — a stray mouse-leave with no press before it, which
+    // has always ended in a harmless setTransmitting(false).
+    else if (mode !== 'none') pttRef.current.setTransmitting(false);
+  }
+
+  // Spoken words arrive as text. They go to the composer rather than out, so
+  // what is sent is always something that was read first — a misheard word is a
+  // correction, not a message you have to explain.
+  function applyTranscript(text, threadId) {
+    if (!text) return;
+    if (selectedRef.current !== threadId) {
+      toast('Dictation discarded — you changed conversation.');
+      return;
+    }
+    setDraft({ threadId, text, nonce: Date.now(), mode: 'append' });
+  }
   useEffect(() => () => groupRef.current?.leave(), []);
 
   function announceLeft(name) {
@@ -693,6 +798,14 @@ export default function App() {
           break;
         case 'toast':
           toast(payload.text, payload.level);
+          break;
+        // The first dictation fetches the speech models, which is a large
+        // download with no progress of its own. Said out loud, because a first
+        // attempt that simply sits there for minutes reads as a hang.
+        case 'dictation':
+          if (payload.state === 'downloading') {
+            toast('Downloading the speech models — this happens once and can take a few minutes.');
+          }
           break;
         default:
           break;
@@ -1626,8 +1739,11 @@ export default function App() {
                 peer={selectedPeer}
                 state={ptt}
                 keyName={config.pttKey || defaultPttKey()}
-                onHoldStart={() => pttRef.current.setTransmitting(true, selectedPeerRef.current)}
-                onHoldEnd={() => pttRef.current.setTransmitting(false)}
+                customCode={config.pttCustomCode}
+                dictation={dictates() ? dictation : null}
+                cliReady={dictationReady}
+                onHoldStart={holdStart}
+                onHoldEnd={holdEnd}
               />
             )}
             <ConnectionPanel

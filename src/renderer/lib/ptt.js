@@ -315,7 +315,19 @@ export function resolvePttKey(keyName, customCode) {
 }
 
 // Attaches hold-to-talk listeners. Returns an unsubscribe function.
-export function attachPttKey({ keyName, customCode, isEnabled, onDown, onUp }) {
+//
+// `allowWhileTyping` lifts the suppression below. It exists for dictation, whose
+// whole purpose is to put words in the message box — a mode that would never fire
+// if holding the key in the composer were ignored. It defaults to off, so talking
+// at a person still cannot happen by accident mid-sentence.
+export function attachPttKey({
+  keyName,
+  customCode,
+  isEnabled,
+  onDown,
+  onUp,
+  allowWhileTyping = () => false,
+}) {
   const def = resolvePttKey(keyName, customCode);
   let held = false;
 
@@ -340,8 +352,9 @@ export function attachPttKey({ keyName, customCode, isEnabled, onDown, onUp }) {
       return;
     }
     if (!def.match(e)) return;
-    // Never hijack the key while the user is typing a message.
-    if (typing()) return;
+    // Never hijack the key while the user is typing a message, unless the mode
+    // being held is one that writes into that very box.
+    if (typing() && !allowWhileTyping()) return;
     if (e.repeat) return;
     held = true;
     onDown();

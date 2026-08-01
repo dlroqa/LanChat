@@ -116,6 +116,25 @@ test('a preference the renderer can write is a preference it can see', () => {
   }
 });
 
+test('the dictation preferences round-trip, but its internal flag does not', () => {
+  const { call, onDisk } = bridge();
+
+  const saved = call('lanchat:setConfig', {
+    dictationEnabled: false,
+    dictationCliPath: '/opt/homebrew/bin/fluidaudiocli',
+  });
+  assert.equal(saved.dictationEnabled, false);
+  assert.equal(saved.dictationCliPath, '/opt/homebrew/bin/fluidaudiocli');
+  assert.equal(onDisk().dictationCliPath, '/opt/homebrew/bin/fluidaudiocli');
+
+  // Whether the speech models have been fetched is something main learns by
+  // running the transcriber, not something the window may assert. Claiming it
+  // early would cost the first real run its long download deadline.
+  const ignored = call('lanchat:setConfig', { dictationModelReady: true });
+  assert.equal(ignored.dictationModelReady, undefined, 'not bridged to the renderer at all');
+  assert.equal(onDisk().dictationModelReady, false);
+});
+
 test('acceptLan is shown to the renderer but not settable in bulk', () => {
   const { call, onDisk } = bridge();
   assert.equal(call('lanchat:getConfig').acceptLan, false);

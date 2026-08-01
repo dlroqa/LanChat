@@ -43,6 +43,8 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
     pttKey: config.pttKey || defaultPttKey(),
     pttCustomCode: config.pttCustomCode || null,
     pttAllowIncoming: config.pttAllowIncoming !== false,
+    dictationEnabled: config.dictationEnabled !== false,
+    dictationCliPath: config.dictationCliPath || '',
   });
   const [devices, setDevices] = useState({
     audioInputId: config.audioInputId || null,
@@ -69,6 +71,9 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
       ...devices,
       ...sounds,
       ...ptt,
+      // Empty means "look for it on PATH", which is null on disk rather than a
+      // string that would later be spawned as a command with no name.
+      dictationCliPath: ptt.dictationCliPath.trim() || null,
     });
     onClose();
   }
@@ -126,6 +131,7 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
           on={ptt.pttAllowIncoming}
           set={(v) => setPtt((p) => ({ ...p, pttAllowIncoming: v }))}
         />
+        <Dictation value={ptt} set={setPtt} />
 
         <div className="section-head">Sounds</div>
         <SoundSettings
@@ -282,6 +288,88 @@ function KeyRecorder({ code, disabled, onRecord }) {
         {listening ? 'Escape to cancel' : `Bound to ${describeKeyCode(code)}`}
       </span>
     </div>
+  );
+}
+
+// Hold-to-dictate setup. Transcription runs through the FluidAudio CLI, which
+// only builds for macOS — so on anything else this whole panel is hidden rather
+// than shown as a control that could never work.
+function Dictation({ value, set }) {
+  const [probe, setProbe] = useState(null);
+  const [checking, setChecking] = useState(false);
+
+  if (!navigator.platform.toLowerCase().includes('mac')) return null;
+
+  async function check() {
+    setChecking(true);
+    try {
+      setProbe(await window.lanchat.probeDictation(value.dictationCliPath.trim() || null));
+    } catch (err) {
+      setProbe({ ok: false, detail: err.message });
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  async function browse() {
+    const picked = await window.lanchat.pickDictationCli();
+    if (!picked) return;
+    set((p) => ({ ...p, dictationCliPath: picked.path }));
+    setProbe(null);
+  }
+
+  return (
+    <>
+      <Toggle
+        label="Dictate into the message box"
+        desc="In agent and session threads, holding the push-to-talk key records and transcribes on this Mac instead of transmitting. The text lands in the message box for you to read before sending."
+        on={value.dictationEnabled}
+        set={(v) => set((p) => ({ ...p, dictationEnabled: v }))}
+      />
+      <div className="field" style={{ marginTop: 12 }}>
+        <label htmlFor="dictpath">FluidAudio CLI</label>
+        <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+          <input
+            id="dictpath"
+            type="text"
+            placeholder="fluidaudiocli"
+            value={value.dictationCliPath}
+            disabled={!value.dictationEnabled}
+            onChange={(e) => {
+              set((p) => ({ ...p, dictationCliPath: e.target.value }));
+              setProbe(null);
+            }}
+          />
+          <button className="btn" disabled={!value.dictationEnabled} onClick={browse}>
+            Browse…
+          </button>
+          <button className="btn" disabled={!value.dictationEnabled || checking} onClick={check}>
+            {checking ? 'Checking…' : 'Check'}
+          </button>
+        </div>
+        {probe && (
+          <div className="hint" style={probe.ok ? undefined : { color: 'var(--danger)' }}>
+            {probe.ok ? `Found — ${probe.path}` : `Not found — ${probe.detail || 'no answer'}`}
+          </div>
+        )}
+        {(!probe || !probe.ok) && (
+          <div className="hint">
+            Leave it empty to look for <code>fluidaudiocli</code> on your PATH. To build it:
+            <br />
+            <code>git clone https://github.com/FluidInference/FluidAudio</code>
+            <br />
+            <code>cd FluidAudio &amp;&amp; swift build -c release --product fluidaudiocli</code>
+            <br />
+            then point this at <code>.build/release/fluidaudiocli</code>. The first dictation
+            downloads the speech models and can take a few minutes. Requires macOS 14 or later.
+          </div>
+        )}
+        <div className="hint">
+          Dictation uses the push-to-talk key above. A letter or digit is a poor choice for it —
+          holding one types into the message box while you speak.
+        </div>
+      </div>
+    </>
   );
 }
 

@@ -92,6 +92,94 @@ test('the key is ignored while typing a message', () => {
   assert.deepEqual(calls, [], 'must not hijack modifiers while composing');
 });
 
+test('dictation may claim the key while typing, but nothing else can', () => {
+  // The suppression above is what talking to a person needs and what dictation
+  // cannot live with — it writes into the very box that holds focus. So the
+  // exemption is opt-in, and its default must leave the person path alone.
+  const off = loadPtt({ activeTag: 'TEXTAREA' });
+  const offCalls = [];
+  off.api.attachPttKey({
+    keyName: 'meta',
+    isEnabled: () => true,
+    allowWhileTyping: () => false,
+    onDown: () => offCalls.push('down'),
+    onUp: () => offCalls.push('up'),
+  });
+  fire(off.listeners, 'keydown', { key: 'Meta', repeat: false });
+  assert.deepEqual(offCalls, [], 'opting out must behave exactly as before');
+
+  const on = loadPtt({ activeTag: 'TEXTAREA' });
+  const onCalls = [];
+  on.api.attachPttKey({
+    keyName: 'meta',
+    isEnabled: () => true,
+    allowWhileTyping: () => true,
+    onDown: () => onCalls.push('down'),
+    onUp: () => onCalls.push('up'),
+  });
+  fire(on.listeners, 'keydown', { key: 'Meta', repeat: false });
+  fire(on.listeners, 'keyup', { key: 'Meta' });
+  assert.deepEqual(onCalls, ['down', 'up']);
+});
+
+test('a shortcut still aborts the hold while typing', () => {
+  // This is what keeps ⌘C from opening the microphone: the release arrives
+  // within tens of milliseconds, well inside the dictation arming window.
+  const { api, listeners } = loadPtt({ activeTag: 'TEXTAREA' });
+  const calls = [];
+  api.attachPttKey({
+    keyName: 'meta',
+    isEnabled: () => true,
+    allowWhileTyping: () => true,
+    onDown: () => calls.push('down'),
+    onUp: () => calls.push('up'),
+  });
+  fire(listeners, 'keydown', { key: 'Meta', repeat: false });
+  fire(listeners, 'keydown', { key: 'c', repeat: false }); // ⌘C in the composer
+  assert.deepEqual(calls, ['down', 'up'], 'copying must not become a recording');
+});
+
+test('the key a card can name is the key it would bind', () => {
+  // The card used to read its label straight out of PTT_KEYS, which has no
+  // 'custom' entry — so a recorded key showed "Command (⌘)" while F13 was what
+  // actually worked. Both sides now go through resolvePttKey, and this is what
+  // keeps them from drifting apart again.
+  const { api } = loadPtt();
+  for (const [keyName, code] of [
+    ['meta', null],
+    ['control', null],
+    ['alt', null],
+    ['space', null],
+    ['custom', 'F13'],
+    ['custom', 'KeyJ'],
+    ['nonsense', null], // an old config naming a key this build no longer has
+  ]) {
+    const def = api.resolvePttKey(keyName, code);
+    const calls = [];
+    api.attachPttKey({
+      keyName,
+      customCode: code,
+      isEnabled: () => true,
+      onDown: () => calls.push('down'),
+      onUp: () => calls.push('up'),
+    });
+    assert.ok(def.label, `${keyName}/${code} must resolve to something nameable`);
+    // The definition the label comes from is the definition the listener matches
+    // on, so an event built from it has to be the one that starts a hold.
+    assert.ok(def.match({ key: def.code, code: def.code }), `${def.label} must match its own key`);
+  }
+});
+
+test('a recorded key is named by what was recorded, not by the default', () => {
+  const { api } = loadPtt();
+  assert.equal(api.resolvePttKey('custom', 'F13').label, 'F13');
+  assert.equal(api.resolvePttKey('custom', 'KeyJ').label, 'J');
+  assert.equal(api.resolvePttKey('alt', null).label, 'Option / Alt');
+  // No recorded code yet: falls back to the platform default, which is also
+  // what attachPttKey would bind — consistent rather than merely plausible.
+  assert.equal(api.resolvePttKey('custom', null).label, 'Command (⌘)');
+});
+
 test('losing window focus stops transmitting', () => {
   const { api, listeners } = loadPtt();
   const calls = [];

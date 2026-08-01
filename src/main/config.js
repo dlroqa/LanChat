@@ -59,6 +59,14 @@ const DEFAULTS = Object.freeze({
   skippedUpdateVersion: null, // a release the user chose not to be reminded about
   openAtLogin: false, // Windows/macOS: launch LanChat at login (hidden to tray)
   pttAllowIncoming: true,
+  // Hold-to-dictate in agent and session threads, where there is no ear at the
+  // far end for live audio. macOS only in practice; the renderer decides.
+  dictationEnabled: true,
+  dictationCliPath: null, // null = look for `fluidaudiocli` on PATH
+  // The first transcription downloads the speech models, and the CLI has no
+  // working way to do that ahead of time — so the first run gets a much longer
+  // deadline than the rest. Internal: not in the renderer's settable keys.
+  dictationModelReady: false,
   audioInputId: null, // preferred microphone (null = system default)
   videoInputId: null, // preferred camera (null = system default)
   enableTailscale: true,
