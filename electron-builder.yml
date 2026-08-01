@@ -39,7 +39,7 @@ mac:
   # silence rather than an obvious permission error. electron-builder does not
   # add these automatically.
   extendInfo:
-    NSMicrophoneUsageDescription: LanChat uses your microphone for voice and video calls with people on your network.
+    NSMicrophoneUsageDescription: LanChat uses your microphone for voice and video calls with people on your network, and to record dictation for transcribing into the message box.
     NSCameraUsageDescription: LanChat uses your camera for video calls with people on your network.
     NSLocalNetworkUsageDescription: LanChat finds and connects to people on your local network and Tailscale mesh.
 

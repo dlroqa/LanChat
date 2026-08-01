@@ -116,23 +116,20 @@ test('a preference the renderer can write is a preference it can see', () => {
   }
 });
 
-test('the dictation preferences round-trip, but its internal flag does not', () => {
+test('the dictation preferences round-trip', () => {
   const { call, onDisk } = bridge();
 
-  const saved = call('lanchat:setConfig', {
-    dictationEnabled: false,
-    dictationCliPath: '/opt/homebrew/bin/fluidaudiocli',
-  });
+  const saved = call('lanchat:setConfig', { dictationEnabled: false, dictationPort: 47999 });
   assert.equal(saved.dictationEnabled, false);
-  assert.equal(saved.dictationCliPath, '/opt/homebrew/bin/fluidaudiocli');
-  assert.equal(onDisk().dictationCliPath, '/opt/homebrew/bin/fluidaudiocli');
+  assert.equal(saved.dictationPort, 47999);
+  assert.equal(onDisk().dictationPort, 47999);
 
-  // Whether the speech models have been fetched is something main learns by
-  // running the transcriber, not something the window may assert. Claiming it
-  // early would cost the first real run its long download deadline.
-  const ignored = call('lanchat:setConfig', { dictationModelReady: true });
-  assert.equal(ignored.dictationModelReady, undefined, 'not bridged to the renderer at all');
-  assert.equal(onDisk().dictationModelReady, false);
+  // The settings a retired version wrote are not settable back into the file by
+  // a renderer that still remembers them: they are off the allowlist, and the
+  // prune in config.js removes them on load. See configRetired.test.js.
+  const ignored = call('lanchat:setConfig', { dictationCliPath: '/opt/homebrew/bin/x' });
+  assert.equal(ignored.dictationCliPath, undefined, 'not bridged to the renderer at all');
+  assert.equal(onDisk().dictationCliPath, undefined);
 });
 
 test('acceptLan is shown to the renderer but not settable in bulk', () => {

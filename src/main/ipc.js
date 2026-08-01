@@ -72,7 +72,7 @@ const SETTABLE_KEYS = Object.freeze([
   'skippedUpdateVersion',
   'pttAllowIncoming',
   'dictationEnabled',
-  'dictationCliPath',
+  'dictationPort',
   'openAtLogin',
 ]);
 
@@ -96,8 +96,9 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   // means reaching `remoteAgents`, which lives here and nowhere else.
   const sessions = createSessions({ userDataDir, store, agentHub, remoteAgents, hub, bus });
 
-  // Local speech-to-text for hold-to-dictate. Nothing of it crosses the wire.
-  const dictation = createDictation({ config, emit });
+  // Speech-to-text through the FluidVoice app on this machine. Nothing of it
+  // crosses the wire.
+  const dictation = createDictation({ config });
 
   // Threads that exist only on this machine. Nothing off the wire may claim one.
   function isLocalThreadId(id) {
@@ -845,25 +846,15 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
 
   // ---- dictation ----
   //
-  // Speech recorded in an agent or session thread, transcribed on this machine.
-  // The audio is written to a temporary file, read by the CLI and deleted; it is
-  // never stored and never sent anywhere.
+  // Speech recorded in an agent or session thread, transcribed on this machine
+  // by the FluidVoice app over its loopback API. The audio goes straight from
+  // memory to that socket: it is never written to disk and never leaves here.
   ipcMain.handle('lanchat:dictate', (_e, { data }) => dictation.transcribe({ data }));
 
-  // Is the transcriber installed and runnable? Asked by Settings, which shows
-  // the answer next to the field rather than making the user find out by
-  // holding a key and getting nothing.
-  ipcMain.handle('lanchat:probeDictation', (_e, { path: cliPath } = {}) => dictation.probe(cliPath));
-
-  // Typing an absolute path by hand is the worst part of setting this up.
-  ipcMain.handle('lanchat:pickDictationCli', async () => {
-    const res = await dialog.showOpenDialog(getWindow(), {
-      title: 'Choose the FluidAudio CLI',
-      properties: ['openFile'],
-    });
-    if (res.canceled || !res.filePaths.length) return null;
-    return { path: res.filePaths[0] };
-  });
+  // Is FluidVoice reachable, and is it FluidVoice? Asked by Settings, which shows
+  // the answer next to the field rather than making the user find out by holding
+  // a key and getting nothing.
+  ipcMain.handle('lanchat:probeDictation', (_e, { port } = {}) => dictation.probe(port));
 
   // ---- device identity and known peers ----
 

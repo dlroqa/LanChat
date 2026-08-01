@@ -60,11 +60,10 @@ contextBridge.exposeInMainWorld('lanchat', {
   sendFilePaths: (peerId, paths) => invoke('lanchat:sendFilePaths', { peerId, paths }),
   sendVoice: (peerId, data, ext) => invoke('lanchat:sendVoice', { peerId, data, ext }),
 
-  // Hold-to-dictate. `dictate` takes WAV bytes and gives back text; the audio
-  // is transcribed on this machine and never leaves it.
+  // Dictation. `dictate` takes WAV bytes and gives back text; the audio is
+  // transcribed by the FluidVoice app on this machine and never leaves it.
   dictate: (data) => invoke('lanchat:dictate', { data }),
-  probeDictation: (path) => invoke('lanchat:probeDictation', { path }),
-  pickDictationCli: () => invoke('lanchat:pickDictationCli'),
+  probeDictation: (port) => invoke('lanchat:probeDictation', { port }),
 
   // Documents an agent is asked to read. Both return a verdict per file — name,
   // size and either `ok` or the reason — never the text, which is read in main

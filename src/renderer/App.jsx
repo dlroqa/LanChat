@@ -35,7 +35,7 @@ import { trackUrl, DEFAULT_TRACK } from './lib/agentMusicTrack.js';
 
 const api = window.lanchat;
 
-// Dictation transcribes on this machine through FluidAudio, which is macOS-only.
+// Dictation transcribes on this machine through FluidVoice, which is macOS-only.
 // Everywhere else the push-to-talk key keeps doing exactly what it did before.
 const IS_MAC_HOST = navigator.platform.toLowerCase().includes('mac');
 
@@ -343,20 +343,20 @@ export default function App() {
   useEffect(() => () => pttRef.current?.closeAll(), []);
   useEffect(() => () => dictationRef.current?.cancel(), []);
 
-  // Whether the transcriber is actually installed, asked once rather than found
-  // out by holding a key and getting nothing back. Re-asked when the configured
-  // path changes, which is the only thing that can change the answer.
+  // Whether FluidVoice is actually reachable, asked once rather than found out
+  // by speaking a sentence and getting nothing back. Re-asked when the configured
+  // port changes, which is the only thing here that can change the answer.
   useEffect(() => {
     if (!IS_MAC_HOST || config.dictationEnabled === false) return undefined;
     let live = true;
     api
-      .probeDictation(config.dictationCliPath || null)
+      .probeDictation(config.dictationPort || null)
       .then((r) => live && setDictationReady(Boolean(r && r.ok)))
       .catch(() => live && setDictationReady(false));
     return () => {
       live = false;
     };
-  }, [config.dictationEnabled, config.dictationCliPath]);
+  }, [config.dictationEnabled, config.dictationPort]);
 
   // Which thing the key does here. An agent or a session has nothing to listen
   // with, so holding the key at one dictates; holding it at a person still opens
@@ -379,6 +379,23 @@ export default function App() {
     holdModeRef.current = mode;
     if (mode === 'dictate') dictationRef.current.start(selectedRef.current);
     else if (mode === 'radio') pttRef.current.setTransmitting(true, selectedPeerRef.current);
+  }
+
+  // The microphone button on the dictate card. Tapped rather than held, so it
+  // has its own entry point — but it lands in the same manager, and it refuses
+  // for the same reason a hold does when there is nothing to transcribe with.
+  function dictateToggle() {
+    if (
+      holdMode({
+        isMac: IS_MAC_HOST,
+        enabled: configRef.current.dictationEnabled,
+        thinkingThread: isThinkingThread(selectedRef.current),
+        ready: dictationReadyRef.current,
+      }) !== 'dictate'
+    ) {
+      return;
+    }
+    dictationRef.current.toggle(selectedRef.current);
   }
 
   function holdEnd() {
@@ -798,14 +815,6 @@ export default function App() {
           break;
         case 'toast':
           toast(payload.text, payload.level);
-          break;
-        // The first dictation fetches the speech models, which is a large
-        // download with no progress of its own. Said out loud, because a first
-        // attempt that simply sits there for minutes reads as a hang.
-        case 'dictation':
-          if (payload.state === 'downloading') {
-            toast('Downloading the speech models — this happens once and can take a few minutes.');
-          }
           break;
         default:
           break;
@@ -1744,6 +1753,7 @@ export default function App() {
                 cliReady={dictationReady}
                 onHoldStart={holdStart}
                 onHoldEnd={holdEnd}
+                onDictateToggle={dictateToggle}
               />
             )}
             <ConnectionPanel

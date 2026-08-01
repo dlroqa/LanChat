@@ -27,11 +27,11 @@ export function shouldDictate({ isMac, enabled, thinkingThread }) {
 //   'dictate' — record and transcribe
 //   'none'    — this thread dictates, but there is nothing installed to do it
 //
-// The third case is why this is not just shouldDictate(): with no transcriber,
-// falling back to 'radio' would open the microphone for an agent that cannot
-// hear it, which is the very thing dictation replaced. Doing nothing is the
-// honest answer, and the card beside it says how to fix it. `ready` is null
-// until the check comes back, which counts as ready — a hold in the first
+// The third case is why this is not just shouldDictate(): with FluidVoice
+// unreachable, falling back to 'radio' would open the microphone for an agent
+// that cannot hear it, which is the very thing dictation replaced. Doing nothing
+// is the honest answer, and the card beside it says how to fix it. `ready` is
+// null until the check comes back, which counts as ready — a hold in the first
 // moment after launch should not be silently dropped.
 export function holdMode({ isMac, enabled, thinkingThread, ready }) {
   if (!shouldDictate({ isMac, enabled, thinkingThread })) return 'radio';
@@ -86,7 +86,12 @@ export class DictationManager {
   // Held down. `threadId` is captured here and used for the whole round trip:
   // the transcript belongs to the conversation that was open when the words
   // were spoken, not to whichever one is open when they come back.
-  start(threadId) {
+  //
+  // `immediate` skips the arming window. That window exists only because the
+  // push-to-talk key on macOS is Command, which is also the first half of ⌘C and
+  // ⌘V (see the header) — a deliberate press of the button has no such ambiguity
+  // to wait out, and waiting anyway would just read as lag.
+  start(threadId, { immediate = false } = {}) {
     // A second hold mid-flight is not a second recording. A hold over a still
     // visible error is, though — an error that has to time out before you can
     // try again reads as the feature being broken rather than one attempt.
@@ -97,7 +102,22 @@ export class DictationManager {
     this.cancelled = false;
     clearTimeout(this.errorTimer);
     this.set('arming');
-    this.armTimer = setTimeout(() => this.arm(token), ARM_MS);
+    if (immediate) this.arm(token);
+    else this.armTimer = setTimeout(() => this.arm(token), ARM_MS);
+  }
+
+  // Tapped rather than held: start if idle, stop if recording.
+  //
+  // The two gestures share every other piece of machinery — the same token, the
+  // same cap, the same round trip — because the difference between them is only
+  // what ends the recording, and duplicating the rest is how they would drift.
+  // A tap while transcribing does nothing: the words are already on their way,
+  // and the button is disabled in that state anyway.
+  toggle(threadId) {
+    if (this.phase === 'arming' || this.phase === 'recording') this.stop();
+    else if (this.phase === 'idle' || this.phase === 'error') {
+      this.start(threadId, { immediate: true });
+    }
   }
 
   async arm(token) {

@@ -15,7 +15,8 @@ function keyLabelFor(keyName, customCode) {
 // you key up, an "incoming" beep for the listener) before the audio streams.
 //
 // In a thread with an agent or a session at the far end there is nothing to
-// listen, so the same gesture dictates instead and this renders as DictateBar.
+// listen, so this renders as DictateBar instead — where the same key dictates,
+// and the button is tapped rather than held.
 export default function PttBar({
   peer,
   state,
@@ -25,6 +26,7 @@ export default function PttBar({
   cliReady,
   onHoldStart,
   onHoldEnd,
+  onDictateToggle,
 }) {
   if (!peer) return null;
   if (dictation) {
@@ -34,8 +36,7 @@ export default function PttBar({
         customCode={customCode}
         dictation={dictation}
         cliReady={cliReady}
-        onHoldStart={onHoldStart}
-        onHoldEnd={onHoldEnd}
+        onToggle={onDictateToggle}
       />
     );
   }
@@ -88,14 +89,21 @@ export default function PttBar({
   );
 }
 
-// Hold to dictate. The words land in the message box rather than being sent, so
-// what goes to the agent is always something that was read first.
-function DictateBar({ keyName, customCode, dictation, cliReady, onHoldStart, onHoldEnd }) {
+// Dictate. The words land in the message box rather than being sent, so what
+// goes to the agent is always something that was read first.
+//
+// Two gestures reach the same place. The key is held, because that is what the
+// push-to-talk key has always done and the muscle memory is worth keeping. The
+// button is tapped — start, speak, tap again — because a button you have to hold
+// down while you talk is a button you cannot look away from, and dictating into
+// a message box is exactly when you want to be reading the message box.
+function DictateBar({ keyName, customCode, dictation, cliReady, onToggle }) {
   const keyLabel = keyLabelFor(keyName, customCode);
-  const recording = dictation.phase === 'recording';
+  const arming = dictation.phase === 'arming';
+  const recording = dictation.phase === 'recording' || arming;
   const working = dictation.phase === 'transcribing';
   const failed = dictation.phase === 'error';
-  // `null` means the check has not come back yet — treated as ready, so the
+  // `null` means the check has not come back yet — treated as reachable, so the
   // control is not briefly dead on every launch.
   const missing = cliReady === false;
   const [elapsed, setElapsed] = useState(0);
@@ -113,17 +121,18 @@ function DictateBar({ keyName, customCode, dictation, cliReady, onHoldStart, onH
     return () => clearInterval(t);
   }, [recording, dictation.startedAt]);
 
+  // "Recording", not "Listening": the session card directly below this one says
+  // "Listening" to mean the agents are free, and two unrelated senses of the word
+  // stacked on top of each other read as one status contradicting itself.
   const status = missing
-    ? 'Dictation is not set up'
+    ? "FluidVoice isn't reachable"
     : failed
       ? dictation.error
       : working
         ? 'Transcribing…'
         : recording
-          ? `Listening… ${formatDuration(elapsed)}`
-          : // 'arming' shows as idle: a quarter of a second of its own state
-            // would only ever be seen as a flicker.
-            `Hold ${keyLabel} to dictate`;
+          ? `Recording… ${formatDuration(elapsed)}`
+          : `Tap to dictate`;
 
   return (
     <div
@@ -132,14 +141,16 @@ function DictateBar({ keyName, customCode, dictation, cliReady, onHoldStart, onH
       <button
         className={`ptt-btn ${recording ? 'live' : ''}`}
         disabled={missing || working}
-        title={missing ? 'Set up dictation in Settings → Push to talk' : `Hold ${keyLabel} to dictate`}
-        aria-label="Hold to dictate"
+        title={
+          missing
+            ? 'Set up dictation in Settings → Push to talk'
+            : recording
+              ? 'Tap to stop'
+              : `Tap to dictate, or hold ${keyLabel}`
+        }
+        aria-label={recording ? 'Stop dictating' : 'Dictate'}
         aria-pressed={recording}
-        onMouseDown={onHoldStart}
-        onMouseUp={onHoldEnd}
-        onMouseLeave={onHoldEnd}
-        onTouchStart={(e) => (e.preventDefault(), onHoldStart())}
-        onTouchEnd={onHoldEnd}
+        onClick={onToggle}
       >
         <Mic size={20} />
       </button>
@@ -148,9 +159,11 @@ function DictateBar({ keyName, customCode, dictation, cliReady, onHoldStart, onH
         <div className="ptt-hint">
           {missing ? (
             'Settings → Push to talk'
+          ) : recording ? (
+            'Tap to stop'
           ) : (
             <>
-              Dictate · <kbd>{keyLabel}</kbd>
+              FluidVoice · <kbd>{keyLabel}</kbd>
             </>
           )}
         </div>

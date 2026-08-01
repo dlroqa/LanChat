@@ -1,9 +1,9 @@
 // 16 kHz mono PCM WAV, for handing recorded speech to a transcriber.
 //
 // MediaRecorder gives us WebM/Opus (see pickFormat in voice.js), which macOS
-// AVFoundation — and therefore the FluidAudio CLI, which opens clips with
-// AVAudioFile — cannot read. So the blob is decoded here and re-encoded as the
-// one container every audio stack reads without argument.
+// AVFoundation — and therefore FluidVoice, which opens clips through it — cannot
+// read. So the blob is decoded here and re-encoded as the one container every
+// audio stack reads without argument.
 //
 // Both conversions are done by the audio graph rather than by hand:
 //   - decodeAudioData resamples to the context's rate, so decoding at 16 kHz

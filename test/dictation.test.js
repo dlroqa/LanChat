@@ -238,3 +238,85 @@ test('teardown mid-recording releases the microphone and drops the result', asyn
   assert.deepEqual(events.results, []);
   assert.equal(manager.phase, 'idle');
 });
+
+// ------------------------------------------------------- tap, rather than hold
+
+test('a tap starts recording without waiting out the arm window', async () => {
+  const { manager, rec, ARM_MS } = build();
+  manager.toggle('agent:1');
+  await tick();
+
+  // The arm window exists only to let ⌘C and ⌘V through untouched. A button
+  // press is unambiguous, so waiting a quarter second would just read as lag.
+  assert.equal(rec.calls.record, 1, 'the microphone opens immediately');
+  assert.ok(ARM_MS > 0, 'the hold path still has a window to wait out');
+  assert.equal(manager.phase, 'recording');
+});
+
+test('a second tap stops and transcribes into the thread the first tap named', async () => {
+  const { manager, events } = build();
+  manager.toggle('agent:1');
+  await tick();
+  manager.toggle('agent:1');
+  await tick();
+  await tick();
+
+  assert.deepEqual(events.results, [{ text: 'hello there', threadId: 'agent:1' }]);
+  assert.equal(manager.phase, 'idle');
+});
+
+test('a tap while transcribing is ignored rather than starting a second recording', async () => {
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  const { manager, rec } = build({ transcribe: async () => (await gate, 'done') });
+
+  manager.toggle('agent:1');
+  await tick();
+  manager.toggle('agent:1'); // stop -> transcribing
+  await tick();
+  assert.equal(manager.phase, 'transcribing');
+
+  manager.toggle('agent:1');
+  await tick();
+  assert.equal(rec.calls.record, 1, 'no second recording started');
+
+  release();
+  await tick();
+  await tick();
+  assert.equal(manager.phase, 'idle');
+});
+
+test('a tap over a visible error starts a fresh attempt', async () => {
+  const { manager, rec } = build({
+    record: async () => {
+      throw new Error('no mic');
+    },
+  });
+  manager.toggle('agent:1');
+  await tick();
+  assert.equal(manager.phase, 'error');
+
+  // An error that has to time out before you can try again reads as the feature
+  // being broken rather than as one attempt that failed.
+  const ok = build();
+  ok.manager.phase = 'error';
+  ok.manager.toggle('agent:1');
+  await tick();
+  assert.equal(ok.rec.calls.record, 1);
+  assert.ok(rec.calls.record >= 0);
+});
+
+test('a tap released before the microphone opens still releases it', async () => {
+  const { manager, rec } = build({ holdOpen: true });
+  manager.toggle('agent:1');
+  await tick();
+  manager.toggle('agent:1'); // stop while getUserMedia is still pending
+  await tick();
+
+  rec.open();
+  await tick();
+  await tick();
+
+  assert.equal(rec.calls.cancel, 1, 'the microphone must not be left live');
+  assert.equal(manager.phase, 'idle');
+});

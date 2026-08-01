@@ -59,14 +59,11 @@ const DEFAULTS = Object.freeze({
   skippedUpdateVersion: null, // a release the user chose not to be reminded about
   openAtLogin: false, // Windows/macOS: launch LanChat at login (hidden to tray)
   pttAllowIncoming: true,
-  // Hold-to-dictate in agent and session threads, where there is no ear at the
-  // far end for live audio. macOS only in practice; the renderer decides.
+  // Dictation in agent and session threads, where there is no ear at the far end
+  // for live audio. Transcribed by the FluidVoice app over its loopback API;
+  // macOS only in practice, and the renderer decides.
   dictationEnabled: true,
-  dictationCliPath: null, // null = look for `fluidaudiocli` on PATH
-  // The first transcription downloads the speech models, and the CLI has no
-  // working way to do that ahead of time — so the first run gets a much longer
-  // deadline than the rest. Internal: not in the renderer's settable keys.
-  dictationModelReady: false,
+  dictationPort: 47733, // FluidVoice's LocalAPI.defaultPort
   audioInputId: null, // preferred microphone (null = system default)
   videoInputId: null, // preferred camera (null = system default)
   enableTailscale: true,
@@ -88,6 +85,11 @@ const DEFAULTS = Object.freeze({
   acceptLan: false,
   manualPeers: [], // ["100.x.y.z:47100", "192.168.1.5:47100"]
 });
+
+// Settings a previous version stored that are no longer read by anything. See
+// the prune in load() for why these are removed from the file rather than simply
+// dropped from DEFAULTS.
+const RETIRED_KEYS = Object.freeze(['dictationCliPath', 'dictationModelReady']);
 
 class Config {
   // `appVersion` is app.getVersion(); omitted (tests, tools) it simply means no
@@ -121,6 +123,25 @@ class Config {
       this.data.agentMusicEnabled = true;
       dirty = true;
     }
+    // Keys an older version wrote that nothing reads any more.
+    //
+    // Deleted from the file, not just from DEFAULTS: load() spreads the stored
+    // object over the defaults, so a retired key outlives its own removal and
+    // gets written back by every save from then on. Left alone it would be inert
+    // — publicConfig() copies only PUBLIC_KEYS, so it never reaches the renderer
+    // — but it would also be permanent, and the stored value beats DEFAULTS, so
+    // reusing one of these names later would hand an upgraded machine the old
+    // value while a fresh install got the new default.
+    //
+    // A list rather than a pair of deletes: this is the prune step, and the next
+    // key to be retired belongs here instead of in new code. Dictation moved from
+    // the FluidAudio CLI to the FluidVoice app in 0.7.9.
+    for (const key of RETIRED_KEYS) {
+      if (key in this.data) {
+        delete this.data[key];
+        dirty = true;
+      }
+    }
     if (dirty) this.save();
     return this.data;
   }
@@ -149,4 +170,4 @@ class Config {
   }
 }
 
-module.exports = { Config, DEFAULTS };
+module.exports = { Config, DEFAULTS, RETIRED_KEYS };

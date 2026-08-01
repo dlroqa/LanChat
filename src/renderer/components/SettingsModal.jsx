@@ -7,6 +7,10 @@ import AgentSection from './AgentSection.jsx';
 import { PTT_KEYS, defaultPttKey, describeKeyCode } from '../lib/ptt.js';
 
 const DEFAULT_STUN = 'stun:stun.l.google.com:19302';
+// FluidVoice's LocalAPI.defaultPort. Duplicated from main/dictation.js because
+// the renderer cannot require it; main clamps whatever arrives regardless, so
+// this only decides what an emptied field saves as.
+const DEFAULT_DICTATION_PORT = 47733;
 
 // Settings: audio/video sources, discovery toggles, optional STUN, network info.
 export default function SettingsModal({ config, self, peers, soundUrl, onSave, onClose }) {
@@ -44,7 +48,7 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
     pttCustomCode: config.pttCustomCode || null,
     pttAllowIncoming: config.pttAllowIncoming !== false,
     dictationEnabled: config.dictationEnabled !== false,
-    dictationCliPath: config.dictationCliPath || '',
+    dictationPort: config.dictationPort ?? '',
   });
   const [devices, setDevices] = useState({
     audioInputId: config.audioInputId || null,
@@ -71,9 +75,10 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
       ...devices,
       ...sounds,
       ...ptt,
-      // Empty means "look for it on PATH", which is null on disk rather than a
-      // string that would later be spawned as a command with no name.
-      dictationCliPath: ptt.dictationCliPath.trim() || null,
+      // The field is text; the port is a number. An empty or unparseable box
+      // means the default rather than an error — main clamps it again anyway,
+      // since a config file can be edited by hand.
+      dictationPort: Number.parseInt(ptt.dictationPort, 10) || DEFAULT_DICTATION_PORT,
     });
     onClose();
   }
@@ -291,9 +296,9 @@ function KeyRecorder({ code, disabled, onRecord }) {
   );
 }
 
-// Hold-to-dictate setup. Transcription runs through the FluidAudio CLI, which
-// only builds for macOS — so on anything else this whole panel is hidden rather
-// than shown as a control that could never work.
+// Dictation setup. Transcription runs through the FluidVoice app, which only
+// ships for macOS — so on anything else this whole panel is hidden rather than
+// shown as a control that could never work.
 function Dictation({ value, set }) {
   const [probe, setProbe] = useState(null);
   const [checking, setChecking] = useState(false);
@@ -303,7 +308,7 @@ function Dictation({ value, set }) {
   async function check() {
     setChecking(true);
     try {
-      setProbe(await window.lanchat.probeDictation(value.dictationCliPath.trim() || null));
+      setProbe(await window.lanchat.probeDictation(value.dictationPort || null));
     } catch (err) {
       setProbe({ ok: false, detail: err.message });
     } finally {
@@ -311,62 +316,58 @@ function Dictation({ value, set }) {
     }
   }
 
-  async function browse() {
-    const picked = await window.lanchat.pickDictationCli();
-    if (!picked) return;
-    set((p) => ({ ...p, dictationCliPath: picked.path }));
-    setProbe(null);
-  }
-
   return (
     <>
       <Toggle
         label="Dictate into the message box"
-        desc="In agent and session threads, holding the push-to-talk key records and transcribes on this Mac instead of transmitting. The text lands in the message box for you to read before sending."
+        desc="In agent and session threads, tap the microphone — or hold the push-to-talk key — to speak. FluidVoice transcribes it on this Mac and the text lands in the message box for you to read before sending."
         on={value.dictationEnabled}
         set={(v) => set((p) => ({ ...p, dictationEnabled: v }))}
       />
       <div className="field" style={{ marginTop: 12 }}>
-        <label htmlFor="dictpath">FluidAudio CLI</label>
+        <label htmlFor="dictport">FluidVoice port</label>
         <div className="row" style={{ gap: 8, alignItems: 'center' }}>
           <input
-            id="dictpath"
-            type="text"
-            placeholder="fluidaudiocli"
-            value={value.dictationCliPath}
+            id="dictport"
+            type="number"
+            min="1"
+            max="65535"
+            placeholder="47733"
+            value={value.dictationPort}
             disabled={!value.dictationEnabled}
             onChange={(e) => {
-              set((p) => ({ ...p, dictationCliPath: e.target.value }));
+              set((p) => ({ ...p, dictationPort: e.target.value }));
               setProbe(null);
             }}
           />
-          <button className="btn" disabled={!value.dictationEnabled} onClick={browse}>
-            Browse…
-          </button>
           <button className="btn" disabled={!value.dictationEnabled || checking} onClick={check}>
             {checking ? 'Checking…' : 'Check'}
           </button>
         </div>
         {probe && (
           <div className="hint" style={probe.ok ? undefined : { color: 'var(--danger)' }}>
-            {probe.ok ? `Found — ${probe.path}` : `Not found — ${probe.detail || 'no answer'}`}
+            {probe.ok
+              ? `Connected — FluidVoice${probe.version ? ` ${probe.version}` : ''}`
+              : `Not reachable — ${probe.detail || 'no answer'}`}
           </div>
         )}
         {(!probe || !probe.ok) && (
           <div className="hint">
-            Leave it empty to look for <code>fluidaudiocli</code> on your PATH. To build it:
+            LanChat speaks to FluidVoice over its local API, which ships switched off. To turn it
+            on, quit FluidVoice and run:
             <br />
-            <code>git clone https://github.com/FluidInference/FluidAudio</code>
+            <code>defaults write com.FluidApp.app LocalAPIEnabled -bool true</code>
             <br />
-            <code>cd FluidAudio &amp;&amp; swift build -c release --product fluidaudiocli</code>
-            <br />
-            then point this at <code>.build/release/fluidaudiocli</code>. The first dictation
-            downloads the speech models and can take a few minutes. Requires macOS 14 or later.
+            then open it again. Leave the port at <code>47733</code> unless you changed it.
           </div>
         )}
         <div className="hint">
-          Dictation uses the push-to-talk key above. A letter or digit is a poor choice for it —
-          holding one types into the message box while you speak.
+          That API has no password: once it is on, any program on this Mac can reach it, including
+          your FluidVoice dictation history. It refuses connections from other machines.
+        </div>
+        <div className="hint">
+          Dictation also answers the push-to-talk key above. A letter or digit is a poor choice for
+          it — holding one types into the message box while you speak.
         </div>
       </div>
     </>
