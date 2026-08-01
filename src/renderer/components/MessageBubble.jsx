@@ -109,6 +109,19 @@ export default function MessageBubble({
           errored ? 'errored' : ''
         } ${leftover ? 'leftover' : ''} ${failed ? 'failed' : ''}`}
       >
+        {/* Who said it. Only where the thread does not already answer that: a
+            session can put one question to several agents, and three answers in
+            a row with nothing to tell them apart are three opinions from nobody.
+            Written by main onto the message — see reply() in agents/index.js —
+            which is also where an imported transcript's speakers have always
+            come from, so a line loaded from a file and a line answered just now
+            are labelled by the same rule.
+
+            Not on grouped bubbles: a group is one speaker's run of messages, and
+            repeating the name down the side of it is noise. ChatPane only groups
+            bubbles that agree on this field, so a group can never be two
+            agents. */}
+        {!out && !grouped && msg.speaker && <div className="bubble-speaker">{msg.speaker}</div>}
         {/* What this question was asked about. Stored on the message rather than
             folded into its text, so the transcript keeps the question somebody
             typed and shows separately what it was carrying. */}

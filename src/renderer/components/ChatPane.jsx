@@ -7,10 +7,12 @@ import AgentApproval from './AgentApproval.jsx';
 import AgentFlash from './AgentFlash.jsx';
 import SessionTitle from './SessionTitle.jsx';
 import FindBar from './FindBar.jsx';
+import AgentPicker from './AgentPicker.jsx';
 import { Phone, Video, Trash, Download, Upload, Sessions, Alert, Search } from '../lib/icons.jsx';
 import { useQueueLabel } from './QueueBadge.jsx';
 import { useAgentPhrase } from '../lib/agentPhrase.js';
 import { threadHits } from '../lib/findInThread.js';
+import { askPlaceholder, thinkingLine } from '../lib/counselCopy.js';
 import { formatDay, platformLabel } from '../lib/util.js';
 
 const GROUP_WINDOW = 4 * 60 * 1000; // group consecutive messages within 4 min
@@ -55,7 +57,7 @@ export default function ChatPane({
   mentionables = [],
   onSummon,
   onRenameSession,
-  onSetSessionAgent,
+  onSetCounsel,
   onImportText,
   onFork,
   // Putting a question that failed back into the composer. Given on the same
@@ -63,7 +65,14 @@ export default function ChatPane({
   // asked.
   onResend,
   approval,
-  agentStream,
+  // Live output, per agent: `[{ agentId, name, text }]`. One string was enough
+  // while one agent answered at a time; a counsel has several typing into the
+  // same conversation at once, and one string would interleave them into
+  // nonsense.
+  agentStreams = [],
+  // What the session currently has out with its agents: who was asked, who is
+  // still thinking, and who is yet to be asked. Null when nothing is in flight.
+  round = null,
   onApprove,
   // The connection light: `{ nonce, mode, ms }` while one should be playing, and
   // null the rest of the time. The nonce is what makes a second summon restart it
@@ -90,9 +99,24 @@ export default function ChatPane({
   const thinks = isAgent || isSession;
   const working = thinks ? Boolean(typing || awaiting) : Boolean(typing);
   const phrase = useAgentPhrase(thinks && working);
-  // The agent a session asks, by name, for the indicator and the placeholder.
-  const sessionAgent = isSession && peer.agentId ? agents.find((a) => a.id === peer.agentId) : null;
-  const thinkerName = isSession ? sessionAgent?.name || 'The agent' : peer?.name || 'The agent';
+  // The agents a session asks, by name, for the indicator and the placeholder.
+  // Resolved against the roster rather than read off the record, so an agent that
+  // has been removed or is no longer shared drops out of every sentence about
+  // this session at once.
+  //
+  // A card carrying only the single `agentId` is read as a counsel of one. That
+  // is the shape everything used before a session could ask more than one, and a
+  // pane that understood only the new field would answer an old card by disabling
+  // its composer — which is to say, by deciding somebody had no agent because
+  // they had exactly one.
+  const counsel = useMemo(() => {
+    if (!isSession) return [];
+    if (peer.allAgents) return agents;
+    const ids = peer.agentIds || (peer.agentId ? [peer.agentId] : []);
+    return ids.map((id) => agents.find((a) => a.id === id)).filter(Boolean);
+  }, [isSession, peer, agents]);
+  const counselNamesList = counsel.map((a) => a.name);
+  const thinkerName = isSession ? counselNamesList[0] || 'The agent' : peer?.name || 'The agent';
 
   // ---- find in this conversation ----
   // What is being looked for, and which occurrence of it is being pointed at.
@@ -283,24 +307,16 @@ export default function ChatPane({
           {isSession ? (
             <div className="sub session-sub">
               <span>Session ·</span>
-              <select
-                className="session-agent"
-                aria-label="The agent this session asks"
-                value={peer.agentId || ''}
-                onChange={(e) => onSetSessionAgent(peer.id, e.target.value || null)}
-              >
-                <option value="">choose an agent…</option>
-                {agents.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-                {/* The agent this session was pointed at has gone — switched
-                    off, removed, or belonging to a peer who stopped sharing it.
-                    Saying so is better than a picker that reads as though
-                    nobody was ever chosen. */}
-                {peer.agentId && !sessionAgent && <option value={peer.agentId}>an agent that is no longer here</option>}
-              </select>
+              <AgentPicker
+                agents={agents}
+                // The same one-agent fallback the counsel above reads, so the
+                // ticks in the menu and the name on the chip can never come from
+                // two different readings of the same card.
+                agentIds={peer.agentIds || (peer.agentId ? [peer.agentId] : [])}
+                allAgents={Boolean(peer.allAgents)}
+                mode={peer.mode || 'parallel'}
+                onChange={(patch) => onSetCounsel(peer.id, patch)}
+              />
             </div>
           ) : (
           <div className="sub">
@@ -412,8 +428,19 @@ export default function ChatPane({
           {messages.map((m, i) => {
             const prev = messages[i - 1];
             const newDay = !prev || formatDay(prev.ts) !== formatDay(m.ts);
+            // Consecutive messages from the same side, close together in time,
+            // are drawn as one run with one timestamp. Same *speaker* as well as
+            // same side: in a session that asked three agents, two of them
+            // answering within four minutes are two answers, and merging them
+            // would produce one block with one name on it saying something
+            // neither of them said.
             const grouped =
-              prev && prev.direction === m.direction && !newDay && m.ts - prev.ts < GROUP_WINDOW && m.kind === 'text';
+              prev &&
+              prev.direction === m.direction &&
+              (prev.speaker || null) === (m.speaker || null) &&
+              !newDay &&
+              m.ts - prev.ts < GROUP_WINDOW &&
+              m.kind === 'text';
             return (
               <React.Fragment key={m.id}>
                 {newDay && <div className="day-sep">{formatDay(m.ts)}</div>}
@@ -440,8 +467,16 @@ export default function ChatPane({
             );
           })}
 
-          {/* Live agent output, replaced by the stored message once the run ends. */}
-          {agentStream && <div className="agent-stream">{agentStream}</div>}
+          {/* Live agent output, replaced by the stored message once the run ends.
+              One block per agent, each labelled the way its finished answer will
+              be, so a counsel thinking out loud does not arrive as one paragraph
+              written by three hands. */}
+          {agentStreams.map((s) => (
+            <div className="agent-stream" key={s.agentId}>
+              {agentStreams.length > 1 && <div className="bubble-speaker">{s.name}</div>}
+              {s.text}
+            </div>
+          ))}
 
           <AgentApproval request={approval} agentName={thinkerName} onAnswer={onApprove} />
         </div>
@@ -453,7 +488,13 @@ export default function ChatPane({
         <div className="typing">
           {working && (
             <>
-              {thinks ? `${thinkerName} is ${phrase.toLowerCase()}` : `${peer.name || 'Peer'} is typing`}
+              {thinks
+                ? // Who is thinking, which in a session may be several at once
+                  // and, in relay mode, several more still to be asked. The verb
+                  // is the rotating one either way — both this and the round read
+                  // the same clock, so they never disagree.
+                  thinkingLine(round, phrase.toLowerCase(), thinkerName)
+                : `${peer.name || 'Peer'} is typing`}
               {/* Three staggered dots. The container keeps its height whether or
                   not this is showing, so the message list never jumps. */}
               <span className="typing-dots" aria-hidden="true">
@@ -488,17 +529,17 @@ export default function ChatPane({
         onAttach={onAttach}
         onTyping={onTyping}
         onVoice={thinks || !peer.online ? undefined : onVoice}
-        // A session with no agent yet has nothing to ask; an agent that is off
-        // is the same case reached a different way.
-        disabled={isSession ? !peer.agentId : isAgent && !peer.online}
+        // A session with nobody to ask has nothing to ask; an agent that is off
+        // is the same case reached a different way. "Nobody" counts a session set
+        // to ask everybody when there is no everybody yet — the standing
+        // instruction is fine, there is simply no one here to carry it out.
+        disabled={isSession ? counsel.length === 0 : isAgent && !peer.online}
         offline={!isSession && !peer.online}
-        canAttach={isSession ? Boolean(peer.agentId) : peer.online && !peer.delegate}
+        canAttach={isSession ? counsel.length > 0 : peer.online && !peer.delegate}
         attachTitle={thinks ? 'Attach a document for the agent to read' : 'Send file, photo or video'}
         placeholder={
           isSession
-            ? peer.agentId
-              ? `Ask ${thinkerName}…  (Enter to send, Shift+Enter for newline)`
-              : 'Choose an agent above to ask something'
+            ? askPlaceholder({ allAgents: peer.allAgents, names: counselNamesList, mode: peer.mode })
             : isAgent
               ? 'Ask the agent…  (Enter to send, Shift+Enter for newline)'
               : undefined

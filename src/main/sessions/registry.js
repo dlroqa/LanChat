@@ -24,6 +24,11 @@ const DEFAULT_TITLE = 'New Session';
 // the sidebar row and the header stay one line.
 const MAX_TITLE = 80;
 
+// How a session puts a question to more than one agent: all at once, or one
+// after another with each shown what has been said so far.
+const MODES = ['parallel', 'relay'];
+const DEFAULT_MODE = 'parallel';
+
 function newSessionId() {
   return `${SESSION_ID_PREFIX}${crypto.randomUUID()}`;
 }
@@ -44,6 +49,39 @@ function cleanTitle(title) {
   return flat ? flat.slice(0, MAX_TITLE) : DEFAULT_TITLE;
 }
 
+// The agents a session asks, cleaned. Strings only, nothing blank, nothing
+// twice — and the order kept, because in relay mode the order of this list is
+// the order the agents are asked in. That makes it data rather than
+// presentation, and sorting it anywhere would quietly rewrite a conversation.
+function cleanIds(ids) {
+  if (!Array.isArray(ids)) return [];
+  const out = [];
+  for (const id of ids) {
+    if (typeof id === 'string' && id && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+function cleanMode(mode) {
+  return MODES.includes(mode) ? mode : DEFAULT_MODE;
+}
+
+// Fills in what a record written by an older build does not have.
+//
+// In memory only, and deliberately not saved: a session opened by this build and
+// otherwise left alone leaves sessions.json byte for byte as it was, so going
+// back to the previous version is a downgrade rather than a repair job. The
+// fields reach the file the first time something is actually changed.
+//
+// `agentId` is the field every build before this one knew, so it is what a
+// counsel of one is reconstructed from.
+function normalize(record) {
+  if (!record.agentIds) record.agentIds = record.agentId ? [record.agentId] : [];
+  if (record.allAgents === undefined) record.allAgents = false;
+  if (!MODES.includes(record.mode)) record.mode = DEFAULT_MODE;
+  return record;
+}
+
 class SessionRegistry {
   constructor(userDataDir) {
     this.file = path.join(userDataDir, 'sessions.json');
@@ -53,7 +91,7 @@ class SessionRegistry {
   #load() {
     try {
       const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      return Array.isArray(parsed) ? parsed.filter((r) => r && isSessionId(r.id)) : [];
+      return Array.isArray(parsed) ? parsed.filter((r) => r && isSessionId(r.id)).map(normalize) : [];
     } catch {
       return [];
     }
@@ -77,15 +115,29 @@ class SessionRegistry {
     return this.records.find((r) => r.id === id) || null;
   }
 
-  create({ title, agentId } = {}) {
+  create({ title, agentId, agentIds, allAgents, mode } = {}) {
     const now = Date.now();
+    const list = agentIds ? cleanIds(agentIds) : cleanIds(agentId ? [agentId] : []);
     const record = {
       id: newSessionId(),
       title: cleanTitle(title),
       // Which agent this session asks. Null is a real state, not a missing one:
       // a session can be started, filled with an imported transcript and read
       // through before anybody decides who to ask about it.
-      agentId: agentId || null,
+      //
+      // The head of `agentIds`, and never anything else — see update() for the
+      // whole of why this field still exists.
+      agentId: list[0] || null,
+      // Everyone this session asks. One question can be put to several agents at
+      // once, so this is the real membership and the field above is a view of it.
+      agentIds: list,
+      // Whether that membership is "whoever is here" rather than a list. Stored
+      // as a flag with no names under it on purpose: that is what makes it a
+      // standing instruction, so an agent added or shared tomorrow is in this
+      // session's counsel tomorrow with nothing having been written down today.
+      allAgents: allAgents === true,
+      // All at once, or one after another with each shown what the last one said.
+      mode: cleanMode(mode),
       createdAt: now,
       updatedAt: now,
     };
@@ -98,7 +150,29 @@ class SessionRegistry {
     const record = this.get(id);
     if (!record) return null;
     if (patch.title !== undefined) record.title = cleanTitle(patch.title);
-    if (patch.agentId !== undefined) record.agentId = patch.agentId || null;
+    if (patch.agentIds !== undefined) record.agentIds = cleanIds(patch.agentIds);
+    if (patch.allAgents !== undefined) record.allAgents = patch.allAgents === true;
+    if (patch.mode !== undefined) record.mode = cleanMode(patch.mode);
+    // `agentId` is a mirror of the counsel, not a member of it, and it is written
+    // on every change so it can never disagree with the list.
+    //
+    // It exists for one reason: a build older than this one knows only this field.
+    // Keeping it filled in means somebody who installs this version, points a
+    // session at three agents and then goes back to the previous release opens
+    // that session and finds it asking one of them — not nothing, and not a file
+    // it cannot read. Which one is the caller's to say, because for a session that
+    // asks whoever is available there is no list to take a head from; when nobody
+    // says, the head of the list is the obvious answer.
+    if (patch.agentId !== undefined) {
+      record.agentId = patch.agentId || null;
+      // A caller that named an agent and no list means the two are the same
+      // thing. Kept in step here rather than at every call site, so no door into
+      // this function can leave the mirror pointing at somebody the counsel has
+      // never heard of.
+      if (patch.agentIds === undefined) record.agentIds = cleanIds(patch.agentId ? [patch.agentId] : []);
+    } else if (patch.agentIds !== undefined) {
+      record.agentId = record.agentIds[0] || null;
+    }
     // How many questions in this session failed without leaving a mark on the
     // question itself.
     //
@@ -146,14 +220,25 @@ class SessionRegistry {
 
   // Every session that asked a particular agent. Used when an agent is removed
   // or a peer who shared one goes away for good: the session survives as a
-  // record of what was said, but it stops claiming it can ask anybody.
+  // record of what was said, but it stops claiming it can ask that agent.
+  //
+  // The rest of the counsel is untouched. An agent leaving is not the end of a
+  // session that was asking three of them — it is one fewer answer to the next
+  // question, and the other two carry on. For a counsel of one this comes out
+  // exactly where it always did, at a session with nobody to ask.
+  //
+  // A session set to ask whoever is available is left completely alone, and that
+  // is the point of it: there is no list to take a name out of. The agent simply
+  // stops being one of the people who are here, which is a fact about the room
+  // rather than something to write into the record.
   unbindAgent(agentId) {
     let changed = false;
     for (const record of this.records) {
-      if (record.agentId === agentId) {
-        record.agentId = null;
-        changed = true;
-      }
+      if (record.allAgents) continue;
+      if (!record.agentIds.includes(agentId)) continue;
+      record.agentIds = record.agentIds.filter((id) => id !== agentId);
+      record.agentId = record.agentIds[0] || null;
+      changed = true;
     }
     if (changed) this.#save();
     return changed;
@@ -168,4 +253,8 @@ module.exports = {
   SESSION_ID_PREFIX,
   DEFAULT_TITLE,
   MAX_TITLE,
+  MODES,
+  DEFAULT_MODE,
+  cleanIds,
+  normalize,
 };

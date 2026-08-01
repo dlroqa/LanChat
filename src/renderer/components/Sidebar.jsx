@@ -4,6 +4,7 @@ import QueueBadge from './QueueBadge.jsx';
 import SidebarSection from './SidebarSection.jsx';
 import { Settings, Plus, Search, Refresh, Users, GroupCall, Code, Sessions } from '../lib/icons.jsx';
 import { platformLabel } from '../lib/util.js';
+import { sessionSubLine } from '../lib/counselCopy.js';
 import {
   normalizeOrder,
   moveSection,
@@ -46,6 +47,13 @@ function refusalLabel(reason) {
 export default function Sidebar({
   self,
   peers,
+  // Everyone a session can be pointed at, as main sees it. Not the same set as
+  // the agents on the roster below — an agent shared without direct chat can be
+  // asked and is deliberately not a contact — so a session's row names its
+  // counsel from this rather than by filtering the roster. Named for what it is
+  // rather than `agents`, which this component already uses for the roster's own
+  // agent rows.
+  askableAgents = [],
   tailnet,
   tailnetStatus,
   selectedId,
@@ -195,11 +203,16 @@ export default function Sidebar({
 
   const dragEnd = () => setDrag({ id: null, overId: null, before: false });
 
-  // What a session is for, in the line under its name: the agent it asks, or
-  // that it has not been given one yet. The agent's name comes from the roster
-  // rather than from the record, so a renamed agent is renamed here too.
+  // What a session is for, in the line under its name: the agents it asks, or
+  // that it has not been given any yet. The names come from the roster rather
+  // than from the record, so a renamed agent is renamed here too — and an agent
+  // that has gone drops out of the line rather than being counted in it.
   const sessionRow = (s) => {
-    const agent = s.agentId ? peers.find((p) => p.id === s.agentId) : null;
+    const names = s.allAgents
+      ? askableAgents.map((a) => a.name)
+      : (s.agentIds || (s.agentId ? [s.agentId] : []))
+          .map((id) => askableAgents.find((a) => a.id === id)?.name)
+          .filter(Boolean);
     return (
       <div
         key={s.id}
@@ -213,9 +226,7 @@ export default function Sidebar({
           <div className="name">
             <span className="name-text">{s.title}</span>
           </div>
-          <div className="sub">
-            {s.agentId ? `Session · ${agent ? agent.name : 'agent unavailable'}` : 'Session · no agent yet'}
-          </div>
+          <div className="sub">{sessionSubLine({ allAgents: s.allAgents, names })}</div>
         </div>
         {unread[s.id] > 0 && <span className="unread-dot">{unread[s.id]}</span>}
       </div>

@@ -648,6 +648,18 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     // out of the frame below. The two must never be built from one string.
     const localText = detail ? `${text} ${detail}` : text;
     const message = { from: threadId, type: 'chat', id: crypto.randomUUID(), text: localText, ts: Date.now() };
+    // Who said it. Carried on the local frame only — the wire frame below already
+    // names the agent, and a thread that is an agent needs no label because the
+    // thread *is* the answer to "who".
+    //
+    // It matters where a thread is not an agent: a session can ask several at
+    // once, and three answers arriving in one conversation with nothing to tell
+    // them apart is three anonymous opinions. Set here rather than at the point
+    // of storage so an error and an answer are attributed by the same line of
+    // code — a failure that does not say whose it was is the case where the
+    // label is needed most.
+    message.agentId = agentId;
+    message.agentName = nameOf(agentId);
     if (!keep) message.notice = true;
     if (error) {
       message.error = true;
@@ -690,7 +702,14 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   // thread by id, and the asking peer alone — never everyone, never a peer who
   // did not ask.
   function signalEmptyRun(agentId, origin, into = null) {
-    bus.emit('agent-empty', { threadId: into || (origin ? delegateIdFor(agentId, origin) : agentId) });
+    // Named for the same reason reply() is: a session that asked three agents has
+    // to know which of them came back with nothing, both to stop waiting on it
+    // and to say so.
+    bus.emit('agent-empty', {
+      threadId: into || (origin ? delegateIdFor(agentId, origin) : agentId),
+      agentId,
+      agentName: nameOf(agentId),
+    });
     if (origin) hub.send(origin, { type: 'agent-empty', agentId });
   }
 
@@ -1213,6 +1232,14 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     // a transport that answers immediately would otherwise have its reply filed
     // above the question it was answering.
     isRunning: (agentId) => live.has(agentId),
+    // Whether a run is already under way. Asked by a caller that is about to put
+    // a question to several agents at once and needs to know which of them can
+    // take one — because an agent asked while it is busy does not queue, it
+    // answers "one at a time, please" (see deliver()), and that sentence is a
+    // notice rather than a run: nothing follows it, so anything waiting on the
+    // answer would wait forever. Skipping it here is what turns that into "this
+    // one was busy" said once, in a session that got on with asking the rest.
+    isBusy: (agentId) => Boolean(live.get(agentId)?.busy),
     routeFromPeer,
     routeDirect,
     routeSummon,

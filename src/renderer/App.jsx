@@ -63,6 +63,9 @@ const DISSOLVE_MS = 620;
 // One shared empty list for threads with nothing attached, so the composer is
 // not handed a brand-new array on every render of a conversation.
 const EMPTY_DOCS = [];
+// The same trick for live agent output: one shared empty array, so a thread with
+// nothing streaming into it hands the pane the same reference every render.
+const EMPTY_STREAMS = [];
 
 // Ids for bubbles that only ever exist in this window. Counted rather than
 // randomised because nothing outside this process will ever see one, and a
@@ -112,9 +115,23 @@ export default function App() {
   const [pipMode, setPipMode] = useState(false);
   const [ptt, setPtt] = useState({ transmitting: false, connecting: false, talkers: [], inboundStreams: [] });
   const [group, setGroup] = useState({ status: 'idle', participants: [], count: 0 });
-  const [agentStatus, setAgentStatus] = useState({}); // agentId -> {status, detail, streaming}
+  const [agentStatus, setAgentStatus] = useState({}); // agentId -> {status, detail}
   const [approvals, setApprovals] = useState({}); // agentId -> pending approval request
   const [awaiting, setAwaiting] = useState({}); // agent thread -> we asked and have not heard back
+  // What a session currently has out with its agents, keyed by session id.
+  //
+  // Pushed from main, which is the only place that knows: it decides who is
+  // asked and when, and a window that reassembled this out of typing, delta,
+  // chat and empty events would be a second implementation of the same
+  // bookkeeping — wrong in exactly the moments that matter, which is three
+  // agents thinking at once and one of them going quiet.
+  const [rounds, setRounds] = useState({}); // sessionId -> round view
+  // Live output while it is being written, per thread and then per agent.
+  //
+  // One string per thread was enough while one agent answered at a time. A
+  // counsel has several writing into the same conversation at once, and one
+  // string would splice them into a paragraph none of them wrote.
+  const [streams, setStreams] = useState({}); // threadId -> { agentId: text }
   const [update, setUpdate] = useState(null); // full modal: download/install flow
   const [updateBanner, setUpdateBanner] = useState(null); // subtle top-centre notice
   const [queued, setQueued] = useState({}); // peerId -> messages waiting to send
@@ -314,6 +331,25 @@ export default function App() {
     setFlash((f) => (f[threadId] ? { ...f, [threadId]: null } : f));
   }
 
+  // The streamed preview one agent was writing, once its finished answer has
+  // arrived — or once it has finished with nothing to show.
+  //
+  // One agent's, not the thread's. In a session the others may still be writing,
+  // and clearing the thread would blank two live previews because a third one
+  // ended. An event with no agent on it is from before this was per-agent, so it
+  // clears the lot: that is the old behaviour, which is right for a thread that
+  // only ever has one writer in it.
+  function clearStream(threadId, agentId) {
+    if (!threadId) return;
+    setStreams((s) => {
+      if (!s[threadId]) return s;
+      if (!agentId) return { ...s, [threadId]: {} };
+      if (!s[threadId][agentId]) return s;
+      const { [agentId]: _done, ...rest } = s[threadId];
+      return { ...s, [threadId]: rest };
+    });
+  }
+
   function appendMessage(peerId, msg) {
     setMessages((prev) => {
       const list = prev[peerId] ? [...prev[peerId]] : [];
@@ -332,9 +368,14 @@ export default function App() {
     // Main never stored it either, so there is nothing to undo here — and the
     // question it failed is marked in the same breath, so the commit box stops
     // counting it the moment the error appears rather than after a reload.
+    //
+    // Except in a session, where the question may have been put to several agents
+    // and one of them failing says nothing about whether it was answered. There
+    // the mark is main's to make, once the whole round is in — see closeRound in
+    // sessions/index.js — and it arrives on the closing round rather than here.
     if (msg.error) {
       if (!noticeTimers.current[msg.id]) {
-        if (msg.failedRef) patchMessage(peerId, msg.failedRef, { failed: true });
+        if (msg.failedRef && !isSessionThread(peerId)) patchMessage(peerId, msg.failedRef, { failed: true });
         noticeTimers.current[msg.id] = setTimeout(() => {
           patchMessage(peerId, msg.id, { dissolving: true });
           noticeTimers.current[msg.id] = setTimeout(
@@ -468,13 +509,17 @@ export default function App() {
         case 'chat':
           appendMessage(payload.peerId, payload);
           // The finished reply supersedes the streamed preview. A session gets
-          // the stream under its own id, so it ends the same way.
+          // the stream under its own id, so it ends the same way — but only the
+          // stream belonging to the agent that just answered: the others in the
+          // counsel are still writing.
           if (payload.peerId.startsWith('agent:') || isSessionThread(payload.peerId)) {
-            setAgentStatus((s) => ({ ...s, [payload.peerId]: { ...s[payload.peerId], streaming: '' } }));
+            clearStream(payload.peerId, payload.agentId);
             setApprovals((a) => (a[payload.peerId] ? { ...a, [payload.peerId]: null } : a));
           }
-          // An answer — or a refusal explaining the queue — ends the wait.
-          if (payload.direction === 'in' && isThinkingThread(payload.peerId)) {
+          // An answer — or a refusal explaining the queue — ends the wait. Not in
+          // a session, where the wait is the whole round and one answer of three
+          // does not end it; there it is the closing round that says so.
+          if (payload.direction === 'in' && isThinkingThread(payload.peerId) && !isSessionThread(payload.peerId)) {
             setAwaiting((a) => (a[payload.peerId] ? { ...a, [payload.peerId]: false } : a));
           }
           if (payload.direction === 'in') {
@@ -571,27 +616,59 @@ export default function App() {
         case 'agent-delta': {
           // Live typing; the authoritative reply arrives as a normal 'chat' event.
           // Filed under the thread that asked, which is the agent's own id unless
-          // a session did — see deliver() in main's agents/index.js.
+          // a session did — see deliver() in main's agents/index.js — and under
+          // the agent within it, so several of them writing at once stay apart.
           const into = payload.threadId || payload.agentId;
-          setAgentStatus((s) => ({
+          const who = payload.agentId || into;
+          setStreams((s) => ({
             ...s,
-            [into]: { ...s[into], streaming: (s[into]?.streaming || '') + payload.delta },
+            [into]: { ...s[into], [who]: (s[into]?.[who] || '') + payload.delta },
           }));
           break;
         }
         // The list of sessions changed — one was started, renamed, pointed at
-        // another agent, or deleted.
+        // other agents, or deleted.
         case 'sessions':
           setSessions(payload || []);
+          break;
+        // Where a session's question stands. Arrives whenever anything about the
+        // round changes and once more as it closes; the closed one is what ends
+        // the wait, because one answer out of three does not.
+        case 'session-round':
+          setRounds((r) => {
+            if (!payload.open) {
+              const { [payload.sessionId]: _gone, ...rest } = r;
+              return rest;
+            }
+            return { ...r, [payload.sessionId]: payload };
+          });
+          if (!payload.open) {
+            setAwaiting((a) => (a[payload.sessionId] ? { ...a, [payload.sessionId]: false } : a));
+            setStreams((s) => (s[payload.sessionId] ? { ...s, [payload.sessionId]: {} } : s));
+            // Nobody had anything to say. The light stands where the answers
+            // would have been — once for the round, not once per silent agent.
+            if (!payload.answered.length && !payload.failed.length) showFlash(payload.sessionId, 'empty');
+            // A question the whole counsel failed to answer stops counting as one.
+            // Main decides that, at the end, and names the question it decided
+            // about; the window is told rather than working it out from an error
+            // that only ever knew about one agent.
+            if (payload.failedRef) patchMessage(payload.sessionId, payload.failedRef, { failed: true });
+          }
           break;
         // A run came back with nothing in it. There is no message, so the light is
         // the whole of what is shown — and because no 'chat' event is coming, the
         // clears that event normally does have to happen here instead. Without
         // them the thread would sit saying the agent was still thinking, forever.
+        //
+        // In a session the round owns both: the wait ends when the round does,
+        // and the light is shown once for a round nobody answered rather than
+        // once for each agent that had nothing to say.
         case 'agent-empty':
-          setAwaiting((a) => (a[payload.peerId] ? { ...a, [payload.peerId]: false } : a));
-          setAgentStatus((s) => (s[payload.peerId]?.streaming ? { ...s, [payload.peerId]: { ...s[payload.peerId], streaming: '' } } : s));
-          showFlash(payload.peerId, 'empty');
+          clearStream(payload.peerId, payload.agentId);
+          if (!isSessionThread(payload.peerId)) {
+            setAwaiting((a) => (a[payload.peerId] ? { ...a, [payload.peerId]: false } : a));
+            showFlash(payload.peerId, 'empty');
+          }
           break;
         case 'update-available':
           // A subtle top-centre banner rather than a blocking modal, so it can
@@ -661,6 +738,32 @@ export default function App() {
       const found = findKeptErrors(hist);
       if (found.length) setSweep({ threadId: thread, ids: found.map((m) => m.id) });
     });
+  }, [selectedId]);
+
+  // A question this session already has out, for a window that missed it being
+  // asked.
+  //
+  // Round state is pushed as it changes, which is enough for a window that was
+  // open when the question went. It is not enough for one that was reloaded
+  // while three agents were thinking: main is still running, the answers are
+  // still coming, and a pane that knew nothing about the round would sit there
+  // claiming nothing was happening until they landed. Asked for once, on opening
+  // a session that has no round in hand.
+  useEffect(() => {
+    if (!isSessionThread(selectedId) || rounds[selectedId]) return undefined;
+    let live = true;
+    api.sessionRound(selectedId).then((round) => {
+      if (!live || !round || !round.open) return;
+      setRounds((r) => ({ ...r, [round.sessionId]: round }));
+      setAwaiting((a) => ({ ...a, [round.sessionId]: true }));
+    });
+    return () => {
+      live = false;
+    };
+    // `rounds` is deliberately not a dependency: this fills a gap when a session
+    // is opened, and re-running it every time the round changes would ask main
+    // about a round the window is already being told about.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
   // Machinery an older build wrote into an agent thread, taken back out.
@@ -762,9 +865,27 @@ export default function App() {
   }
 
   // Agents this machine can point a session at: our own, and the ones peers have
-  // shared with us. A delegate thread is somebody else's conversation rather
-  // than an agent, so it is not one of them.
-  const askableAgents = useMemo(() => peers.filter((p) => p.kind === 'agent' && !p.delegate), [peers]);
+  // shared with us.
+  //
+  // Straight off what main says, for the same reason `mentionables` below is
+  // taken straight off `byOwner`: the roster is not this set. An agent shared
+  // without direct chat is reachable and deliberately not a contact, so a picker
+  // built by filtering the roster would offer a strict subset of who a session
+  // actually asks — and "All agents" would then quietly include somebody the
+  // person choosing it never saw on the list.
+  //
+  // Main decides reachability in exactly one place (askable() in
+  // sessions/index.js); this is that place, read rather than guessed at a second
+  // time. Refreshed whenever the roster or the set of shared agents changes,
+  // which is every event that could alter the answer.
+  const [askableAgents, setAskableAgents] = useState([]);
+  useEffect(() => {
+    let live = true;
+    api.askableAgents().then((list) => live && setAskableAgents(list || []));
+    return () => {
+      live = false;
+    };
+  }, [peers, peerAgents, agentStatus]);
 
   // Agents the person whose chat is open is sharing, for `@` in the composer.
   //
@@ -800,17 +921,27 @@ export default function App() {
     if (isSessionThread(selectedId)) {
       const record = sessions.find((s) => s.id === selectedId);
       if (!record) return null;
-      // The agent is resolved once, here, so every surface reading this card
-      // agrees on whether the session has one. An id that no longer answers to
-      // an agent resolves to nothing, which is the same state as never having
-      // chosen one — in both cases there is nothing this session can ask.
-      const agent = record.agentId ? askableAgents.find((a) => a.id === record.agentId) : null;
+      // The counsel is resolved once, here, so every surface reading this card
+      // agrees on who this session asks. An id that no longer answers to an agent
+      // resolves to nothing, which is the same state as never having chosen it —
+      // in both cases there is nobody there to ask. A session set to ask whoever
+      // is available resolves to whoever is available, which is the whole of what
+      // that setting means.
+      const counsel = record.allAgents
+        ? askableAgents
+        : (record.agentIds || []).map((id) => askableAgents.find((a) => a.id === id)).filter(Boolean);
       return {
         id: record.id,
         kind: 'session',
         name: record.title,
-        agentId: record.agentId,
-        agentName: agent?.name || null,
+        // The counsel, and the one-agent view of it that everything written
+        // before counsels existed still reads.
+        agentIds: record.agentIds || [],
+        allAgents: Boolean(record.allAgents),
+        mode: record.mode || 'parallel',
+        agentNames: counsel.map((a) => a.name),
+        agentId: counsel[0]?.id || null,
+        agentName: counsel[0]?.name || null,
         online: true,
         // This session lost questions it cannot put back — see sweepErrors in
         // sessions/index.js. Carried on the card so the pane can say so without
@@ -839,6 +970,24 @@ export default function App() {
     const record = sessions.find((s) => s.id === selectedId);
     return Math.max(0, commitCount(messages[selectedId]) - (record?.unlinkedFailures || 0));
   }, [selectedId, messages, sessions]);
+
+  // What is being written into this thread right now, one entry per agent.
+  //
+  // Named here rather than in the pane, from the same roster the picker reads, so
+  // a live preview and the finished bubble it turns into are labelled with the
+  // same name. Sorted by agent id rather than by arrival, so a preview does not
+  // jump up the pane every time a different agent emits a word.
+  const selectedStreams = useMemo(() => {
+    const live = streams[selectedId];
+    if (!live) return EMPTY_STREAMS;
+    const out = [];
+    for (const [agentId, text] of Object.entries(live)) {
+      if (!text) continue;
+      const agent = askableAgents.find((a) => a.id === agentId);
+      out.push({ agentId, name: agent?.name || 'an agent', text });
+    }
+    return out.length ? out.sort((a, b) => a.agentId.localeCompare(b.agentId)) : EMPTY_STREAMS;
+  }, [streams, selectedId, askableAgents]);
 
   // Windows asks for the loopback address itself rather than the name for it:
   // there "localhost" resolves to ::1 first, while the service listens on
@@ -1002,8 +1151,13 @@ export default function App() {
     if (record) setSessions((list) => list.map((s) => (s.id === record.id ? record : s)));
   }
 
-  async function setSessionAgent(id, agentId) {
-    const record = await api.setSessionAgent(id, agentId);
+  // Who a session asks: a list of agents, or whoever is available, and whether
+  // they answer all at once or one after another. One call for the lot, because
+  // they are one decision — un-ticking an agent while the session was set to ask
+  // everybody changes both halves at once, and two calls would leave a moment
+  // where the record said something nobody chose.
+  async function setSessionCounsel(id, patch) {
+    const record = await api.setSessionCounsel(id, patch);
     if (record) setSessions((list) => list.map((s) => (s.id === record.id ? record : s)));
   }
 
@@ -1340,6 +1494,7 @@ export default function App() {
         authFailures={authFailures}
         showAddresses={config.showAddresses}
         sessions={sessions}
+        askableAgents={askableAgents}
         sectionOrder={config.sidebarOrder}
         lockedSections={config.sidebarLocked}
         onSectionPrefs={saveSectionPrefs}
@@ -1361,7 +1516,8 @@ export default function App() {
           awaiting={Boolean(awaiting[selectedId])}
           progress={progress}
           approval={approvals[selectedId]}
-          agentStream={agentStatus[selectedId]?.streaming}
+          agentStreams={selectedStreams}
+          round={rounds[selectedId] || null}
           flash={flash[selectedId]}
           onFlashDone={() => clearFlash(selectedId)}
           onApprove={(choice) => {
@@ -1385,7 +1541,7 @@ export default function App() {
           mentionables={mentionables}
           onSummon={summonAgent}
           onRenameSession={renameSession}
-          onSetSessionAgent={setSessionAgent}
+          onSetCounsel={setSessionCounsel}
           onImportText={() => importSessionText(selectedId)}
           // Branching is offered where a question can be asked from: inside a
           // session, and in the agent threads a session can be started from.
@@ -1450,9 +1606,11 @@ export default function App() {
               agentStatus={agentStatus[selectedId]}
               awaiting={Boolean(awaiting[selectedId])}
               // A session has no presence to read a state off, so the panel is
-              // told the same two things the conversation is: main's bracket
-              // around the run, and the count of what has been asked.
+              // told the same things the conversation is: main's bracket around
+              // the run, whether any of its agents is mid-sentence, and the count
+              // of what has been asked.
               typing={Boolean(typing[selectedId])}
+              streaming={selectedStreams.length > 0}
               commits={selectedCommits}
             />
           </>

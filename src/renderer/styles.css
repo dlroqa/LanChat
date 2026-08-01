@@ -931,13 +931,33 @@ input:focus-visible {
   outline: none;
 }
 /* The one thing a session has to be told. It sits in the subtitle because that
-   is where a thread says what it is talking to. */
-.session-sub {
+   is where a thread says what it is talking to.
+
+   `overflow: visible` undoes what `.chat-header .sub` does to every other
+   subtitle, and it has to: that rule clips to one line so a peer's platform or a
+   queue position cannot push the header out of shape, and a menu opening
+   downwards out of this line is exactly the thing it would clip. It is safe to
+   undo here because nothing in this subtitle needs clipping — the only text in it
+   is the chip's, which ellipsises itself. */
+.chat-header .sub.session-sub {
   display: flex;
   align-items: center;
   gap: 5px;
+  overflow: visible;
 }
-.session-agent {
+/* Who a session asks. A chip that opens a menu of checkboxes, because a session
+   can ask several agents at once and a native select cannot say that. The menu
+   borrows the search scope's geometry on purpose — same tokens, same row height,
+   same fill-and-bar highlight — so a window with two popup menus in it has one
+   idea of what a popup menu looks like. */
+.agent-picker {
+  position: relative;
+  display: inline-flex;
+}
+.agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font: inherit;
   font-size: 12px;
   color: var(--fg-muted);
@@ -946,15 +966,113 @@ input:focus-visible {
   border-radius: 6px;
   padding: 1px 4px;
   max-width: 220px;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
 }
-.session-agent:hover {
+.agent-chip:hover {
   background: var(--surface-hover);
   border-color: var(--border);
 }
-.session-agent option {
+.agent-chip.set {
   color: var(--fg);
+}
+.agent-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  min-width: 240px;
+  max-width: 300px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   background: var(--bg-2);
+  box-shadow: var(--shadow);
+}
+.agent-menu-rule {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+.agent-menu-empty {
+  padding: 7px 9px;
+  font-size: 12px;
+  color: var(--fg-faint);
+}
+.agent-pick {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.agent-pick:hover {
+  background: var(--surface);
+}
+.agent-pick.on {
+  background: var(--surface-hover);
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+/* The box is drawn whether or not there is a tick in it: a row where "not
+   chosen" looks like nothing at all reads as a row that cannot be chosen. */
+.agent-tick {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin-top: 1px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--primary);
+}
+.agent-pick.on .agent-tick {
+  border-color: var(--primary);
+}
+.agent-mode .agent-tick {
+  border-radius: 50%;
+}
+.agent-pick-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.agent-pick-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-pick-note {
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+/* Switched off, or gone. Still tickable — a counsel is a standing choice about
+   who to ask, and it should survive somebody turning their machine off — so the
+   row is dimmed rather than disabled. */
+.agent-pick.off .agent-pick-name,
+.agent-pick.gone .agent-pick-name {
+  color: var(--fg-muted);
+}
+.agent-pick.gone .agent-pick-name {
+  font-style: italic;
 }
 
 /* ---- find in a conversation -----------------------------------------------
@@ -1220,6 +1338,16 @@ mark.find-hit.current {
    Both are tinted from `currentColor` rather than from a fixed colour, so the
    same rules read correctly on the received side and on the blue of a sent one
    without either having to know which side it is on. */
+/* Which agent answered, above its words. Small, and in the accent rather than in
+   the body colour, so a conversation between three agents reads as a list of
+   contributions rather than as one long wall with names buried in it. */
+.bubble-speaker {
+  margin-bottom: 3px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: color-mix(in srgb, var(--primary) 78%, currentColor);
+}
 .bubble-quote {
   display: flex;
   gap: 6px;

@@ -84,11 +84,17 @@ function echoTransports(log) {
       send: async ({ text }, h) => {
         log.push(text);
         // A run that fails rather than answering — an ACP prompt that timed out,
-        // in the shape the real transport reports it.
-        if (text.includes('fail:now')) {
+        // in the shape the real transport reports it. `fail:now` fails whoever is
+        // asked; `fail:<Name>` fails only that one, which is what lets a counsel
+        // be tested with some of it answering and some of it not.
+        if (text.includes('fail:now') || text.includes(`fail:${name}`)) {
           h.onError?.(new Error("ACP call 'session/prompt' timed out."));
           return;
         }
+        // A run that starts and does not finish, for proving what a session does
+        // while it is still waiting. Never answered, never failed — the state a
+        // real agent is in while it thinks.
+        if (text.includes('hold:now')) return;
         h.onDone?.({ text: `echo:${text}` });
       },
       stop: async () => {},
@@ -557,7 +563,7 @@ test("an answer from a peer's agent lands in the session that asked for it", () 
     notice: true,
   });
   assert.equal(notice.peerId, session);
-  assert.equal(entry.pendingThread, session, 'still waiting on the real answer');
+  assert.equal(entry.pending[0].thread, session, 'still waiting on the real answer');
 
   const answer = remote.receive('peer-a', { agentId: 'agent:x', text: 'because the holder went quiet' });
   assert.equal(answer.peerId, session);
@@ -565,12 +571,14 @@ test("an answer from a peer's agent lands in the session that asked for it", () 
     store.read(session).map((m) => `${m.direction}:${m.text}`),
     ['out:why did it move?', 'in:because the holder went quiet']
   );
-  assert.equal(entry.pendingThread, null, 'and the correlation ends with the answer');
+  assert.equal(entry.pending.length, 0, 'and the correlation ends with the answer');
+  assert.equal(answer.speaker, 'Hermes', 'an answer filed in a session says who gave it');
 
   // With nothing outstanding, the agent's own thread gets its own traffic back.
   remote.send('peer-a', entry, 'hello there', { prompt: 'hello there' });
   const reply = remote.receive('peer-a', { agentId: 'agent:x', text: 'hello yourself' });
   assert.equal(reply.peerId, entry.id);
+  assert.equal(reply.speaker, undefined, "and in the agent's own thread it does not need to");
   assert.deepEqual(
     store.read(entry.id).map((m) => m.text),
     ['hello there', 'hello yourself']
@@ -643,7 +651,324 @@ test('a session can ask an agent a peer shared, over a real socket', async (t) =
 test('a run that came back empty is signalled in the session that asked', () => {
   const { remote, entry } = remoteFixture();
   remote.send('peer-a', entry, 'anything?', { prompt: 'anything?', thread: 'session:abc' });
-  assert.equal(remote.emptyRun('peer-a', 'agent:x'), 'session:abc');
-  assert.equal(entry.pendingThread, null, 'an empty answer is still an answer');
-  assert.equal(remote.emptyRun('peer-a', 'agent:x'), entry.id);
+  const run = remote.emptyRun('peer-a', 'agent:x');
+  assert.equal(run.into, 'session:abc');
+  assert.equal(run.agentName, 'Hermes', 'and it says which agent had nothing to say');
+  assert.equal(entry.pending.length, 0, 'an empty answer is still an answer');
+  assert.equal(remote.emptyRun('peer-a', 'agent:x').into, entry.id);
+});
+
+// ------------------------------------------------------------------ a counsel
+//
+// A session can put one question to several agents at once. Four things are
+// worth proving and none of them are readable off the code: that one typed
+// sentence stays one question in the transcript however many agents it goes to;
+// that each answer says who gave it; that an agent nobody can reach is skipped
+// and named rather than stopping the rest; and that a question two agents
+// answered is not marked as one that failed because a third did.
+
+// A machine with `n` agents switched on, and a session pointed at all of them.
+async function counselNode(name, names, { mode } = {}) {
+  const A = makeNode(name);
+  const agents = [];
+  for (const agentName of names) {
+    const { agent } = await A.agentHub.add({ name: agentName, kind: 'http', config: {} });
+    agents.push(agent);
+  }
+  const session = A.call('lanchat:createSession', {});
+  A.call('lanchat:setSessionCounsel', {
+    id: session.id,
+    agentIds: agents.map((a) => a.id),
+    ...(mode && { mode }),
+  });
+  return { A, agents, session };
+}
+
+test('one question put to three agents is one question and three answers', async () => {
+  const { A, agents, session } = await counselNode('counsel', ['Hermes', 'Tessie', 'Fable']);
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'what should we call it?' });
+  await waitFor(() => A.store.read(session.id).length === 4, 5000, 'all three answers to land');
+
+  const thread = A.store.read(session.id);
+  assert.deepEqual(
+    thread.map((m) => m.direction),
+    ['out', 'in', 'in', 'in'],
+    'one question, three answers — the sentence was typed once'
+  );
+  assert.equal(commitCount(thread), 1, 'and it counts as one piece of work, not three');
+  assert.deepEqual(
+    thread.slice(1).map((m) => m.speaker).sort(),
+    ['Fable', 'Hermes', 'Tessie'],
+    'every answer says which agent gave it'
+  );
+  assert.deepEqual(
+    A.log.sort(),
+    ['what should we call it?', 'what should we call it?', 'what should we call it?'],
+    'and all three were asked the same thing at the same time'
+  );
+  assert.equal(agents.length, 3);
+});
+
+test('asked in turn, each agent is shown what the last one said', async () => {
+  const { A, session } = await counselNode('relay', ['Hermes', 'Tessie'], { mode: 'relay' });
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'what should we call it?' });
+  await waitFor(() => A.store.read(session.id).length === 3, 5000, 'both answers to land');
+
+  assert.equal(A.log.length, 2, 'two agents, asked once each');
+  assert.equal(A.log[0], 'what should we call it?', 'the first is asked the question as typed');
+  assert.match(A.log[1], /^\[Answers already given to this question by other agents\]\n<<<\nHermes:\n/);
+  assert.match(A.log[1], /echo:what should we call it\?/, "and it can read the first agent's answer");
+  assert.match(A.log[1], />>>\n\nwhat should we call it\?$/, 'with the question itself last');
+});
+
+test('an agent nobody can reach is skipped and named, and the rest are still asked', async () => {
+  const { A, agents, session } = await counselNode('partial', ['Hermes', 'Tessie']);
+  await A.agentHub.setEnabled(agents[1].id, false);
+
+  const sent = A.call('lanchat:sendChat', { peerId: session.id, text: 'still there?' });
+  assert.equal(sent.rejected, undefined, 'one agent being off does not stop the others');
+  assert.match(sent.notice.text, /Tessie was not asked — switched off\./);
+  assert.equal(sent.notice.notice, true, 'said once, never written into the transcript');
+
+  await waitFor(() => A.store.read(session.id).length === 2, 5000, "Hermes' answer to land");
+  assert.deepEqual(
+    A.store.read(session.id).map((m) => m.speaker || null),
+    [null, 'Hermes'],
+    'and only the agent that was asked answered'
+  );
+});
+
+test('a question two agents answered is not marked as one that failed', async () => {
+  const { A, session } = await counselNode('mixed', ['Hermes', 'Tessie']);
+
+  // Tessie errors rather than answering; Hermes answers normally. The echo
+  // transport fails only the agent named in the question.
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'fail:Tessie but not the other one' });
+  await waitFor(
+    () => A.store.read(session.id).some((m) => m.direction === 'in'),
+    5000,
+    'the answer that did come back'
+  );
+  await new Promise((r) => setTimeout(r, 50));
+
+  const thread = A.store.read(session.id);
+  assert.equal(thread[0].failed, undefined, 'one agent failing does not unmake the answer another gave');
+  assert.equal(commitCount(thread), 1, 'so the question still counts as work the session got done');
+});
+
+test('a question the whole counsel failed is marked, once, at the end of the round', async () => {
+  const { A, session } = await counselNode('allfail', ['Hermes', 'Tessie']);
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'fail:now' });
+  await waitFor(() => A.store.read(session.id)[0].failed === true, 5000, 'the question to be marked');
+
+  const thread = A.store.read(session.id);
+  assert.equal(thread.length, 1, 'the errors themselves are shown and dropped, never kept');
+  assert.equal(commitCount(thread), 0, 'and nothing was got out of the agents to count');
+
+  const closed = A.events.filter((e) => e.type === 'session-round' && !e.payload.open).pop();
+  assert.equal(closed.payload.failedRef, thread[0].id, 'the window is told which question it was');
+  assert.deepEqual(closed.payload.failed.length, 2, 'and that both of them failed');
+});
+
+test('a second question waits until the counsel has finished with the first', async () => {
+  const { A, session } = await counselNode('busy', ['Hermes', 'Tessie']);
+
+  // Both agents start and neither finishes, so the round stays open.
+  const first = A.call('lanchat:sendChat', { peerId: session.id, text: 'hold:now' });
+  assert.equal(first.rejected, undefined, 'the first question goes');
+
+  const second = A.call('lanchat:sendChat', { peerId: session.id, text: 'and another thing' });
+  assert.equal(second.rejected, true, 'the second is refused rather than interleaved with it');
+  assert.equal(second.text, 'and another thing', 'and the words come back for the composer');
+  assert.match(second.notice.text, /still answering/);
+  assert.deepEqual(
+    A.store.read(session.id).map((m) => m.text),
+    ['hold:now'],
+    'so the transcript holds one question, not two'
+  );
+});
+
+test('an idle session is not held shut by a round that already finished', async () => {
+  const { A, session } = await counselNode('idle', ['Hermes', 'Tessie']);
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'first' });
+  await waitFor(() => A.store.read(session.id).length === 3, 5000, 'both answers to the first');
+
+  const second = A.call('lanchat:sendChat', { peerId: session.id, text: 'second' });
+  assert.equal(second.rejected, undefined, 'a closed round blocks nothing');
+});
+
+test('a session set to ask everybody asks whoever is there at the time', async () => {
+  const A = makeNode('standing');
+  const { agent: hermes } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  const session = A.call('lanchat:createSession', {});
+  A.call('lanchat:setSessionCounsel', { id: session.id, allAgents: true });
+
+  assert.equal(A.call('lanchat:listSessions')[0].allAgents, true);
+  assert.equal(
+    A.call('lanchat:listSessions')[0].agentId,
+    hermes.id,
+    'the one-agent mirror an older build reads is filled in from whoever is here'
+  );
+
+  // An agent added after the choice was made is in the counsel, without anything
+  // having been written down when it arrived.
+  await A.agentHub.add({ name: 'Tessie', kind: 'http', config: {} });
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'who is about?' });
+  await waitFor(() => A.store.read(session.id).length === 3, 5000, 'both agents to answer');
+  assert.deepEqual(
+    A.store
+      .read(session.id)
+      .slice(1)
+      .map((m) => m.speaker)
+      .sort(),
+    ['Hermes', 'Tessie']
+  );
+});
+
+test('an old record is read as a counsel of one, and a downgrade still finds an agent', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lanchat-oldsess-'));
+  const file = path.join(dir, 'sessions.json');
+  const before = [
+    { id: 'session:old', title: 'why the turn moved', agentId: 'agent:1', createdAt: 1, updatedAt: 2 },
+  ];
+  fs.writeFileSync(file, JSON.stringify(before, null, 2), 'utf8');
+
+  const registry = new SessionRegistry(dir);
+  assert.deepEqual(registry.get('session:old').agentIds, ['agent:1'], 'the one agent it asked is its counsel');
+  assert.equal(registry.get('session:old').allAgents, false);
+  assert.equal(registry.get('session:old').mode, 'parallel');
+  assert.equal(fs.readFileSync(file, 'utf8'), JSON.stringify(before, null, 2), 'and the file is not rewritten');
+
+  registry.update('session:old', { agentIds: ['agent:2', 'agent:3'] });
+  const back = new SessionRegistry(dir).get('session:old');
+  assert.deepEqual(back.agentIds, ['agent:2', 'agent:3']);
+  assert.equal(back.agentId, 'agent:2', 'an older build reading this file still finds an agent to ask');
+});
+
+test('an agent that has gone leaves the counsel, and the rest carry on', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lanchat-unbind-'));
+  const registry = new SessionRegistry(dir);
+  const many = registry.create({ agentIds: ['agent:1', 'agent:2', 'agent:3'] });
+  const one = registry.create({ agentId: 'agent:2' });
+  const standing = registry.create({ allAgents: true });
+  const standingBefore = JSON.stringify(registry.get(standing.id));
+
+  assert.equal(registry.unbindAgent('agent:2'), true);
+  assert.deepEqual(registry.get(many.id).agentIds, ['agent:1', 'agent:3'], 'one leaves, the others stay');
+  assert.equal(registry.get(many.id).agentId, 'agent:1', 'and the mirror follows the head of the list');
+  assert.deepEqual(registry.get(one.id).agentIds, [], 'a counsel of one is left with nobody, as it always was');
+  assert.equal(registry.get(one.id).agentId, null);
+  assert.equal(
+    JSON.stringify(registry.get(standing.id)),
+    standingBefore,
+    'and a session that asks whoever is here is untouched — there is no list to take a name out of'
+  );
+});
+
+// The counsel, but for real: two machines, a socket between them, and one of the
+// agents on the far side of it. The tests above pin the fan-out against local
+// agents; this one proves the same round works when half of it is somebody
+// else's — which is where a session asking several agents actually lives.
+test('a counsel can span this machine and a peer, over a real socket', async (t) => {
+  const A = makeNode('owner', await freePort());
+  const B = makeNode('asker', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idA = A.getIdentity().id;
+  const { agent: theirs } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  await A.agentHub.setSharing(theirs.id, { networkWide: true, directChat: true });
+  const { agent: ours } = await B.agentHub.add({ name: 'Tessie', kind: 'http', config: {} });
+  await connect(B, A);
+
+  const remoteId = await waitFor(
+    () => [...B.hub.identities.keys()].find((k) => k.startsWith(`remote-agent:${idA}:${theirs.id}`)),
+    5000,
+    "B to be told about A's agent"
+  );
+
+  const session = B.call('lanchat:createSession', { title: 'what to call it' });
+  B.call('lanchat:setSessionCounsel', { id: session.id, agentIds: [ours.id, remoteId] });
+  B.call('lanchat:sendChat', { peerId: session.id, text: 'what should we call it?' });
+
+  await waitFor(
+    () => B.store.read(session.id).filter((m) => m.direction === 'in').length === 2,
+    5000,
+    'both halves of the counsel to answer'
+  );
+
+  const thread = B.store.read(session.id);
+  assert.deepEqual(
+    thread.map((m) => m.direction),
+    ['out', 'in', 'in'],
+    'one question typed once, and an answer from each of them'
+  );
+  assert.deepEqual(
+    thread
+      .slice(1)
+      .map((m) => m.speaker)
+      .sort(),
+    ['Hermes', 'Tessie'],
+    'and each answer names the agent it came from, wherever that agent lives'
+  );
+  assert.equal(commitCount(thread), 1, 'one question is one commit however many machines answered it');
+  assert.deepEqual(B.store.read(remoteId), [], "none of it lands in the shared agent's own thread");
+  assert.deepEqual(B.store.read(idA), [], "nor in B's chat with A");
+
+  // The owner sees what was asked of their agent and what it said back, filed
+  // where it always was — a delegate thread keeps both halves as incoming, which
+  // is the shape the single-agent test above pins. A counsel changes nothing
+  // about the transparency on the owner's side.
+  assert.deepEqual(
+    A.store.read(`${theirs.id}#${B.getIdentity().id}`).map((m) => m.direction),
+    ['in', 'in'],
+    'and the transparency on the owner’s side is unchanged'
+  );
+});
+
+// Two questions out to one shared agent at the same time.
+//
+// This is what the single `pendingThread` slot could not do, and what a counsel
+// makes ordinary: the same shared agent can be in a session's round and in its
+// own thread at once. The answers come back in the order the questions went, so
+// the queue is what decides where each one is filed — see `pending` in
+// agents/remote.js.
+test('two questions to one shared agent are answered in the order they were asked', () => {
+  const { store, remote, entry } = remoteFixture();
+  const session = 'session:abc';
+
+  // The session writes its own question down, so the round asks with record:false.
+  remote.send('peer-a', entry, 'what should we call it?', {
+    prompt: 'what should we call it?',
+    thread: session,
+    record: false,
+  });
+  // And the agent's own thread asks it something else while that is still out.
+  remote.send('peer-a', entry, 'unrelated', { prompt: 'unrelated' });
+
+  assert.equal(entry.pending.length, 2, 'both questions are outstanding at once');
+  assert.deepEqual(store.read(session), [], 'the round wrote nothing — the session already had');
+  assert.deepEqual(
+    store.read(entry.id).map((m) => m.text),
+    ['unrelated'],
+    "while the agent's own thread kept its question the ordinary way"
+  );
+
+  const first = remote.receive('peer-a', { agentId: 'agent:x', text: 'Counsel mode.' });
+  assert.equal(first.peerId, session, 'the first answer belongs to the first question');
+  assert.equal(first.speaker, 'Hermes');
+
+  const second = remote.receive('peer-a', { agentId: 'agent:x', text: 'about the other thing' });
+  assert.equal(second.peerId, entry.id, 'and the second to the second');
+  assert.equal(entry.pending.length, 0, 'with nothing left outstanding');
 });

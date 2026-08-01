@@ -1960,7 +1960,11 @@ test('a run that finishes silently is signalled, not written down as an error', 
   await new Promise((r) => setImmediate(r));
 
   assert.deepEqual(messages, [], 'no bubble is produced for an answer that does not exist');
-  assert.deepEqual(empties, [{ threadId: agent.id }], 'the window is told, in the thread it happened in');
+  assert.deepEqual(
+    empties,
+    [{ threadId: agent.id, agentId: agent.id, agentName: 'Quiet' }],
+    'the window is told, in the thread it happened in, and by whom'
+  );
   assert.deepEqual(store.read(agent.id), [], 'and nothing is written to disk');
 });
 

@@ -91,7 +91,7 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   // Sessions: local workspaces that ask an agent — one of ours or one a peer
   // shared. Built here rather than in main.js because reaching a shared agent
   // means reaching `remoteAgents`, which lives here and nowhere else.
-  const sessions = createSessions({ userDataDir, store, agentHub, remoteAgents });
+  const sessions = createSessions({ userDataDir, store, agentHub, remoteAgents, hub, bus });
 
   // Threads that exist only on this machine. Nothing off the wire may claim one.
   function isLocalThreadId(id) {
@@ -155,7 +155,16 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   // A run that finished with nothing in it. Carries a thread id rather than an
   // agent id because a peer's conversation with a local agent lives in its own
   // delegate thread, and that is the thread the window has to answer in.
-  bus.on('agent-empty', ({ threadId }) => emit('agent-empty', { peerId: threadId }));
+  // Named as well as addressed, because a session may have put one question to
+  // several agents and has to say which of them came back with nothing.
+  bus.on('agent-empty', ({ threadId, agentId, agentName }) => {
+    emit('agent-empty', { peerId: threadId, agentId, agentName });
+    if (isSessionId(threadId)) sessions.noteOutcome({ threadId, agentId, kind: 'empty' });
+  });
+  // Where a session's question stands: who was asked, who is still thinking, and
+  // who was left out. Worked out in main, which is the only place that knows,
+  // and pushed rather than reassembled in the window out of four kinds of event.
+  bus.on('session-round', (round) => emit('session-round', round));
 
   // A refusal, for the roster to explain. An old build and an attacker are
   // refused identically — this only decides which sentence is shown, and it is
@@ -238,13 +247,30 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
             ts: msg.ts || Date.now(),
             ...(msg.notice === true && { notice: true }),
             ...(failed && { error: true, ...(msg.failedRef && { failedRef: msg.failedRef }) }),
+            // Who answered. A session can put one question to several agents, so
+            // an answer that does not say whose it is is an opinion from nobody.
+            // Only here, in a session: an agent's own thread is already the
+            // answer to "who", and labelling every message in it would be words
+            // with no reader.
+            ...(msg.agentName && { speaker: msg.agentName, agentId: msg.agentId }),
           };
           if (!answer.notice) store.append(from, answer);
-          // The mark outlives the error that caused it: the error is gone in ten
-          // seconds, but a question nothing ever answered must still not be
-          // counted as one tomorrow.
-          if (failed && msg.failedRef) store.update(from, msg.failedRef, { failed: true });
           emit('chat', answer);
+          // The mark a failed question keeps is no longer this message's to make.
+          // One agent failing says nothing about whether a question three of them
+          // were asked went unanswered, so the round decides at the end — see
+          // closeRound() in sessions/index.js.
+          //
+          // Queue chatter is not an outcome: being told an agent is busy is not
+          // that agent's run ending.
+          if (!answer.notice || failed) {
+            sessions.noteOutcome({
+              threadId: from,
+              agentId: msg.agentId,
+              kind: failed ? 'error' : 'answer',
+              text: msg.text,
+            });
+          }
           break;
         }
         // A message from a real peer may be addressed to a local agent, gated on
@@ -299,8 +325,15 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       // frame to drop, not one to guess at.
       case 'agent-empty': {
         // Shown wherever the answer would have gone — a session, if one asked.
-        const into = remoteAgents && remoteAgents.emptyRun(from, msg.agentId);
-        if (into) emit('agent-empty', { peerId: into });
+        const run = remoteAgents && remoteAgents.emptyRun(from, msg.agentId);
+        if (run) {
+          emit('agent-empty', { peerId: run.into, agentId: run.agentId, agentName: run.agentName });
+          // An empty answer is still an answer, so a round waiting on this agent
+          // stops waiting on it.
+          if (sessions && sessions.isSessionId(run.into)) {
+            sessions.noteOutcome({ threadId: run.into, agentId: run.agentId, kind: 'empty' });
+          }
+        }
         break;
       }
       // An agent owned by another peer is offering, or retracting, itself.
@@ -328,6 +361,17 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       case 'agent-reply': {
         const stored = remoteAgents.receive(from, msg);
         if (stored) emit('chat', stored);
+        // An answer from somebody else's agent ends its slot in the round exactly
+        // as one of ours does. Queue chatter does not — being told where we stand
+        // in a stranger's queue is not the run ending.
+        if (stored && isSessionId(stored.peerId) && (!stored.notice || stored.error)) {
+          sessions.noteOutcome({
+            threadId: stored.peerId,
+            agentId: stored.agentId,
+            kind: stored.error ? 'error' : 'answer',
+            text: stored.text,
+          });
+        }
         break;
       }
       case 'typing':
@@ -575,11 +619,33 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     return record;
   });
 
+  // Who a session asks: a list of agents, or whoever is available, and whether
+  // they are asked all at once or one after another.
+  ipcMain.handle('lanchat:setSessionCounsel', (_e, { id, agentIds, allAgents, mode }) => {
+    const record = sessions.setCounsel(id, { agentIds, allAgents, mode });
+    if (record) publishSessions();
+    return record;
+  });
+
+  // The one-agent door into the same thing. Nothing in this window uses it any
+  // more, but it costs three lines and it is what a renderer from before counsels
+  // existed calls — and what `createSession({ agentId })` means.
   ipcMain.handle('lanchat:setSessionAgent', (_e, { id, agentId }) => {
     const record = sessions.setAgent(id, agentId);
     if (record) publishSessions();
     return record;
   });
+
+  // Everyone this machine could put a question to, for the picker in a session's
+  // header. Not the roster: the roster is who you can talk to, and this is who
+  // can be asked — a distinction that matters for an agent shared without direct
+  // chat, which is reachable and deliberately not a contact.
+  ipcMain.handle('lanchat:askableAgents', () => sessions.askable());
+
+  // The question a session already has out, for a window that has just opened or
+  // just switched threads. Live state is pushed as it changes; this is how a
+  // reader who missed the push catches up.
+  ipcMain.handle('lanchat:sessionRound', (_e, { id }) => sessions.roundFor(id));
 
   // The record and the conversation go together — see sessions/index.js.
   ipcMain.handle('lanchat:deleteSession', (_e, { id }) => {

@@ -232,6 +232,20 @@ export const Upload = (p) => (
   </S>
 );
 // Stepping through what a search found: back up the conversation, and down it.
+// A tick, and the empty box it goes in. Used where several things can be chosen
+// at once — the agents a session asks — so the two are drawn as a pair: an
+// unticked row still shows its box, because a menu where "not chosen" is drawn
+// as nothing reads as a menu of things that cannot be chosen.
+export const Check = (p) => (
+  <S {...p}>
+    <polyline points="20 6 9 17 4 12" />
+  </S>
+);
+export const Dot = (p) => (
+  <S {...p} fill="currentColor" stroke="none">
+    <circle cx="12" cy="12" r="4.5" />
+  </S>
+);
 export const ChevronUp = (p) => (
   <S {...p}>
     <polyline points="18 15 12 9 6 15" />

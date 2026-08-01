@@ -38,13 +38,16 @@ contextBridge.exposeInMainWorld('lanchat', {
   exportHistory: (peerId, name) => invoke('lanchat:exportHistory', { peerId, name }),
   sendChat: (peerId, text, docPaths, context) => invoke('lanchat:sendChat', { peerId, text, docPaths, context }),
 
-  // Sessions: local workspaces that ask an agent. Their messages travel the
-  // ordinary chat channels — these are only the list and the way a saved
-  // conversation gets loaded back in.
+  // Sessions: local workspaces that ask an agent, or several at once. Their
+  // messages travel the ordinary chat channels — these are only the list, who
+  // each one asks, and the way a saved conversation gets loaded back in.
   listSessions: () => invoke('lanchat:listSessions'),
   createSession: (draft) => invoke('lanchat:createSession', draft || {}),
   renameSession: (id, title) => invoke('lanchat:renameSession', { id, title }),
+  setSessionCounsel: (id, patch) => invoke('lanchat:setSessionCounsel', { id, ...(patch || {}) }),
   setSessionAgent: (id, agentId) => invoke('lanchat:setSessionAgent', { id, agentId }),
+  askableAgents: () => invoke('lanchat:askableAgents'),
+  sessionRound: (id) => invoke('lanchat:sessionRound', { id }),
   deleteSession: (id) => invoke('lanchat:deleteSession', { id }),
   importSessionText: (id) => invoke('lanchat:importSessionText', { id }),
   sweepSessionErrors: (id, ids) => invoke('lanchat:sweepSessionErrors', { id, ids }),

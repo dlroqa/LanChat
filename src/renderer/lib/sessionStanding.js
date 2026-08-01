@@ -23,15 +23,36 @@ const STANDINGS = {
   listening: { word: 'Listening', tone: 'ready' },
 };
 
+// How many agents this session can actually put a question to.
+//
+// `agentNames` is the resolved counsel — the ones that exist right now, not the
+// ids the record holds — so an agent that has been removed or a peer who stopped
+// sharing one is already out of it. `agentName` is the one-agent case kept for
+// everything that was written before a session could ask more than one.
+function counselSize(peer) {
+  if (Array.isArray(peer.agentNames)) return peer.agentNames.length;
+  return peer.agentName ? 1 : 0;
+}
+
+// Who this session asks, said the way a person would.
+function counselWho(peer) {
+  const list = Array.isArray(peer.agentNames) ? peer.agentNames : peer.agentName ? [peer.agentName] : [];
+  if (list.length === 0) return 'nobody';
+  if (list.length === 1) return list[0];
+  if (list.length === 2) return `${list[0]} and ${list[1]}`;
+  return `${list.length} agents`;
+}
+
 export function sessionStanding(peer, busy, phrase) {
   if (!peer) return null;
 
-  // A session is normally bound to an agent — one is chosen for it the moment it
-  // is created when there is only one to choose. Unbound means either nobody has
-  // picked yet or the agent it was pointed at has gone, and both come down to the
-  // same thing: nothing here can answer. Saying "Listening" would be a lie, and
-  // it is the one state with something to do about it, so it says that instead.
-  if (!peer.agentName) return { key: 'unbound', label: STANDINGS.unbound.word, ...STANDINGS.unbound };
+  // A session is normally bound to at least one agent — one is chosen for it the
+  // moment it is created when there is only one to choose. Unbound means nobody
+  // has picked yet, or everybody it was pointed at has gone, or it is set to ask
+  // whoever is available and nobody is: all of them come down to the same thing,
+  // that nothing here can answer. Saying "Listening" would be a lie, and it is the
+  // one state with something to do about it, so it says that instead.
+  if (!counselSize(peer)) return { key: 'unbound', label: STANDINGS.unbound.word, ...STANDINGS.unbound };
 
   // Working. The row shows the phrase the chat indicator is showing at this
   // instant — both read the same clock, so they never disagree — while the box
@@ -52,10 +73,15 @@ export function sessionStandingLabel(peer, busy) {
   switch (standing.key) {
     case 'unbound':
       return 'No agent yet — choose one in the header above the conversation and this session can start asking';
-    case 'forking':
-      return `Forking — ${peer.agentName} is working on the last question asked here`;
-    default:
-      return `Listening — ${peer.agentName} is free, and this session is ready to ask it something`;
+    case 'forking': {
+      const many = counselSize(peer) > 1;
+      return `Forking — ${counselWho(peer)} ${many ? 'are' : 'is'} working on the last question asked here`;
+    }
+    default: {
+      const many = counselSize(peer) > 1;
+      const them = many ? 'them' : 'it';
+      return `Listening — ${counselWho(peer)} ${many ? 'are' : 'is'} free, and this session is ready to ask ${them} something`;
+    }
   }
 }
 

@@ -5,6 +5,7 @@ import { useCountdown } from '../lib/useCountdown.js';
 import { useAgentPhrase } from '../lib/agentPhrase.js';
 import { turnStanding, turnStandingLabel } from '../lib/turnStanding.js';
 import { sessionStanding, sessionStandingLabel } from '../lib/sessionStanding.js';
+import { counselNames } from '../lib/counselCopy.js';
 import { useSweep, useBurstHue, useReadyBurst, useReducedMotion, boxReach } from '../lib/statusMotion.js';
 
 // Live connection quality for the selected peer, drawn from real round-trip
@@ -42,7 +43,7 @@ const QUALITY = {
   unreachable: { label: 'Not responding', color: 'var(--warn)', bars: 0 },
 };
 
-export default function ConnectionPanel({ peer, stats, agentStatus, awaiting, typing, commits }) {
+export default function ConnectionPanel({ peer, stats, agentStatus, awaiting, typing, streaming, commits }) {
   if (!peer) {
     return (
       <div className="panel-empty">
@@ -61,7 +62,7 @@ export default function ConnectionPanel({ peer, stats, agentStatus, awaiting, ty
 
   if (peer.kind === 'session') {
     return (
-      <SessionPanel peer={peer} status={agentStatus} awaiting={awaiting} typing={typing} commits={commits} />
+      <SessionPanel peer={peer} streaming={streaming} awaiting={awaiting} typing={typing} commits={commits} />
     );
   }
 
@@ -183,17 +184,18 @@ function AgentPanel({ peer, status, awaiting }) {
   );
 }
 
-function SessionPanel({ peer, status, awaiting, typing, commits }) {
+function SessionPanel({ peer, streaming, awaiting, typing, commits }) {
   // Three sources again, and none of them the peer card: a session has no
   // presence to read one off. `typing` is main's own bracket around a run — it
   // is raised on the session's id, not the agent's, the moment the question goes
   // and lowered when the answer lands. `awaiting` is having asked and not heard
-  // back, which covers a slow start. `streaming` is text already arriving.
+  // back, which covers a whole round in a session that asked several agents at
+  // once. `streaming` is text already arriving from any of them.
   //
   // The agent's own `status` is deliberately not one of them: it is published
   // keyed by agent id alone, so a session thread never receives `working` and a
   // row built on it would sit dead through the whole answer.
-  const busy = typing === true || awaiting === true || Boolean(status?.streaming);
+  const busy = typing === true || awaiting === true || streaming === true;
 
   // The same clock-derived phrase the chat indicator is showing under the
   // conversation at this instant, so the two never show different words.
@@ -202,6 +204,12 @@ function SessionPanel({ peer, status, awaiting, typing, commits }) {
   // One derivation for the row and the Status box, so the word being typed and
   // the word in the box can never contradict each other.
   const standing = sessionStanding(peer, busy, phrase);
+
+  // Who this session asks, from the one place that says it — a counsel of three
+  // named here and counted in the header would be two answers to one question.
+  const names = Array.isArray(peer.agentNames) ? peer.agentNames : peer.agentName ? [peer.agentName] : [];
+  const who = counselNames(names);
+  const many = names.length > 1;
 
   return (
     <div className="conn-panel">
@@ -215,7 +223,7 @@ function SessionPanel({ peer, status, awaiting, typing, commits }) {
         <div style={{ minWidth: 0 }}>
           <div className="conn-name">{peer.name}</div>
           <div className={`conn-sub agent-tone-${standing.tone}`}>
-            {peer.agentName ? `Asks ${peer.agentName}` : 'No agent yet'}
+            {who ? `Asks ${who}` : 'No agent yet'}
           </div>
         </div>
       </div>
@@ -236,12 +244,12 @@ function SessionPanel({ peer, status, awaiting, typing, commits }) {
           title={sessionStandingLabel(peer, busy)}
         />
         <CommitStat commits={commits} />
-        <Stat label="Via" value={peer.agentName || '—'} />
+        <Stat label="Via" value={who || '—'} />
       </div>
 
       <div className="conn-note">
-        {peer.agentName
-          ? `A workspace on this machine. Nothing in it goes over the wire — questions go to ${peer.agentName}, and the answers are filed here rather than in that agent's own thread.`
+        {who
+          ? `A workspace on this machine. Nothing in it goes over the wire — questions go to ${who}, and the answers are filed here rather than in ${many ? 'those agents’ own threads' : "that agent's own thread"}.`
           : 'A workspace on this machine, with no agent to ask yet. Choose one beside the title above and this session can start asking.'}
       </div>
     </div>

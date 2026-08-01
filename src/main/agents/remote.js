@@ -205,7 +205,13 @@ function createRemoteAgents({ hub, store, bus = null }) {
   // but a transcript that kept it would be a transcript of a PDF.
   // `thread` is a session asking through this agent: the local copy is filed
   // there instead of in the agent's own thread, and so is the answer.
-  function send(ownerPeerId, entry, text, { prompt, docs = [], thread = null, context = null } = {}) {
+  // `record` is how a caller says it has already written the question down. A
+  // session asking a counsel types one sentence and puts it to several agents;
+  // the bubble belongs to the question, not to each of the agents it was put to,
+  // so the session appends it once and every member of that round is sent with
+  // `record: false`. Left true for every other caller, where this function is
+  // the only thing that knows a question was asked at all.
+  function send(ownerPeerId, entry, text, { prompt, docs = [], thread = null, context = null, record = true } = {}) {
     const into = thread || entry.id;
     // Asking again while the question we already sent is still waiting to be
     // read. It would not be answered any sooner, so it is refused here rather
@@ -250,21 +256,29 @@ function createRemoteAgents({ hub, store, bus = null }) {
       ...(docs.length && { docs: docs.map((d) => ({ name: d.name, bytes: d.bytes })) }),
       ...(context && { context }),
     };
-    // Where the answer to *this* question goes. The frame carries no id we could
-    // match a reply against, and adding one would only work against peers whose
-    // build echoes it — so the correlation is kept here instead, and it is sound
-    // because there is only ever one question outstanding: a second one, asked
-    // while the first is still waiting to be read, is refused above before it
-    // reaches the wire. An entry that goes away takes this with it, because drop()
-    // deletes the whole record. If concurrent questions are ever allowed, this
-    // has to become a `ref` echoed by the owner rather than a field here.
-    entry.pendingThread = thread || null;
-    // And which message it was, kept for the same span and on the same reasoning,
-    // so a failure can be attributed to the question that caused it rather than
-    // to whatever happens to be last in the thread.
-    entry.pendingRef = message.id;
+    // Where the answer to *this* question goes, and which of our messages it is
+    // the outcome of. The frame carries no id we could match a reply against, and
+    // adding one would only work against peers whose build echoes it — so the
+    // correlation is kept here instead. An entry that goes away takes it with it,
+    // because drop() deletes the whole record.
+    //
+    // A queue rather than a single slot. It used to be one, on the grounds that
+    // only one question is ever outstanding — true while the only way to reach
+    // this agent was its own thread, where a second question is refused above
+    // before it reaches the wire. A session asking a counsel breaks that: the same
+    // shared agent can be in a round and in its own thread at once, or in two
+    // sessions' rounds, and each of those is a real question with an answer of its
+    // own coming back.
+    //
+    // First in, first out, which is sound because these are *our* sends: the
+    // owner answers one run at a time and in order, so the head of this queue is
+    // always the question the next answer belongs to. The proper fix is still a
+    // ref echoed by the owner; this is the half of it that needs no cooperation
+    // from the far end, and it is exact for every peer that answers in order.
+    entry.pending = entry.pending || [];
+    entry.pending.push({ thread: thread || null, ref: message.id });
     const ok = hub.send(ownerPeerId, { type: 'agent-chat', agentId: entry.agentId, text: prompt ?? text });
-    store.append(into, message);
+    if (record) store.append(into, message);
     return { ...message, delivered: ok };
   }
 
@@ -331,7 +345,7 @@ function createRemoteAgents({ hub, store, bus = null }) {
     // greeting look like that question's answer, and it is kept. Closing it would
     // mean timing the correlation rather than reasoning about it, for a case that
     // costs one stray line and disappears entirely once the owner updates.
-    if (!entry.pendingRef && !entry.pendingThread && msg.text === legacyGreeting(entry.name)) {
+    if (!(entry.pending && entry.pending.length) && msg.text === legacyGreeting(entry.name)) {
       return null;
     }
     show(ownerPeerId, entry);
@@ -342,23 +356,22 @@ function createRemoteAgents({ hub, store, bus = null }) {
     // The owner's run failed. It arrives as a notice — nothing about it is worth
     // keeping — but it is not queue chatter, and the window shows it differently.
     const error = msg.error === true;
-    // A session asked this, so the answer belongs there and not in the agent's
-    // own thread. Queue chatter goes to the same place — it is about the
-    // question that is waiting — but only a real answer ends the correlation:
-    // being told you are third in line does not mean you have been answered.
-    const into = entry.pendingThread || entry.id;
+    // The question at the head of the queue is the one this answers, and a session
+    // that asked it is where the answer belongs rather than the agent's own
+    // thread. Queue chatter goes to the same place — it is about the question that
+    // is waiting — but only a real answer ends the correlation: being told you are
+    // third in line does not mean you have been answered.
+    const head = (entry.pending && entry.pending[0]) || null;
+    const into = (head && head.thread) || entry.id;
     // Which of our messages this is the outcome of. The owner cannot tell us —
-    // the id is ours and means nothing on their machine — so the error is matched
-    // against the question we have outstanding, which is sound for exactly the
-    // reason `pendingThread` is: there is only ever one.
-    const ref = entry.pendingRef;
+    // the id is ours and means nothing on their machine — so it is matched against
+    // the oldest question we have outstanding with this agent. See `pending` in
+    // send() for why the order is trustworthy.
+    const ref = head ? head.ref : null;
     // An error ends the correlation as surely as an answer does. The run is over
-    // and nothing further is coming for that question, so holding the thread open
+    // and nothing further is coming for that question, so holding the slot open
     // would file the *next* answer against a question that already failed.
-    if (!notice || error) {
-      entry.pendingThread = null;
-      entry.pendingRef = null;
-    }
+    if (head && (!notice || error)) entry.pending.shift();
     const message = {
       id: crypto.randomUUID(),
       peerId: into,
@@ -368,12 +381,22 @@ function createRemoteAgents({ hub, store, bus = null }) {
       ts: msg.ts || Date.now(),
       ...(notice && { notice: true }),
       ...(error && { error: true, ...(ref && { failedRef: ref }) }),
+      // Who answered. Only where the thread does not already say so: in the
+      // agent's own thread every message is that agent's, while a session may
+      // have put the same question to several and needs each answer to name the
+      // one it came from.
+      ...(into !== entry.id && { speaker: entry.name, agentId: entry.id }),
     };
     if (!notice) store.append(into, message);
     // The error itself is never written down; the mark it leaves on the question
     // is, so a question that was never answered is still not counted as one after
     // a restart.
-    if (error && ref) store.update(into, ref, { failed: true });
+    //
+    // Not for a session, though — there the question may have been put to several
+    // agents, and one of them failing says nothing about whether it was answered.
+    // Who decides that is the session, once its whole round is in. See
+    // noteOutcome() in sessions/index.js.
+    if (error && ref && into === entry.id) store.update(into, ref, { failed: true });
     return message;
   }
 
@@ -420,18 +443,23 @@ function createRemoteAgents({ hub, store, bus = null }) {
   // session that asked it, or the agent's own thread when nothing else did.
   function threadFor(entry) {
     if (!entry) return null;
-    return entry.pendingThread || entry.id;
+    const head = (entry.pending && entry.pending[0]) || null;
+    return (head && head.thread) || entry.id;
   }
 
   // Their run finished with nothing in it. That is an answer — an empty one —
   // so it is shown wherever the answer would have gone and it ends the
   // correlation, exactly as a reply does.
+  //
+  // Names the agent as well as the thread, because a session that asked several
+  // of them has to know which one came back empty: to stop waiting on it, and to
+  // say so.
   function emptyRun(ownerPeerId, agentId) {
     const entry = get(ownerPeerId, agentId);
     if (!entry) return null;
     const into = threadFor(entry);
-    entry.pendingThread = null;
-    return into;
+    if (entry.pending && entry.pending.length) entry.pending.shift();
+    return { into, agentId: entry.id, agentName: entry.name };
   }
 
   function resolveThread(threadId) {
