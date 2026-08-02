@@ -400,9 +400,9 @@ questions reach the agents the ordinary way, and what comes back is stored here.
 Make one with the **+** beside **Sessions** in the sidebar. The line under its name in the header
 chooses who it asks.
 
-Every session in the sidebar shows the day it was started beside its name, and the exact moment if
-you rest on it. Sessions are listed by when they were last used, so the date is what tells two of
-them apart while they are both still called **New Session**.
+Every session shows the day it was started beside its name — in the sidebar and in search results
+alike — with the exact moment if you rest on it. Sessions are listed by when they were last used, so
+the date is what tells two of them apart while they are both still called **New Session**.
 
 ### Asking several at once
 

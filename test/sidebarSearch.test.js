@@ -181,5 +181,12 @@ test('mounted in a browser: one box, two views, and nothing lost on the way', as
       );
     }
   }
-  assert.ok(kinds.has('name') && kinds.has('sub'), `only ${[...kinds]} were caught under the light`);
+  // `date` is named as well as measured. It sits inside .result-name, so if it
+  // ever stops being measured as its own box the loop above goes on passing —
+  // the name's box is bright and would answer for it. This is the assertion that
+  // notices the box has gone.
+  assert.ok(
+    kinds.has('name') && kinds.has('sub') && kinds.has('date'),
+    `only ${[...kinds]} were caught under the light`
+  );
 });

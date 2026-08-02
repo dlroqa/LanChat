@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Avatar from './Avatar.jsx';
 import { X, Sessions as SessionsIcon } from '../lib/icons.jsx';
-import { platformLabel } from '../lib/util.js';
+import { formatShortDate, platformLabel } from '../lib/util.js';
 import { matchRanges, sliceRuns } from '../lib/findInThread.js';
 import { SCOPE_ALL, searchSection, sectionTitle, normalizeOrder } from '../lib/sidebarSections.js';
 import { sessionCounsel, sessionSubLine } from '../lib/counselCopy.js';
@@ -205,7 +205,28 @@ export default function SearchResults({
 
                   <div className="result-meta">
                     <div className="result-name">
-                      {field === 'name' ? <Marked text={name} q={q} /> : name}
+                      {/* The name is one flex item, whatever it is made of.
+                          .result-name spaces its children by 8px, and a matched
+                          name is not one node but a run per marked span — so
+                          without this wrapper a search for "Ses" drew "New Ses
+                          sion", the gap opening inside the word at exactly the
+                          place the search had found. */}
+                      <span className="result-name-text">
+                        {field === 'name' ? <Marked text={name} q={q} /> : name}
+                      </span>
+                      {/* The same date the sidebar row carries, drawn by the
+                          same rule. A search for a session is most often a
+                          search among several called "New Session", which is
+                          precisely when a result showing only the title
+                          identifies nothing. */}
+                      {isSession && formatShortDate(item.createdAt) && (
+                        <span
+                          className="session-date"
+                          title={`Created ${new Date(item.createdAt).toLocaleString()}`}
+                        >
+                          {formatShortDate(item.createdAt)}
+                        </span>
+                      )}
                       {unread[item.id] > 0 && <span className="unread-dot">{unread[item.id]}</span>}
                     </div>
                     <div className="result-sub">{sub}</div>

@@ -79,8 +79,8 @@ const { React, createRoot, Sidebar, ChatPane, SearchResults } = window.__lanchat
 const h = React.createElement;
 
 const sessions = [
-  { id: 's1', title: 'why the turn moved', agentId: 'a1' },
-  { id: 's2', title: 'kangkong', agentId: 'a1' },
+  { id: 's1', title: 'why the turn moved', agentId: 'a1', createdAt: new Date(2026, 6, 1, 14, 32).getTime() },
+  { id: 's2', title: 'kangkong', agentId: 'a1', createdAt: new Date(2025, 10, 23, 9, 5).getTime() },
 ];
 const peers = [
   { id: 'a1', kind: 'agent', agentKind: 'acp', name: 'Tessie', online: true, viaName: 'Server' },
@@ -340,6 +340,12 @@ async function scene(name) {
   // decides how bright the band may be.
   out.textRects = [
     ...$$('.result-name').map((el) => ({ kind: 'name', ...box(el) })),
+    // A session's date sits inside .result-name, so the name's own box cannot
+    // speak for it: that box is measured by its brightest pixel, and the name is
+    // --fg while the date is dimmer by design. Measured as its own box, or the
+    // one piece of text in this panel that is allowed to be faint would be the
+    // one piece never checked.
+    ...$$('.result-name > .session-date').map((el) => ({ kind: 'date', ...box(el) })),
     ...$$('.result-sub').map((el) => ({ kind: 'sub', ...box(el) })),
     ...$$('.result-why').map((el) => ({ kind: 'why', ...box(el) })),
     ...$$('.result-group-title').map((el) => ({ kind: 'group', ...box(el) })),

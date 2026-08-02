@@ -731,13 +731,27 @@ input:focus-visible {
 /* When a session was started, beside its name. Quiet on purpose: it is a fact
    you go looking for, not one that should compete with the title — so it takes
    the faint colour the subtitle uses and stays lighter than the name it sits
-   next to. Tabular figures keep a column of dates from wobbling. */
-.peer .name > .session-date {
-  margin-left: 6px;
+   next to. Tabular figures keep a column of dates from wobbling.
+
+   Written once and unscoped, because two surfaces show it: the sidebar row and
+   the results panel. One rule is what stops them drifting into two dates that
+   look like different kinds of fact. Only the spacing is per-surface — the
+   sidebar row has no gap of its own to sit in, and .result-name does. */
+.session-date {
   font-size: 11px;
   font-weight: 400;
   color: var(--fg-faint);
   font-variant-numeric: tabular-nums;
+}
+.peer .name > .session-date {
+  margin-left: 6px;
+}
+/* The one thing the results panel will not take from that rule. Nothing in that
+   panel may be dimmer than --fg-muted — a light sweeps behind all of it, and the
+   dimmest text is what decides how bright the light may be. --fg-faint measured
+   2.5:1 under it. See .result-why, which is the rule this obeys. */
+.result-name > .session-date {
+  color: var(--fg-muted);
 }
 .peer .sub {
   font-size: 12px;

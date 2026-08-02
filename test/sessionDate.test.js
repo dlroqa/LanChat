@@ -127,3 +127,54 @@ test('a session row carries its creation date beside the title it was given', ()
   // "which of the four I started this morning" is a real question.
   assert.match(html, /title="Created [^"]+"/, 'the exact moment should be on the title attribute');
 });
+
+test('the results panel says the same thing about the same session', () => {
+  // The two surfaces that draw a session row. A search for one is most often a
+  // search among several still called "New Session", so a result that shows only
+  // the title identifies nothing — and a date on one surface but not the other is
+  // how somebody comes to believe the search found a different session.
+  const SearchResults = load(path.join(SRC, 'components', 'SearchResults.jsx')).default;
+  const at = new Date(2026, 6, 1, 14, 32).getTime();
+  const sessions = [
+    { id: 'session:1', title: 'New Session', agentIds: ['a1'], createdAt: at },
+    { id: 'session:2', title: 'New Session', agentIds: ['a1'] },
+  ];
+  const html = renderToStaticMarkup(
+    React.createElement(SearchResults, {
+      search: { q: 'session', scope: 'all' },
+      sessions,
+      peers: agents,
+      askableAgents: agents,
+      tailnet: [],
+      unread: {},
+      order: ['sessions', 'agents', 'people', 'tailnet'],
+      onSelect: () => {},
+      onClose: () => {},
+    })
+  );
+
+  const date = formatShortDate(at);
+  assert.match(
+    html,
+    new RegExp(`class="session-date"[^>]*>${date.replace(/\//g, '\\/')}`),
+    'the result should carry the date'
+  );
+  assert.equal(
+    (html.match(/class="session-date"/g) || []).length,
+    1,
+    'the undated session should show nothing here either'
+  );
+
+  // One class, so one stylesheet rule decides how a date looks. Two surfaces each
+  // naming their own would be two dates that drift into looking like two kinds of
+  // fact — which is the reason counselCopy exists for the line underneath.
+  const sidebar = fs.readFileSync(path.join(SRC, 'components', 'Sidebar.jsx'), 'utf8');
+  const results = fs.readFileSync(path.join(SRC, 'components', 'SearchResults.jsx'), 'utf8');
+  for (const [name, src] of [
+    ['Sidebar', sidebar],
+    ['SearchResults', results],
+  ]) {
+    assert.match(src, /formatShortDate\(/, `${name} should format the date in one place`);
+    assert.match(src, /className="session-date"/, `${name} should draw it with the shared class`);
+  }
+});
