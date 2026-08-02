@@ -481,3 +481,55 @@ test('the current hit is marked by more than its colour, and the count does not 
     /\.find-bar/
   );
 });
+
+// ------------------------------------------------- searching a markdown message
+//
+// Reading markdown changed what a bubble *draws* but not what a message *is*,
+// and the search is built entirely on the second. The runs still add up to the
+// stored text, so the counter, the ordinals and the arrows all keep counting the
+// same string they always counted.
+
+test('reading markdown does not change what a message says', () => {
+  const png = '/home/agent/share/graph.png';
+  const text = `Here is the [kangkong graph](sandbox:${png}) and the [notes](https://example.com/kangkong).`;
+  const media = [{ name: 'graph.png', path: png, size: 40, mime: 'image/png' }];
+
+  assert.equal(joined(linkify(text, media)), text, 'the runs are still the message');
+  // Counted off the stored text, which is what the bubble re-cuts: once in the
+  // first link's label, once inside the second link's target. Reading the
+  // markdown neither added an occurrence nor hid one.
+  assert.equal(countHits({ kind: 'text', text }, 'kangkong'), 2);
+});
+
+test('a hit inside a markdown target is still a hit that can be pointed at', () => {
+  // The one thing reading markdown could have broken. The target is punctuation
+  // and the bubble does not normally draw it — but the search numbered it, and
+  // an ordinal on something that was never rendered is an arrow that scrolls
+  // nowhere. So the piece carrying it has to survive the second cut intact, for
+  // MessageText to be able to reveal exactly that piece.
+  const text = 'see [the notes](https://example.com/kangkong)';
+  const runs = linkify(text);
+  const ranges = matchRanges(text, 'kangkong');
+  assert.equal(ranges.length, 1);
+
+  const pieces = sliceRuns(runs, ranges, 0);
+  assert.equal(joined(pieces), text);
+  const marked = pieces.filter((p) => p.hit != null);
+  assert.equal(marked.length, 1);
+  assert.equal(marked[0].type, 'syntax', 'the hit landed in the target');
+  assert.equal(marked[0].text, 'kangkong');
+});
+
+test('a word straddling a markdown label and its target is one occurrence in two pieces', () => {
+  const text = '[kangkong](https://example.com/x)';
+  const runs = linkify(text);
+  // "kangkong](" spans the label run and the syntax run after it.
+  const ranges = matchRanges(text, 'kangkong](');
+  const pieces = sliceRuns(runs, ranges, 7);
+
+  assert.equal(joined(pieces), text, 'nothing is dropped at the seam');
+  const marked = pieces.filter((p) => p.hit != null);
+  assert.equal(marked.length, 2, 'two pieces');
+  assert.deepEqual([...new Set(marked.map((p) => p.hit))], [7], 'carrying one ordinal');
+  assert.equal(joined(marked), 'kangkong](');
+});

@@ -14,7 +14,7 @@ const { buildIdentity, buildPublicCard } = require('../src/main/identity.js');
 const { createDeviceKey } = require('../src/main/deviceKey.js');
 const { createPins } = require('../src/main/pins.js');
 const { PeerHub } = require('../src/main/peers.js');
-const { createServer } = require('../src/main/server.js');
+const { createServer, uniqueDest } = require('../src/main/server.js');
 const { MessageStore } = require('../src/main/store.js');
 
 // Inline thumbnails are served by the node's own HTTP endpoint, from an explicit
@@ -203,4 +203,139 @@ test('the unauthenticated card gives away only what dialing us would', async (t)
   for (const leaked of ['avatar', 'hostname', 'platform', 'version', 'name']) {
     assert.ok(!(leaked in card), `${leaked} should not be handed to a stranger`);
   }
+});
+
+test('a picture an agent made still previews after a restart, on every platform', async (t) => {
+  const port = await freePort();
+  const A = makeNode('erin', port, false);
+  const image = path.join(A.dir, 'graph.png');
+  fs.writeFileSync(image, PIXEL);
+
+  // An agent's answer from an earlier session. Nothing sent it and nothing
+  // received it, so unlike a transferred file it was never in any list that a
+  // restart could rebuild from — which is why store.mediaPaths() exists, and why
+  // it is read on every platform rather than only on Windows.
+  A.store.append('agent:1', {
+    id: 'm1',
+    peerId: 'agent:1',
+    direction: 'in',
+    kind: 'text',
+    text: 'Here is the picture.',
+    media: [{ name: 'graph.png', path: image, size: PIXEL.length, mime: 'image/png' }],
+    ts: Date.now(),
+  });
+
+  const restarted = createServer({
+    config: A.config,
+    getIdentity: A.hub.getIdentity,
+    hub: A.hub,
+    bus: new EventEmitter(),
+    downloadsDir: A.downloadsDir,
+    store: A.store,
+    windows: false,
+  });
+  await restarted.start();
+  t.after(() => restarted.stop());
+
+  const res = await get(port, image);
+  assert.equal(res.status, 200, 'the picture is served rather than drawn as a broken thumbnail');
+  assert.deepEqual(res.body, PIXEL);
+});
+
+test('a path nobody allowed is not served just because a message mentioned one', async (t) => {
+  const port = await freePort();
+  const A = makeNode('frank', port, false);
+  const allowed = path.join(A.dir, 'graph.png');
+  const other = path.join(A.dir, 'private.png');
+  fs.writeFileSync(allowed, PIXEL);
+  fs.writeFileSync(other, PIXEL);
+
+  // Only what main itself wrote onto a message is re-allowed. A path sitting in
+  // the *text* of a message — which is all a peer can ever put there, since the
+  // media field is refused off the wire in ipc.js — reaches nothing.
+  A.store.append('peer-1', {
+    id: 'm1',
+    peerId: 'peer-1',
+    direction: 'in',
+    kind: 'text',
+    text: `MEDIA:${other}\n[open me](sandbox:${other})`,
+    ts: Date.now(),
+  });
+  A.store.append('agent:1', {
+    id: 'm2',
+    peerId: 'agent:1',
+    direction: 'in',
+    kind: 'text',
+    text: 'Here is the picture.',
+    media: [{ name: 'graph.png', path: allowed, size: PIXEL.length, mime: 'image/png' }],
+    ts: Date.now(),
+  });
+
+  // Started after the history is written, so both messages are seen by the same
+  // seeding pass and the only thing separating them is which field they used.
+  const restarted = createServer({
+    config: A.config,
+    getIdentity: A.hub.getIdentity,
+    hub: A.hub,
+    bus: new EventEmitter(),
+    downloadsDir: A.downloadsDir,
+    store: A.store,
+    windows: false,
+  });
+  await restarted.start();
+  t.after(() => restarted.stop());
+
+  assert.equal((await get(port, other)).status, 404, 'a path a peer typed is still just text');
+  assert.equal((await get(port, allowed)).status, 200, 'and the one main vouched for is not');
+});
+
+// ------------------------------------------------- where an arriving file lands
+
+// One naming rule for everything that arrives from outside — a file a peer sent,
+// a picture saved from the web — because they land in the same folder and the
+// same two things have to be true of both: it cannot climb out of that folder,
+// and it cannot erase what is already in it.
+test('an arriving file cannot climb out of the downloads folder or overwrite it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lanchat-dest-'));
+
+  // A name is a name, however it is dressed up.
+  for (const [given, expected] of [
+    ['holiday.png', 'holiday.png'],
+    ['../../.bashrc', '.bashrc'],
+    ['/etc/passwd', 'passwd'],
+    ['a/b/c/graph.png', 'graph.png'],
+    ['', 'file'],
+    ['   ', 'file'],
+    ['holiday.png ', 'holiday.png'],
+    ['re:port*?.png', 're_port_.png'],
+  ]) {
+    const dest = uniqueDest(dir, given);
+    assert.equal(path.dirname(dest), dir, `${given} escaped the folder`);
+    assert.equal(path.basename(dest), expected, given);
+  }
+
+  // The second photo called graph.png is a second photo, not a replacement.
+  fs.writeFileSync(path.join(dir, 'graph.png'), 'first');
+  assert.equal(path.basename(uniqueDest(dir, 'graph.png')), 'graph (1).png');
+  fs.writeFileSync(path.join(dir, 'graph (1).png'), 'second');
+  assert.equal(path.basename(uniqueDest(dir, 'graph.png')), 'graph (2).png');
+  assert.equal(fs.readFileSync(path.join(dir, 'graph.png'), 'utf8'), 'first', 'and the first is untouched');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a picture saved from the web is called what it was called there', () => {
+  const { imageFilename } = require('../src/main/ipc.js');
+
+  assert.equal(imageFilename('https://example.com/photos/graph.png', 'image/png'), 'graph.png');
+  // The extension comes from what was actually served, not from what the URL
+  // claimed — a path saying .png that arrives as a JPEG is a JPEG.
+  assert.equal(imageFilename('https://example.com/photos/graph.png', 'image/jpeg'), 'graph.jpg');
+  assert.equal(imageFilename('https://example.com/a/b.webp?v=2', 'image/webp; charset=binary'), 'b.webp');
+  assert.equal(imageFilename('https://example.com/my%20graph.png', 'image/png'), 'my graph.png');
+  // Nothing in the URL to take a name from, and nothing served to take an
+  // extension from: honest rather than a guess.
+  assert.equal(imageFilename('https://example.com/', 'image/png'), 'picture.png');
+  assert.equal(imageFilename('https://example.com/a.png', 'application/octet-stream'), 'a');
+  assert.equal(imageFilename('not a url', 'image/gif'), 'picture.gif');
 });

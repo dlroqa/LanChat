@@ -12,6 +12,8 @@ const { createSessions, isSessionId } = require('./sessions');
 const { createDictation } = require('./dictation');
 const { normalizeWebUrl } = require('./webLinks');
 const { createLinkPreview } = require('./linkPreview');
+const { resolveMedia } = require('./media');
+const { uniqueDest } = require('./server');
 const { fingerprint } = require('./authProto');
 
 // The three kinds of user-supplied audio, and where each one is remembered. The
@@ -78,6 +80,37 @@ const SETTABLE_KEYS = Object.freeze([
   'dictationEverywhere',
   'openAtLogin',
 ]);
+
+// What a picture saved from the web is called.
+//
+// The name in the URL where there is one, because that is the name the person
+// saving it has been looking at. Everything else — a bare host, a path ending in
+// a slash, a query-string image service — falls back to something honest rather
+// than to a guess, and the extension comes from what the server actually served
+// rather than from what the URL claimed.
+const IMAGE_EXT = Object.freeze({
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/gif': '.gif',
+  'image/webp': '.webp',
+  'image/bmp': '.bmp',
+  'image/svg+xml': '.svg',
+});
+
+function imageFilename(url, type) {
+  // `image/png; charset=binary` is still image/png.
+  const served = String(type || '').split(';')[0];
+  const ext = IMAGE_EXT[served.trim()] || '';
+  let stem = 'picture';
+  try {
+    const base = path.basename(decodeURIComponent(new URL(url).pathname));
+    const named = base.slice(0, base.length - path.extname(base).length);
+    if (named) stem = named;
+  } catch {
+    // A URL that will not parse cannot name anything; `picture` it is.
+  }
+  return `${stem}${ext}`;
+}
 
 // Bridges the main-process services to the renderer:
 //   - ipcMain.handle(...)  : renderer -> main commands (request/response)
@@ -257,6 +290,12 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
             ts: msg.ts || Date.now(),
             ...(msg.notice === true && { notice: true }),
             ...(failed && { error: true, ...(msg.failedRef && { failedRef: msg.failedRef }) }),
+            // The pictures the answer is talking about. Carried explicitly
+            // because this message is built field by field: a new field on a
+            // reply is not a new field here until it is named. Unconditional in
+            // this branch — the guard above has already established that a
+            // message addressed to a session came from a local agent.
+            ...(msg.media && { media: msg.media }),
             // Who answered. A session can put one question to several agents, so
             // an answer that does not say whose it is is an opinion from nobody.
             // Only here, in a session: an agent's own thread is already the
@@ -300,6 +339,15 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
         // able to flag their own chat message as one of our failed runs and have
         // it erase itself off our disk.
         const failed = msg.error === true && msg[AGENT_LOCAL_ORIGIN] === true;
+        // Behind the marker for a third time, and this is the one where it
+        // matters most. A path on a message is a path the window will fetch back
+        // and draw, so honouring one a peer sent would be letting somebody else
+        // decide which files on this machine appear on this screen. An agent
+        // running here may name a picture it made; a frame off the wire may not
+        // name anything. Nothing on the wire carries this field today — see
+        // reply() in agents/index.js, which keeps it off the relayed copy — so
+        // the guard is what makes that true rather than merely currently so.
+        const media = Array.isArray(msg.media) && msg[AGENT_LOCAL_ORIGIN] === true ? msg.media : null;
         const message = {
           id: msg.id || crypto.randomUUID(),
           peerId: from,
@@ -309,6 +357,7 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
           ts: msg.ts || Date.now(),
           ...(notice && { notice: true }),
           ...(failed && { error: true, ...(msg.failedRef && { failedRef: msg.failedRef }) }),
+          ...(media && { media }),
         };
         if (!notice) store.append(from, message);
         if (failed && msg.failedRef) store.update(from, msg.failedRef, { failed: true });
@@ -785,6 +834,20 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       });
     }
 
+    // A picture named in a message the person at the keyboard typed.
+    //
+    // Nothing is stripped here, unlike an agent's reply: this is prose somebody
+    // wrote and sent to somebody else, and the copy kept has to be the copy sent.
+    // So the frame, the queued retry and the stored message below all still
+    // carry exactly what was typed, and the only thing this adds is the picture
+    // underneath it.
+    //
+    // The preview is the sender's alone, and that is not an oversight: the file
+    // itself does not travel. Naming a path tells the other end where something
+    // is on a machine they cannot read; sending them the file is what the
+    // paperclip is for.
+    const { media } = resolveMedia(text, { strip: false });
+    for (const item of media) bus.emit('allow-preview', item.path);
     const message = {
       id: crypto.randomUUID(),
       peerId,
@@ -793,6 +856,7 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       text,
       ts: Date.now(),
       ...(docs.length && { docs: docs.map((d) => ({ name: d.name, bytes: d.bytes })) }),
+      ...(media.length && { media }),
     };
     const ok = hub.send(peerId, { type: 'chat', id: message.id, text: prompt, ts: message.ts });
     // Undelivered messages are held and retried when the peer reconnects, so
@@ -1038,6 +1102,39 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     return linkPreview.get(rawUrl);
   });
 
+  // A link that is itself a picture, drawn in the bubble instead of sitting
+  // there as a URL. Behind the same setting and for the same reason: it is the
+  // one that decides whether a message can cause this machine to connect
+  // somewhere, and a photo is no different from a card in that respect.
+  ipcMain.handle('lanchat:previewImage', (_e, rawUrl) => {
+    if (config.get('linkPreviews') === false) return { ok: false, reason: 'previews are off' };
+    return linkPreview.image(rawUrl);
+  });
+
+  // Keeping one. It lands in the same folder as a file a peer sent, under the
+  // same naming rules, and is allowed for preview the same way — so from the
+  // moment it is saved it behaves exactly like every other file in a
+  // conversation, including after a restart.
+  //
+  // Not behind the previews setting: that setting is about what happens on its
+  // own, and this is somebody pressing a button.
+  ipcMain.handle('lanchat:saveImage', async (_e, rawUrl) => {
+    const shot = await linkPreview.bytes(rawUrl);
+    if (!shot.ok) {
+      emit('toast', { level: 'error', text: `Could not save the picture: ${shot.reason}` });
+      return shot;
+    }
+    try {
+      const dest = uniqueDest(downloadsDir, imageFilename(shot.url, shot.type));
+      fs.writeFileSync(dest, shot.body);
+      bus.emit('allow-preview', dest);
+      return { ok: true, path: dest, name: path.basename(dest), size: shot.body.length };
+    } catch (err) {
+      emit('toast', { level: 'error', text: `Could not save the picture: ${err.message}` });
+      return { ok: false, reason: err.message };
+    }
+  });
+
   // Threads whose far end is something that reads rather than someone who
   // receives files. A session is one of them: it asks an agent, so a document
   // staged in one has somewhere to go.
@@ -1190,6 +1287,7 @@ module.exports = {
   sanitizeAvatar,
   MAX_AVATAR_BYTES,
   isIncomingCallSignal,
+  imageFilename,
   SETTABLE_KEYS,
   PUBLIC_KEYS,
 };

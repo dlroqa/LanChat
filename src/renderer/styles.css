@@ -1745,6 +1745,15 @@ mark.find-hit.current {
   gap: 8px;
   min-width: 200px;
 }
+/* The pictures a message named, under the words that named them. Several of
+   them stack rather than sitting side by side: a bubble is a column, and a photo
+   half the width of one is a photo nobody can see. */
+.bubble-media {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
 .file-media img,
 .file-media video {
   max-width: 320px;
@@ -1753,6 +1762,24 @@ mark.find-hit.current {
   display: block;
   cursor: pointer;
   user-select: none;
+}
+/* Opening a photo is an action, so it is a button — which means undoing every
+   default a button brings with it, and letting the focus ring find the picture's
+   own corners rather than a rectangle around them. */
+.file-media-open {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: 10px;
+  cursor: pointer;
+}
+/* The target of a markdown link, drawn only when a search is asking about it —
+   see MessageText in MessageBubble.jsx. Quieter than the words around it, and
+   allowed to break anywhere, because what it holds is usually a long URL. */
+.md-syntax {
+  opacity: 0.6;
+  overflow-wrap: anywhere;
 }
 .file-row {
   display: flex;

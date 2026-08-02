@@ -168,6 +168,31 @@ class MessageStore {
   // that created it, without widening what may be read: the same files, still
   // named explicitly, still nothing else on the machine.
   filePaths() {
+    return this.collectPaths((m) =>
+      m.kind === 'file' && m.file && typeof m.file.path === 'string' && m.file.path ? [m.file.path] : []
+    );
+  }
+
+  // Every picture a stored conversation is talking about.
+  //
+  // Kept apart from filePaths() because the two are re-allowed on different
+  // terms. A file in a conversation is one this machine sent or received, and
+  // rebuilding that list from disk is a Windows-only fix (see server.js). Media
+  // was never in any list to begin with: it is named by an agent running here or
+  // typed by the person at the keyboard, it is only ever written down once
+  // main has checked it, and without this every agent's picture comes back 404
+  // on the next launch — on every platform.
+  mediaPaths() {
+    return this.collectPaths((m) =>
+      Array.isArray(m.media) ? m.media.map((f) => f && f.path).filter((p) => typeof p === 'string' && p) : []
+    );
+  }
+
+  // Walks every stored conversation once, collecting whatever `pick` finds in
+  // each message. A thread that will not parse is skipped rather than fatal:
+  // this runs at startup, and one damaged file must not cost the previews in
+  // all the others.
+  collectPaths(pick) {
     const out = [];
     let files;
     try {
@@ -185,9 +210,7 @@ class MessageStore {
       }
       if (!Array.isArray(list)) continue;
       for (const m of list) {
-        if (m && m.kind === 'file' && m.file && typeof m.file.path === 'string' && m.file.path) {
-          out.push(m.file.path);
-        }
+        if (m) out.push(...pick(m));
       }
     }
     return out;

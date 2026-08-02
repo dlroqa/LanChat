@@ -972,3 +972,145 @@ test('two questions to one shared agent are answered in the order they were aske
   assert.equal(second.peerId, entry.id, 'and the second to the second');
   assert.equal(entry.pending.length, 0, 'with nothing left outstanding');
 });
+
+// ------------------------------------------------ the pictures an answer carries
+
+// A 1x1 PNG, so what is named is a file a browser would really decode.
+const PIXEL_PNG = Buffer.from(
+  '89504e470d0a1a0a0000000d494844520000000100000001080600000' +
+    '01f15c4890000000a49444154789c6360000002000100ffff03000006000557bfabd40000000049454e44ae426082',
+  'hex'
+);
+
+test('a picture an agent named reaches the session that asked, ready to be drawn', async () => {
+  const A = makeNode('picture');
+  const png = path.join(A.dir, 'graph.png');
+  fs.writeFileSync(png, PIXEL_PNG);
+
+  const { agent } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  const session = A.call('lanchat:createSession', { title: 'quakes', agentId: agent.id });
+
+  // The echo transport answers with `echo:` + the question, so a question with
+  // the marker on a line of its own comes back with it on a line of its own —
+  // which is exactly the shape a real agent's answer arrives in.
+  A.call('lanchat:sendChat', { peerId: session.id, text: `draw it\nMEDIA:${png}` });
+  await waitFor(() => A.store.read(session.id).length === 2, 5000, 'the answer to land');
+
+  const answer = A.store.read(session.id)[1];
+  assert.deepEqual(
+    answer.media,
+    [{ name: 'graph.png', path: png, size: PIXEL_PNG.length, mime: 'image/png' }],
+    'the session branch carries the pictures through, field by field like the rest'
+  );
+  assert.equal(answer.text, 'echo:draw it', 'and the marker that named it is gone from the words');
+});
+
+test('a picture cannot be claimed from the wire', async () => {
+  const A = makeNode('claim');
+  const png = path.join(A.dir, 'private.png');
+  fs.writeFileSync(png, PIXEL_PNG);
+  const media = [{ name: 'private.png', path: png, size: PIXEL_PNG.length, mime: 'image/png' }];
+
+  // A path on a message is a path the window fetches back and draws. Honouring
+  // one a peer sent would be letting somebody else choose which files on this
+  // machine appear on this screen, so the field is refused exactly the way
+  // `notice` and `error` are — behind the Symbol, which JSON.parse cannot make.
+  A.bus.emit('peer-message', { from: 'peer-1', type: 'chat', text: 'look at this', media, ts: Date.now() });
+  const [fromPeer] = A.store.read('peer-1');
+  assert.equal(fromPeer.text, 'look at this', 'what they said is still stored');
+  assert.equal(fromPeer.media, undefined, 'what they claimed about our disk is not');
+
+  A.bus.emit('peer-message', {
+    from: 'peer-1',
+    type: 'chat',
+    text: 'from an agent here',
+    media,
+    ts: Date.now(),
+    [LOCAL_ORIGIN]: true,
+  });
+  assert.deepEqual(A.store.read('peer-1')[1].media, media, 'and a local agent is still believed');
+});
+
+test('a picture the person at the keyboard names is theirs alone, and their words are untouched', async () => {
+  const A = makeNode('typed');
+  const png = path.join(A.dir, 'holiday.png');
+  fs.writeFileSync(png, PIXEL_PNG);
+
+  const sent = [];
+  A.hub.send = (peerId, frame) => (sent.push({ peerId, frame }), true);
+
+  const typed = `look at this\n\nMEDIA:${png}\n\nisn't it good`;
+  A.call('lanchat:sendChat', { peerId: 'peer-1', text: typed });
+
+  const stored = A.store.read('peer-1')[0];
+  assert.equal(stored.text, typed, 'nothing is taken out of a message somebody wrote');
+  assert.equal(sent[0].frame.text, typed, 'and what was sent is what was kept');
+  assert.deepEqual(stored.media, [
+    { name: 'holiday.png', path: png, size: PIXEL_PNG.length, mime: 'image/png' },
+  ]);
+});
+
+test('a picture an agent made never crosses the wire, over a real socket', async (t) => {
+  // The one part of this that a single-process test cannot answer. An agent that
+  // draws something names a file on the machine it is running on; a peer asking
+  // that agent from across the network has no such file and no way to read it,
+  // so what must arrive on their side is the words and nothing else. Proved here
+  // over two nodes and a real socket rather than reasoned about, because
+  // "the path is not in the frame" is a claim about what is actually sent.
+  const A = makeNode('owner-media', await freePort());
+  const B = makeNode('asker-media', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const png = path.join(A.dir, 'graph.png');
+  fs.writeFileSync(png, PIXEL_PNG);
+
+  const idA = A.getIdentity().id;
+  const idB = B.getIdentity().id;
+  const { agent } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  await A.agentHub.setSharing(agent.id, { networkWide: true, directChat: true });
+  await connect(B, A);
+
+  const remoteId = await waitFor(
+    () => [...B.hub.identities.keys()].find((k) => k.startsWith(`remote-agent:${idA}:${agent.id}`)),
+    5000,
+    "B to be told about A's agent"
+  );
+
+  // The echo transport answers with `echo:` and the question, so asking with the
+  // marker on a line of its own is how the agent comes to name a file.
+  const session = B.call('lanchat:createSession', { title: 'quakes', agentId: remoteId });
+  B.call('lanchat:sendChat', { peerId: session.id, text: `draw it\nMEDIA:${png}` });
+
+  await waitFor(
+    () => B.store.read(session.id).some((m) => m.direction === 'in'),
+    5000,
+    'the answer to come back into the session'
+  );
+
+  // A's side: the owner of the machine the file is on sees the picture.
+  const mine = A.store.read(`${agent.id}#${idB}`).find((m) => m.direction === 'in' && m.media);
+  assert.ok(mine, 'the owner gets the picture their own agent made');
+  assert.equal(mine.media[0].path, png);
+
+  // B's side: the words, and not one byte about A's filesystem. Asserted on the
+  // message that arrived rather than on the whole thread — B's own question is
+  // in there too, and it says whatever B typed, which here happens to be a path.
+  const theirs = B.store.read(session.id).find((m) => m.direction === 'in');
+  assert.equal(theirs.media, undefined, 'no path arrives on the asking machine');
+  assert.equal(theirs.text, 'echo:draw it', 'and the marker naming it did not travel either');
+  assert.ok(!JSON.stringify(theirs).includes(png), 'nothing of the path is anywhere in what arrived');
+
+  // And the question B typed is the other half of the same rule: the same string
+  // naming a file that exists on A and not on B resolves to nothing here. A path
+  // is only ever a picture on the machine the file is actually on.
+  const asked = B.store.read(session.id).find((m) => m.direction === 'out');
+  assert.ok(asked.text.includes(png), 'B still said what B said');
+  assert.equal(asked.media, undefined, 'but a path that is not on this machine is just text');
+});

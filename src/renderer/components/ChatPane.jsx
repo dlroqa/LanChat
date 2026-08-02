@@ -39,6 +39,10 @@ export default function ChatPane({
   // when the user has previews turned off).
   onOpenLink,
   linkPreview,
+  // A link that is itself a picture: fetched in main, and saved into the
+  // downloads folder from the button under it.
+  previewImage,
+  onSaveImage,
   onSend,
   onAttach,
   onTyping,
@@ -454,6 +458,8 @@ export default function ChatPane({
                   onReveal={onRevealFile}
                   onOpenLink={onOpenLink}
                   linkPreview={linkPreview}
+                  previewImage={previewImage}
+                  onSaveImage={onSaveImage}
                   onPreviewShown={keepAtBottom}
                   // Branching off a bubble is offered where there is something
                   // that can answer: a session, and the agent threads a session

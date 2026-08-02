@@ -81,6 +81,15 @@ function createServer({
   if (windows && store && typeof store.filePaths === 'function') {
     for (const p of store.filePaths()) allowPreview(p);
   }
+  // Every platform: so do the pictures an agent made and the ones a message
+  // named. Those were never in the allowlist to begin with — nothing sent them
+  // and nothing received them — so unlike the loop above this is not a rebuild
+  // confined to one platform, it is the only way a picture already in a thread
+  // survives a restart anywhere. Still nothing wider: main wrote these paths
+  // down only after checking each one (see media.js).
+  if (store && typeof store.mediaPaths === 'function') {
+    for (const p of store.mediaPaths()) allowPreview(p);
+  }
 
   // The least a stranger needs in order to decide whether to dial us: an id, a
   // port, the protocol we speak and the key we will prove we hold. It used to
@@ -112,17 +121,7 @@ function createServer({
     const rawName = decodeURIComponent(req.headers['x-lanchat-filename'] || 'file');
     const declaredSize = Number(req.headers['x-lanchat-size'] || 0);
 
-    // Sanitize the filename and avoid collisions.
-    const safeBase = path.basename(rawName).replace(/[^\w.\- ]+/g, '_') || 'file';
-    fs.mkdirSync(downloadsDir, { recursive: true });
-    let dest = path.join(downloadsDir, safeBase);
-    let i = 1;
-    while (fs.existsSync(dest)) {
-      const ext = path.extname(safeBase);
-      const stem = safeBase.slice(0, safeBase.length - ext.length);
-      dest = path.join(downloadsDir, `${stem} (${i})${ext}`);
-      i += 1;
-    }
+    const dest = uniqueDest(downloadsDir, rawName);
 
     const out = fs.createWriteStream(dest);
     let received = 0;
@@ -413,6 +412,32 @@ function createServer({
   return { start, stop };
 }
 
+// Where a file arriving from outside is written: inside the downloads folder,
+// under a name that cannot climb out of it and cannot overwrite what is already
+// there. `basename` is what stops "../../.bashrc" from being a filename, and the
+// numbered suffix is what stops the second photo called "graph.png" from
+// erasing the first.
+//
+// Shared with saveImage in ipc.js: a picture fetched from the web lands in the
+// same folder, under the same rules, as one a peer sent.
+function uniqueDest(dir, rawName) {
+  // Trimmed before the fallback, so a name that is nothing but spaces takes it
+  // too. A file really can be called "  " on most filesystems, and one that is
+  // invisible in every listing is worse than one plainly called `file`.
+  const named = path.basename(String(rawName || ''));
+  const safeBase = named.replace(/[^\w.\- ]+/g, '_').trim() || 'file';
+  fs.mkdirSync(dir, { recursive: true });
+  const ext = path.extname(safeBase);
+  const stem = safeBase.slice(0, safeBase.length - ext.length);
+  let dest = path.join(dir, safeBase);
+  let i = 1;
+  while (fs.existsSync(dest)) {
+    dest = path.join(dir, `${stem} (${i})${ext}`);
+    i += 1;
+  }
+  return dest;
+}
+
 // Node reports IPv4 connections on a dual-stack socket in IPv4-mapped IPv6 form
 // ("::ffff:192.168.1.5"). Strip that back to a plain address so it can be used
 // as an HTTP host and compared against addresses learned from discovery.
@@ -423,4 +448,4 @@ function normalizeIp(addr) {
   return plain.includes(':') ? `[${plain}]` : plain;
 }
 
-module.exports = { createServer, normalizeIp };
+module.exports = { createServer, normalizeIp, uniqueDest };

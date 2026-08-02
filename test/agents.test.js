@@ -2136,3 +2136,118 @@ test('a real ACP agent starts under a named profile, and says so when the name i
     await bad.stop();
   }
 });
+
+// ---- pictures an agent made ----
+//
+// An agent that draws a chart has, until now, had no way to hand it over: it
+// named the file and the name arrived as grey text with the picture sitting
+// unreachable beside it. reply() is the one place its output becomes a message,
+// so it is the one place that asks — and the one place that decides how far a
+// path is allowed to travel, which is not far at all.
+
+// A hub whose agent always answers with the same thing, so what reply() does to
+// that answer can be asserted exactly.
+function sayingHub(reply) {
+  const dir = tmpdir('media');
+  const bus = new EventEmitter();
+  const hub = new PeerHub({ getIdentity: () => ({ id: 'me', name: 'Me' }), bus });
+  const agentHub = createAgentHub({
+    userDataDir: dir,
+    hub,
+    bus,
+    store: new MessageStore(dir),
+    safeStorage: fakeSafeStorage,
+    transports: {
+      http: ({ id, name }) => ({
+        id,
+        name,
+        kind: 'stub',
+        start: async () => ({ detail: 'stub ready' }),
+        send: async (_msg, h) => h.onDone?.({ text: reply }),
+        stop: async () => {},
+      }),
+    },
+  });
+  return { dir, bus, hub, agentHub };
+}
+
+const PIXEL_PNG = Buffer.from(
+  '89504e470d0a1a0a0000000d494844520000000100000001080600000' +
+    '01f15c4890000000a49444154789c6360000002000100ffff03000006000557bfabd40000000049454e44ae426082',
+  'hex'
+);
+
+test('a picture an agent names is carried on the message and allowed for preview', async () => {
+  const dir = tmpdir('shot');
+  const png = path.join(dir, 'graph.png');
+  fs.writeFileSync(png, PIXEL_PNG);
+
+  const said = `Here is the picture graph.\n\nMEDIA:${png}\n\n[Download the full-size PNG graph](sandbox:${png})`;
+  const { hub, bus, agentHub } = sayingHub(said);
+  const { agent } = await agentHub.add({ name: 'Tessie', kind: 'http', config: {} });
+
+  const allowed = [];
+  bus.on('allow-preview', (p) => allowed.push(p));
+  const seen = [];
+  bus.on('peer-message', (m) => seen.push(m));
+
+  hub.send(agent.id, { type: 'chat', text: 'draw me a graph' });
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(seen.length, 1);
+  assert.deepEqual(seen[0].media, [
+    { name: 'graph.png', path: png, size: PIXEL_PNG.length, mime: 'image/png' },
+  ]);
+  assert.deepEqual(allowed, [png], 'the endpoint is told about this file and no other');
+  // The bare marker was machinery and the picture has taken its place; the link
+  // was words somebody wrote and is still there to be read.
+  const kept = `Here is the picture graph.\n\n[Download the full-size PNG graph](sandbox:${png})`;
+  assert.equal(seen[0].text, kept);
+});
+
+test('a path an agent names that is not a picture is left as the text it always was', async () => {
+  const dir = tmpdir('notshot');
+  const secret = path.join(dir, 'id_rsa');
+  fs.writeFileSync(secret, 'PRIVATE KEY');
+
+  const said = `MEDIA:${secret}`;
+  const { hub, bus, agentHub } = sayingHub(said);
+  const { agent } = await agentHub.add({ name: 'Tessie', kind: 'http', config: {} });
+
+  const allowed = [];
+  bus.on('allow-preview', (p) => allowed.push(p));
+  const seen = [];
+  bus.on('peer-message', (m) => seen.push(m));
+
+  hub.send(agent.id, { type: 'chat', text: 'what is my key' });
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(seen[0].media, undefined, 'nothing is claimed to be a picture');
+  assert.deepEqual(allowed, [], 'and nothing at all is allowed for preview');
+  assert.equal(seen[0].text, said, 'the marker is still exactly what the agent said');
+});
+
+test('the paths stay on this machine: a peer gets the words, never the filesystem', async () => {
+  const dir = tmpdir('relay');
+  const png = path.join(dir, 'graph.png');
+  fs.writeFileSync(png, PIXEL_PNG);
+
+  const said = `Here it is.\n\nMEDIA:${png}`;
+  const { hub, agentHub } = sayingHub(said);
+  await agentHub.add({ name: 'Tessie', kind: 'http', config: {}, allowedPeers: ['friend'] });
+
+  const relayed = [];
+  hub.send = (peerId, obj) => {
+    relayed.push({ peerId, obj });
+    return true;
+  };
+
+  assert.equal(agentHub.routeFromPeer('friend', '@Tessie draw me a graph'), true);
+  await new Promise((r) => setImmediate(r));
+
+  const reply = relayed.find((r) => r.obj.type === 'agent-reply');
+  assert.ok(reply, 'the peer is answered');
+  assert.equal(reply.obj.media, undefined, 'a path here would name a machine they cannot reach');
+  assert.equal(reply.obj.text, 'Here it is.', 'and the marker naming it does not travel either');
+  assert.ok(!JSON.stringify(reply.obj).includes(png), 'the path appears nowhere in the frame');
+});

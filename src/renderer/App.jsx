@@ -1232,6 +1232,16 @@ export default function App() {
     () => (config.linkPreviews === false ? undefined : (url) => api.linkPreview(url)),
     [config.linkPreviews]
   );
+  // A link that is a picture, drawn in the bubble. Behind the same setting and
+  // for the same reason — it is the one that decides whether a message can cause
+  // this machine to reach a remote host — so `undefined` with previews off is
+  // again what keeps the bubbles from ever asking. Saving one is a button press
+  // rather than something that happens on its own, so it is always offered.
+  const fetchImagePreview = useMemo(
+    () => (config.linkPreviews === false ? undefined : (url) => api.previewImage(url)),
+    [config.linkPreviews]
+  );
+  const saveImage = (url) => api.saveImage(url);
 
   // --- Actions ---
   async function saveProfile(profile) {
@@ -1754,6 +1764,8 @@ export default function App() {
           canFind={config.findSessionsOnly ? selectedPeer?.kind === 'session' : true}
           onOpenLink={openLink}
           linkPreview={fetchLinkPreview}
+          previewImage={fetchImagePreview}
+          onSaveImage={saveImage}
           draft={draft && draft.threadId === selectedId ? draft : null}
           docs={attachments[selectedId] || EMPTY_DOCS}
           onRemoveDoc={(docPath) => removeAttachment(selectedId, docPath)}

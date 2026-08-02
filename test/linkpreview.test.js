@@ -391,3 +391,102 @@ test('a link that is not a web link never becomes a request', async () => {
     assert.match(res.reason, /not a web link/);
   }
 });
+
+// -------------------------------------------------------- a link that is a photo
+//
+// A picture linked to in a message is drawn in the bubble rather than left as a
+// URL, and it goes down the same road as everything else here: fetched in main,
+// checked, handed over as bytes. The window never reaches a remote host itself,
+// so the one thing that must never appear is an <img> pointed at a stranger.
+
+test('a picture in a message is fetched once and handed over as bytes', async () => {
+  const site = await serve((_req, res) => {
+    res.writeHead(200, { 'content-type': 'image/png', 'content-length': PNG.length });
+    res.end(PNG);
+  });
+  try {
+    const previews = createLinkPreview({ allowPrivate: true });
+    const first = await previews.image(`${site.origin}/a.png`);
+    assert.equal(first.ok, true, first.reason);
+    assert.ok(first.image.startsWith('data:image/'), 'a data URL, so the window never connects anywhere');
+
+    const again = await previews.image(`${site.origin}/a.png`);
+    assert.deepEqual(again, first);
+    assert.equal(site.hits.length, 1, 'a picture already fetched is not fetched again');
+  } finally {
+    await site.close();
+  }
+});
+
+test('a card and a picture of the same link are two different questions', async () => {
+  const site = await serve((req, res) => {
+    if (req.url.endsWith('.png')) {
+      res.writeHead(200, { 'content-type': 'image/png', 'content-length': PNG.length });
+      return res.end(PNG);
+    }
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end(page({ title: 'A page' }));
+  });
+  try {
+    const previews = createLinkPreview({ allowPrivate: true });
+    const card = await previews.get(`${site.origin}/a.png`);
+    const shot = await previews.image(`${site.origin}/a.png`);
+    // The same URL asked two ways: one wants a page and does not get one, the
+    // other wants a picture and does. Sharing a cache key would have let the
+    // first answer stand in for the second.
+    assert.equal(card.ok, false, 'a PNG is not a web page');
+    assert.equal(shot.ok, true, shot.reason);
+  } finally {
+    await site.close();
+  }
+});
+
+test('a link that is not a picture does not become one', async () => {
+  const site = await serve((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end(page({ title: 'Not a picture' }));
+  });
+  try {
+    const previews = createLinkPreview({ allowPrivate: true });
+    assert.equal((await previews.image(`${site.origin}/x`)).ok, false);
+    assert.equal((await previews.bytes(`${site.origin}/x`)).ok, false);
+  } finally {
+    await site.close();
+  }
+});
+
+test('saving a picture reads the real bytes, not the thumbnail of them', async () => {
+  const site = await serve((_req, res) => {
+    res.writeHead(200, { 'content-type': 'image/png', 'content-length': PNG.length });
+    res.end(PNG);
+  });
+  try {
+    const previews = createLinkPreview({ allowPrivate: true });
+    const saved = await previews.bytes(`${site.origin}/a.png`);
+    assert.equal(saved.ok, true, saved.reason);
+    assert.deepEqual(saved.body, PNG, 'what lands on disk is what the server served');
+    assert.equal(saved.type, 'image/png');
+
+    // Deliberately outside the cache: megabytes of a picture somebody asked for
+    // once have no business displacing the cards.
+    await previews.bytes(`${site.origin}/a.png`);
+    assert.equal(site.hits.length, 2);
+  } finally {
+    await site.close();
+  }
+});
+
+test('nothing on our own network can be fetched or saved as a picture', async () => {
+  const site = await serve((_req, res) => {
+    res.writeHead(200, { 'content-type': 'image/png' });
+    res.end(PNG);
+  });
+  try {
+    const previews = createLinkPreview(); // the real guard
+    assert.equal((await previews.image(`${site.origin}/a.png`)).ok, false);
+    assert.equal((await previews.bytes(`${site.origin}/a.png`)).ok, false);
+    assert.deepEqual(site.hits, [], 'the request never left this machine');
+  } finally {
+    await site.close();
+  }
+});

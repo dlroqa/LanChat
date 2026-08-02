@@ -35,6 +35,11 @@ const MAX_HTML_BYTES = 512 * 1024;
 const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 // A thumbnail wide enough for the card at 2x, and small enough to keep in memory.
 const THUMB_WIDTH = 480;
+// A photo in a bubble is shown at up to 320px wide (see .file-media in
+// styles.css), so this is the same 2x reasoning one size up: enough that the
+// picture is not soft on a retina screen, not so much that a data URL of it is
+// heavier than the fetch that produced it.
+const PHOTO_WIDTH = 640;
 // A png this small is passed through untouched, so a logo keeps its transparency.
 const PNG_PASSTHROUGH_BYTES = 200 * 1024;
 
@@ -277,7 +282,7 @@ function parseMetadata(html, baseUrl) {
 // Downscaled in the main process, then handed over as a data URL. Electron's
 // nativeImage does the resizing; without it (unit tests) a small image is passed
 // through and a large one is dropped rather than shipped whole to the renderer.
-function toThumbnail(buf, type) {
+function toThumbnail(buf, type, maxWidth = THUMB_WIDTH) {
   const isPng = type.includes('png') && buf.length <= PNG_PASSTHROUGH_BYTES;
   let nativeImage = null;
   try {
@@ -292,8 +297,8 @@ function toThumbnail(buf, type) {
     let img = nativeImage.createFromBuffer(buf);
     if (img.isEmpty()) return null;
     const { width } = img.getSize();
-    if (isPng && width <= THUMB_WIDTH) return `data:image/png;base64,${buf.toString('base64')}`;
-    if (width > THUMB_WIDTH) img = img.resize({ width: THUMB_WIDTH, quality: 'good' });
+    if (isPng && width <= maxWidth) return `data:image/png;base64,${buf.toString('base64')}`;
+    if (width > maxWidth) img = img.resize({ width: maxWidth, quality: 'good' });
     return `data:image/jpeg;base64,${img.toJPEG(78).toString('base64')}`;
   } catch {
     return null;
@@ -319,6 +324,42 @@ function createLinkPreview({ version = '0', allowPrivate = false, now = () => Da
     // Oldest first: Map preserves insertion order, and every write re-inserts.
     while (cache.size > MAX_CACHE_ENTRIES) cache.delete(cache.keys().next().value);
     return value;
+  }
+
+  // One fetch, deduplicated and remembered. Two bubbles holding the same link
+  // scrolling into view together is one request, and a card and a photo of the
+  // same URL are two different questions — hence the key rather than the url.
+  function once(key, load) {
+    const hit = cache.get(key);
+    if (hit && now() - hit.at < hit.ttl) return Promise.resolve(hit.value);
+    if (hit) cache.delete(key);
+    if (inflight.has(key)) return inflight.get(key);
+
+    const run = load()
+      .then((value) => remember(key, value, OK_TTL_MS))
+      .catch((err) => remember(key, { ok: false, reason: err.message }, FAIL_TTL_MS))
+      .finally(() => inflight.delete(key));
+    inflight.set(key, run);
+    return run;
+  }
+
+  // The bytes of a picture, fetched here rather than in the window.
+  //
+  // The window never reaches a remote host itself — that is the whole shape of
+  // this file — so an <img src="https://…"> in a bubble would be a message
+  // deciding, on its own, that this machine should connect somewhere. It goes
+  // through the same guarded fetch as everything else: public hosts only,
+  // re-checked on every redirect, and a hard ceiling on how much is read.
+  async function loadImage(url) {
+    const shot = await fetchGuarded(url, {
+      headers: { ...headers, Accept: 'image/*' },
+      limit: MAX_IMAGE_BYTES,
+      allowPrivate,
+    });
+    if (!shot.type.startsWith('image/')) throw new Error('not a picture');
+    const image = toThumbnail(shot.body, shot.type, PHOTO_WIDTH);
+    if (!image) throw new Error('could not be read as a picture');
+    return { ok: true, url: shot.url, image };
   }
 
   async function load(url) {
@@ -356,17 +397,32 @@ function createLinkPreview({ version = '0', allowPrivate = false, now = () => Da
     async get(raw) {
       const url = normalizeWebUrl(raw);
       if (!url) return { ok: false, reason: 'not a web link' };
-      const hit = cache.get(url);
-      if (hit && now() - hit.at < hit.ttl) return hit.value;
-      if (hit) cache.delete(url);
-      if (inflight.has(url)) return inflight.get(url);
-
-      const run = load(url)
-        .then((value) => remember(url, value, OK_TTL_MS))
-        .catch((err) => remember(url, { ok: false, reason: err.message }, FAIL_TTL_MS))
-        .finally(() => inflight.delete(url));
-      inflight.set(url, run);
-      return run;
+      return once(`card:${url}`, () => load(url));
+    },
+    // The same contract, for a link that is itself a picture: a data URL the
+    // bubble can draw, or a reason it cannot.
+    async image(raw) {
+      const url = normalizeWebUrl(raw);
+      if (!url) return { ok: false, reason: 'not a web link' };
+      return once(`image:${url}`, () => loadImage(url));
+    },
+    // The picture as it actually is, for saving it. Deliberately outside the
+    // cache: this is a thing somebody asked for once, and megabytes of it have
+    // no business displacing the cards.
+    async bytes(raw) {
+      const url = normalizeWebUrl(raw);
+      if (!url) return { ok: false, reason: 'not a web link' };
+      try {
+        const shot = await fetchGuarded(url, {
+          headers: { ...headers, Accept: 'image/*' },
+          limit: MAX_IMAGE_BYTES,
+          allowPrivate,
+        });
+        if (!shot.type.startsWith('image/')) return { ok: false, reason: 'not a picture' };
+        return { ok: true, url: shot.url, body: shot.body, type: shot.type };
+      } catch (err) {
+        return { ok: false, reason: err.message };
+      }
     },
     clear() {
       cache.clear();

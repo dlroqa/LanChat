@@ -11,6 +11,7 @@ const { createCommandTransport } = require('./transports/command');
 const { createAcpTransport } = require('./transports/acp');
 const { createSshTransport } = require('./transports/ssh');
 const { heldLine, rotatedLine, busyLine } = require('./turnCopy');
+const { resolveMedia } = require('../media');
 
 // AgentHub owns the lifecycle of connected agents.
 //
@@ -644,10 +645,33 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     // top of the run; the expression below is what it falls back to for a caller
     // that has no run behind it.
     const threadId = into || (origin ? delegateIdFor(agentId, origin) : agentId);
+    // The pictures this reply is talking about.
+    //
+    // This is the one place an agent's output becomes a message, so it is the
+    // one place that has to ask. A bare `MEDIA:` line is how an agent announces
+    // what it made — machinery rather than words — so it comes out of the text
+    // and the picture takes its place; a markdown link keeps its label, which is
+    // something somebody wrote.
+    //
+    // Asked of `text` rather than of the local copy below, so the stripping
+    // happens once and both copies are built from a message that has already
+    // had its markers taken out. A peer reading a `MEDIA:` line naming a folder
+    // on this machine learns the shape of a filesystem they cannot reach and
+    // gains nothing they could use.
+    //
+    // Allowing each path is what lets the window fetch it back over the local
+    // preview endpoint, and it is the narrowest thing that can be allowed: main
+    // has already checked that each path is absolute, that it is a file that
+    // exists, and that it is a photo, a clip or a sound (see media.js).
+    const { text: said, media } = resolveMedia(text, { strip: true });
+    for (const item of media) bus.emit('allow-preview', item.path);
     // `detail` is local-only, so it is folded into the copy kept here and left
     // out of the frame below. The two must never be built from one string.
-    const localText = detail ? `${text} ${detail}` : text;
+    const localText = detail ? `${said} ${detail}` : said;
     const message = { from: threadId, type: 'chat', id: crypto.randomUUID(), text: localText, ts: Date.now() };
+    // The paths stay here. They name files on this machine, so there is nothing
+    // for the peer's copy below to do with them but 404.
+    if (media.length) message.media = media;
     // Who said it. Carried on the local frame only — the wire frame below already
     // names the agent, and a thread that is an agent needs no label because the
     // thread *is* the answer to "who".
@@ -682,7 +706,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
         type: 'agent-reply',
         agentId,
         name: nameOf(agentId),
-        text,
+        text: said,
         ts: Date.now(),
         ...(!keep && { notice: true }),
         ...(error && { error: true }),

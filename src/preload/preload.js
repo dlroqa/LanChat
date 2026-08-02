@@ -117,6 +117,13 @@ contextBridge.exposeInMainWorld('lanchat', {
   openExternal: (url) => invoke('lanchat:openExternal', url),
   linkPreview: (url) => invoke('lanchat:linkPreview', url),
 
+  // A link that is a picture. `previewImage` comes back as a data URL, so the
+  // window draws bytes main has already fetched and checked rather than pointing
+  // an <img> at a stranger's host; `saveImage` puts it in the downloads folder
+  // and hands back where it went, so the button can then reveal it.
+  previewImage: (url) => invoke('lanchat:previewImage', url),
+  saveImage: (url) => invoke('lanchat:saveImage', url),
+
   // Subscribe to main-process events. Returns an unsubscribe function.
   onEvent: (handler) => {
     const listener = (_e, evt) => handler(evt);
