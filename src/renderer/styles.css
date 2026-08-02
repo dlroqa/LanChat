@@ -722,8 +722,20 @@ input:focus-visible {
   text-overflow: ellipsis;
 }
 .peer .name > .tag,
-.peer .name > .queue-dots {
+.peer .name > .queue-dots,
+.peer .name > .session-date {
   flex: 0 0 auto;
+}
+/* When a session was started, beside its name. Quiet on purpose: it is a fact
+   you go looking for, not one that should compete with the title — so it takes
+   the faint colour the subtitle uses and stays lighter than the name it sits
+   next to. Tabular figures keep a column of dates from wobbling. */
+.peer .name > .session-date {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
 }
 .peer .sub {
   font-size: 12px;

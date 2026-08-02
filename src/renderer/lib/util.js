@@ -25,6 +25,20 @@ export function formatDay(ts) {
   return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+// A date on its own, in the numeric form the reader's own locale uses —
+// "7/1/2026" here, "01/07/2026" elsewhere. For labels sat beside something else
+// that has to stay readable, where formatDay()'s "Jul 1, 2026" is too wide and
+// its "Today" is the wrong thing to say: a creation date is a fact about a
+// record, not a relative time that goes stale overnight.
+//
+// Empty for anything that is not a real timestamp, so a record written before
+// the field existed shows nothing rather than "Invalid Date" or 1/1/1970.
+export function formatShortDate(ts) {
+  const d = new Date(ts);
+  if (!ts || Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString([], { year: 'numeric', month: 'numeric', day: 'numeric' });
+}
+
 // Deterministic color for an avatar from an id/name.
 const COLORS = ['#2563eb', '#7c3aed', '#db2777', '#059669', '#d97706', '#0891b2', '#dc2626', '#4f46e5'];
 export function colorFor(key) {

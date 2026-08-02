@@ -4,7 +4,7 @@ import QueueBadge from './QueueBadge.jsx';
 import SidebarSection from './SidebarSection.jsx';
 import SearchScope from './SearchScope.jsx';
 import { Settings, Plus, Refresh, Users, GroupCall, Code, Sessions } from '../lib/icons.jsx';
-import { platformLabel } from '../lib/util.js';
+import { formatShortDate, platformLabel } from '../lib/util.js';
 import { sessionCounsel, sessionSubLine } from '../lib/counselCopy.js';
 import {
   SCOPE_ALL,
@@ -241,6 +241,11 @@ export default function Sidebar({
   // that has gone drops out of the line rather than being counted in it.
   const sessionRow = (s) => {
     const names = sessionCounsel(s, askableAgents).map((a) => a.name);
+    // The day the session was started, beside its name. Sessions are ordered by
+    // when they were last used, so the list itself says nothing about age — and
+    // every session begins life called "New Session", which makes the date the
+    // only thing telling two untitled ones apart until somebody names them.
+    const created = formatShortDate(s.createdAt);
     return (
       <div
         key={s.id}
@@ -253,6 +258,11 @@ export default function Sidebar({
         <div className="meta">
           <div className="name">
             <span className="name-text">{s.title}</span>
+            {created && (
+              <span className="session-date" title={`Created ${new Date(s.createdAt).toLocaleString()}`}>
+                {created}
+              </span>
+            )}
           </div>
           <div className="sub">{sessionSubLine({ allAgents: s.allAgents, names })}</div>
         </div>
