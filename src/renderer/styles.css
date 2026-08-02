@@ -222,6 +222,201 @@ textarea {
   flex-direction: column;
 }
 
+/* ---- the panel's two floors ------------------------------------------------
+   The column names itself, and the ground below the dictation card slides: the
+   Activity Panel, which is everything this column has always shown, and the
+   Task Bar, which is empty for now. The title is the name of the floor showing.
+
+   The dictation card is not on that ground — it sits between the title and the
+   deck and never moves. See SidePanelDeck.jsx for why. */
+.panel-title {
+  margin: 0;
+  padding: 14px 16px 2px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  /* --fg-muted rather than --fg-faint: at 11.5px this is small text, which needs
+     4.5:1, and only the brighter of the two clears that on --bg-2. */
+  color: var(--fg-muted);
+  /* The name changes at the moment the floors start moving, and a word that
+     swaps in place while everything under it slides reads as a glitch. It is
+     keyed on the view, so this runs on each change: the new name arrives with
+     the floor it names, from the direction that floor came from. */
+  animation: panel-title-in 200ms ease-out;
+}
+@keyframes panel-title-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+/* The card carries the panel's top padding in its own margin (see .ptt-bar).
+   With a title above it that margin is a second gap, so it is trimmed back. */
+.panel-title + .ptt-bar {
+  margin-top: 10px;
+}
+
+/* The deck takes the rest of the column and clips it: the floor that is not
+   showing is parked a full height away, and without this it would paint over
+   the sidebar and the composer. `min-height: 0` for the usual flex reason —
+   an item's automatic minimum is its content, which here is a scroller. */
+.panel-deck {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Both floors move together, always by the same distance and on the same curve
+   — the transition lives on the direction (the `.up` block below) rather than
+   on the individual face, because two faces travelling at different speeds
+   would tear apart mid-slide and show the gap between them.
+
+   Transform only: the faces hold the panel's scrollers, and animating height or
+   top would relayout them on every frame. A parked face is `visibility: hidden`
+   as well as clipped, or its content stays in the tab order and is still read
+   out — held off until the slide has finished, so nothing vanishes early. */
+.panel-deck-face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  transform: translateY(calc(var(--slide, 0px) + var(--pull, 0px)));
+  transition:
+    transform 160ms ease-in,
+    visibility 0s;
+}
+.panel-face-tasks {
+  --slide: 100%;
+  visibility: hidden;
+  transition:
+    transform 160ms ease-in,
+    visibility 0s linear 160ms;
+}
+/* Longer going up than coming back: the floor arriving should be watched, the
+   one leaving should get out of the way. The same asymmetry as .sb-body. */
+.panel-deck.up .panel-deck-face {
+  transition:
+    transform 220ms ease-out,
+    visibility 0s;
+}
+.panel-deck.up .panel-face-tasks {
+  --slide: 0px;
+  visibility: visible;
+}
+.panel-deck.up .panel-face-activity {
+  --slide: -100%;
+  visibility: hidden;
+  transition:
+    transform 220ms ease-out,
+    visibility 0s linear 220ms;
+}
+/* Under the finger there is no transition to run — the deck is already exactly
+   where the pointer put it. Last, so it beats both directions above.
+
+   Both floors are visible for the length of the drag, whichever way it is going.
+   The one being pulled into view is still the parked one until the finger lifts,
+   and without this the panel would be dragged up into an empty strip and only
+   fill in once the gesture had been let go of. */
+.panel-deck.dragging .panel-deck-face {
+  transition: none;
+  visibility: visible;
+  will-change: transform;
+}
+
+.panel-grip {
+  flex: 0 0 auto;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  /* A full 44px of target for two 3px bars: the visible part of a grip is never
+     the part you are expected to hit. */
+  height: 44px;
+  padding: 0 0 10px;
+  border: 0;
+  border-top: 1px solid var(--border-soft);
+  background: none;
+  cursor: grab;
+  /* The drag is ours: without this the pointer stream is taken over by the
+     browser's own scroll gesture and text selection halfway through. */
+  touch-action: none;
+  user-select: none;
+}
+.panel-grip:active {
+  cursor: grabbing;
+}
+/* The shared ring sits 1px outside its button, which on a full-width bar at the
+   edge of the window would be clipped by the panel — so this one is drawn just
+   inside instead. */
+.panel-grip:focus-visible {
+  outline-offset: -2px;
+}
+.panel-grip-bars {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.panel-grip-bars > span {
+  width: 28px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+  transition: background 140ms ease-out;
+}
+.panel-grip:hover .panel-grip-bars > span,
+.panel-grip:focus-visible .panel-grip-bars > span {
+  background: var(--fg-muted);
+}
+
+/* The shortcut, on hover and on focus. Absolutely positioned so that showing it
+   cannot change the height of the grip — the deck sits directly above, and a
+   bar that grew on hover would resize the panel under the pointer. */
+.panel-grip-keys {
+  position: absolute;
+  left: 50%;
+  bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, 2px);
+  transition:
+    opacity 150ms ease-out,
+    transform 150ms ease-out;
+}
+.panel-grip:hover .panel-grip-keys,
+.panel-grip:focus-visible .panel-grip-keys {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-deck-face,
+  .panel-face-tasks,
+  .panel-deck.up .panel-deck-face,
+  .panel-deck.up .panel-face-activity {
+    transition: none;
+  }
+  .panel-grip-keys {
+    transform: translate(-50%, 0);
+    transition: opacity 150ms ease-out;
+  }
+  .panel-title {
+    animation: none;
+  }
+}
+
 /* ---------------- Sidebar ---------------- */
 .sidebar {
   background: var(--bg-2);

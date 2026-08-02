@@ -18,6 +18,7 @@ import { CallManager } from './lib/rtc.js';
 import { Ringer, playNotification, playCallEvent, playPttCue, playRejectCue } from './lib/sounds.js';
 import ConnectionPanel from './components/ConnectionPanel.jsx';
 import PttBar from './components/PttBar.jsx';
+import SidePanelDeck from './components/SidePanelDeck.jsx';
 import { PttManager, attachPttKey, defaultPttKey, hasOwnDictationKey } from './lib/ptt.js';
 import { DictationManager, shouldDictate, holdMode, dictateKeyMode, tapAction } from './lib/dictation.js';
 import { toWavBytes } from './lib/wav.js';
@@ -123,6 +124,11 @@ export default function App() {
   const [linkStats, setLinkStats] = useState({}); // peerId -> stats
   const [callFullscreen, setCallFullscreen] = useState(false);
   const [pipMode, setPipMode] = useState(false);
+  // Which floor the right column is standing on. Held here rather than inside
+  // SidePanelDeck because a call unmounts that panel, and the column should come
+  // back where it was left. Nothing resets it on a selection either: picking a
+  // different thread changes what the floors hold, not which one is showing.
+  const [taskBar, setTaskBar] = useState(false);
   const [ptt, setPtt] = useState({ transmitting: false, connecting: false, talkers: [], inboundStreams: [] });
   const [dictation, setDictation] = useState({ phase: 'idle', threadId: null, startedAt: 0, error: null });
   // null = not asked yet, and treated as ready: a check that has not come back
@@ -2044,42 +2050,48 @@ export default function App() {
             onAudioStats={() => callRef.current.getAudioStats()}
           />
         ) : (
-          <>
-            {config.pttEnabled !== false && (
-              <PttBar
+          <SidePanelDeck
+            up={taskBar}
+            onUp={setTaskBar}
+            dictation={
+              config.pttEnabled === false ? null : (
+                <PttBar
+                  peer={selectedPeer}
+                  state={ptt}
+                  keyName={config.pttKey || defaultPttKey()}
+                  customCode={config.pttCustomCode}
+                  dictateKeyName={config.dictationKey}
+                  dictateCustomCode={config.dictationCustomCode}
+                  // The dictate card replaces the radio card wherever dictation is
+                  // what the gesture does — and also, in a person's thread where it
+                  // is not, for as long as a dictation is actually running. Holding
+                  // the dictation key at somebody would otherwise record with the
+                  // panel still showing "Hold ⌘ to talk", which is the one moment
+                  // the user most needs to be told which of the two is happening.
+                  dictation={dictates() || dictation.phase !== 'idle' ? dictation : null}
+                  cliReady={dictationReady}
+                  onHoldStart={holdStart}
+                  onHoldEnd={holdEnd}
+                  onDictateToggle={dictateToggle}
+                />
+              )
+            }
+            activity={
+              <ConnectionPanel
                 peer={selectedPeer}
-                state={ptt}
-                keyName={config.pttKey || defaultPttKey()}
-                customCode={config.pttCustomCode}
-                dictateKeyName={config.dictationKey}
-                dictateCustomCode={config.dictationCustomCode}
-                // The dictate card replaces the radio card wherever dictation is
-                // what the gesture does — and also, in a person's thread where it
-                // is not, for as long as a dictation is actually running. Holding
-                // the dictation key at somebody would otherwise record with the
-                // panel still showing "Hold ⌘ to talk", which is the one moment
-                // the user most needs to be told which of the two is happening.
-                dictation={dictates() || dictation.phase !== 'idle' ? dictation : null}
-                cliReady={dictationReady}
-                onHoldStart={holdStart}
-                onHoldEnd={holdEnd}
-                onDictateToggle={dictateToggle}
+                stats={linkStats[selectedId]}
+                agentStatus={agentStatus[selectedId]}
+                awaiting={Boolean(awaiting[selectedId])}
+                // A session has no presence to read a state off, so the panel is
+                // told the same things the conversation is: main's bracket around
+                // the run, whether any of its agents is mid-sentence, and the count
+                // of what has been asked.
+                typing={Boolean(typing[selectedId])}
+                streaming={selectedStreams.length > 0}
+                commits={selectedCommits}
               />
-            )}
-            <ConnectionPanel
-              peer={selectedPeer}
-              stats={linkStats[selectedId]}
-              agentStatus={agentStatus[selectedId]}
-              awaiting={Boolean(awaiting[selectedId])}
-              // A session has no presence to read a state off, so the panel is
-              // told the same things the conversation is: main's bracket around
-              // the run, whether any of its agents is mid-sentence, and the count
-              // of what has been asked.
-              typing={Boolean(typing[selectedId])}
-              streaming={selectedStreams.length > 0}
-              commits={selectedCommits}
-            />
-          </>
+            }
+          />
         )}
       </aside>
 
