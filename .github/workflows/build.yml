@@ -24,11 +24,20 @@ jobs:
         os: [macos-latest, windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      # Every action here is on the major that runs under Node 24. The runners
+      # stopped shipping Node 20 in September 2025 and have been forcing the old
+      # majors onto 24 since — announced as a temporary kindness, which is not a
+      # thing to build a release on. Nothing in this file uses an input that
+      # changed across those majors; the bumps are runtime and ESM only.
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      # Node 22 rather than 20: Node 20 reached end of life on 2026-04-30, so the
+      # suite had been proving the app works on a runtime that no longer gets
+      # security fixes. 22 is supported to 2027-04-30 and is what the app is
+      # developed against.
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -66,11 +75,11 @@ jobs:
         os: [macos-latest, windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -86,7 +95,7 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - name: Upload installers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lanchat-${{ matrix.os }}
           path: |
@@ -104,11 +113,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      # v8 fails the run on a digest mismatch rather than logging a warning and
+      # carrying on, which is the behaviour worth having here: this job's output
+      # is the file a user downloads and runs.
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: artifacts/**/*
           generate_release_notes: true
