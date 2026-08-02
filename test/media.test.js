@@ -224,16 +224,22 @@ test('drawn in a browser: everything beside the picture says what it is', async 
   assert.ok(live.bubble.w > 300, `the bubble is only ${live.bubble.w}px wide`);
 });
 
-test('drawn in a browser: a link to a picture is drawn as the picture', async () => {
+test('drawn in a browser: a link to a picture is drawn as a clickable picture', async () => {
   const result = await draw();
   if (result.skipped) return;
-  const { remoteBefore, remoteAfter, remoteDrawn, asked, saveRequests, remote } = result;
+  const { remoteBefore, remoteAfter, remoteDrawn, asked, saveRequests, linkRequests, remote } = result;
 
   assert.equal(remoteDrawn, true, 'the picture arrived once the bubble was scrolled to');
   assert.deepEqual(asked, [remote], 'main is asked for the bytes, once');
   assert.ok(remoteBefore.picture, 'and what comes back is drawn');
   assert.equal(remoteBefore.picture.decoded, true);
   assert.equal(remoteBefore.picture.alt, 'quakes.png', 'named after the thing it is');
+  assert.deepEqual(
+    remoteBefore.pictureButton,
+    { name: 'Open quakes.png', tag: 'BUTTON', focusable: true },
+    'and the picture itself is a keyboard-reachable control'
+  );
+  assert.deepEqual(linkRequests, [remote], 'clicking the picture opens its original HTTPS URL');
   assert.equal(remoteBefore.note, 'from the web', 'and honest about where it came from');
 
   // Drawing it must not cost anything the bubble already did.

@@ -195,6 +195,7 @@ export default function MessageBubble({
         <RemoteImages
           urls={imageLinks}
           fetchImage={previewImage}
+          onOpen={onOpenLink}
           onSave={onSaveImage}
           onReveal={onReveal}
           onShown={onPreviewShown}

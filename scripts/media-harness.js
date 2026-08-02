@@ -158,6 +158,7 @@ const media = [{ name: 'recent_worldwide_earthquakes_graph.png', path: SHOT, siz
 const REMOTE = 'https://example.com/photos/quakes.png';
 const asked = [];
 const saveRequests = [];
+const linkRequests = [];
 
 // What the bubble did with what it was given, recorded as it happens.
 const opened = [];
@@ -176,7 +177,7 @@ const shared = {
   previewFallback: false,
   onOpen: (p) => opened.push(p),
   onReveal: (p) => revealed.push(p),
-  onOpenLink: () => {},
+  onOpenLink: (url) => linkRequests.push(url),
 };
 
 const props = (id, withMedia) => ({ ...shared, msg: message(id, withMedia) });
@@ -261,8 +262,12 @@ function readRemote() {
   const box = document.querySelector('#remote');
   const img = box.querySelector('.bubble-media .file-media img');
   const button = box.querySelector('.bubble-media .icon-btn');
+  const pictureButton = box.querySelector('.bubble-media .file-media-open');
   return {
     picture: img ? { ...shown(img), decoded: img.complete && img.naturalWidth > 0, alt: img.getAttribute('alt') } : null,
+    pictureButton: pictureButton
+      ? { name: name(pictureButton), tag: pictureButton.tagName, focusable: pictureButton.tabIndex >= 0 }
+      : null,
     caption: (box.querySelector('.bubble-media .fn') || {}).textContent || null,
     note: (box.querySelector('.bubble-media .fs') || {}).textContent || null,
     button: name(button),
@@ -303,6 +308,8 @@ function readRemote() {
   document.querySelector('#remote').scrollIntoView();
   const remoteDrawn = await until(() => document.querySelector('#remote .bubble-media img'));
   const remoteBefore = readRemote();
+  const remoteOpen = document.querySelector('#remote .bubble-media .file-media-open');
+  if (remoteOpen) remoteOpen.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   const save = document.querySelector('#remote .bubble-media .icon-btn');
   if (save) save.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   await until(() => saveRequests.length > 0);
@@ -319,6 +326,7 @@ function readRemote() {
     remoteDrawn,
     asked,
     saveRequests,
+    linkRequests,
     opened,
     revealed,
     shot: SHOT,

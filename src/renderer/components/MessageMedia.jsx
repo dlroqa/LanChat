@@ -184,7 +184,7 @@ function load(url, fetchImage) {
 // room until there is a picture to put in it — the same two rules the link cards
 // follow, for the same reasons. A link that turns out not to be a picture, or is
 // too big to fetch, simply stays the link it already was.
-function RemoteImage({ url, fetchImage, onSave, onReveal, onShown }) {
+function RemoteImage({ url, fetchImage, onOpen, onSave, onReveal, onShown }) {
   const anchor = useRef(null);
   const [data, setData] = useState(() => cache.get(url) || null);
   // Where it went, once it has been saved. Held per bubble rather than in the
@@ -250,7 +250,18 @@ function RemoteImage({ url, fetchImage, onSave, onReveal, onShown }) {
   return (
     <div className="file-bubble" ref={anchor}>
       <div className="file-media">
-        <img src={data.image} alt={name} draggable="false" />
+        {/* Keep the fetched data URL inside the sandboxed renderer, but make the
+            picture itself open the original HTTPS URL through main. This is the
+            same accessible button used for local pictures: the hand cursor now
+            promises a real action, and keyboard users can reach it too. */}
+        <button
+          className="file-media-open"
+          onClick={() => onOpen?.(url)}
+          aria-label={`Open ${name}`}
+          title="Open full-size image"
+        >
+          <img src={data.image} alt={name} draggable="false" />
+        </button>
       </div>
       <div className="file-row">
         <div className="file-info" style={{ flex: 1 }}>
@@ -288,7 +299,7 @@ function nameFromUrl(url) {
   }
 }
 
-export function RemoteImages({ urls, fetchImage, onSave, onReveal, onShown }) {
+export function RemoteImages({ urls, fetchImage, onOpen, onSave, onReveal, onShown }) {
   if (!urls || urls.length === 0 || !fetchImage) return null;
   return (
     <div className="bubble-media">
@@ -297,6 +308,7 @@ export function RemoteImages({ urls, fetchImage, onSave, onReveal, onShown }) {
           key={url}
           url={url}
           fetchImage={fetchImage}
+          onOpen={onOpen}
           onSave={onSave}
           onReveal={onReveal}
           onShown={onShown}
