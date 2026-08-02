@@ -61,6 +61,22 @@ contextBridge.exposeInMainWorld('lanchat', {
   restoreAllSessions: () => invoke('lanchat:restoreAllSessions'),
   purgeAllSessions: () => invoke('lanchat:purgeAllSessions'),
   sweepSessionErrors: (id, ids) => invoke('lanchat:sweepSessionErrors', { id, ids }),
+
+  // Notes: the Task Bar's own writing, belonging to this machine and to no
+  // conversation. The bodies travel one at a time, on readNote — they are prose
+  // with no bound on it, and a list channel that carried them would send every
+  // word of every note across to draw a column of titles. Deleting sends a note
+  // to a Trash of its own, with the same four ways back out sessions have.
+  listNotes: () => invoke('lanchat:listNotes'),
+  listNoteTrash: () => invoke('lanchat:listNoteTrash'),
+  readNote: (id) => invoke('lanchat:readNote', { id }),
+  createNote: (draft) => invoke('lanchat:createNote', draft || {}),
+  saveNote: (id, patch) => invoke('lanchat:saveNote', { id, ...(patch || {}) }),
+  deleteNote: (id) => invoke('lanchat:deleteNote', { id }),
+  restoreNote: (id) => invoke('lanchat:restoreNote', { id }),
+  purgeNote: (id) => invoke('lanchat:purgeNote', { id }),
+  restoreAllNotes: () => invoke('lanchat:restoreAllNotes'),
+  purgeAllNotes: () => invoke('lanchat:purgeAllNotes'),
   purgeMessages: (id, ids) => invoke('lanchat:purgeMessages', { id, ids }),
   summonAgent: (threadId) => invoke('lanchat:summonAgent', { threadId }),
   sendTyping: (peerId, isTyping) => invoke('lanchat:sendTyping', { peerId, isTyping }),

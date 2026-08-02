@@ -137,6 +137,10 @@ window.lanchat = {
   }),
   listSessions: () => Promise.resolve(live()),
   listTrash: () => Promise.resolve(dead()),
+  // Notes have a Trash of their own, and it is not the one under test here.
+  // Answered so App can mount; empty so nothing of it is in the way.
+  listNotes: () => Promise.resolve([]),
+  listNoteTrash: () => Promise.resolve([]),
   deleteSession: (id) => {
     calls.deleted.push(id);
     const r = find(id);

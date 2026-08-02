@@ -10,6 +10,7 @@ const { LOCAL_ORIGIN: AGENT_LOCAL_ORIGIN } = require('./agents');
 const { createRemoteAgents } = require('./agents/remote');
 const { createSessions, isSessionId } = require('./sessions');
 const { createDictation } = require('./dictation');
+const { NoteStore } = require('./notes');
 const { normalizeWebUrl } = require('./webLinks');
 const { createLinkPreview } = require('./linkPreview');
 const { resolveMedia } = require('./media');
@@ -158,6 +159,11 @@ function createIpc({
   // Speech-to-text through the FluidVoice app on this machine. Nothing of it
   // crosses the wire.
   const dictation = createDictation({ config });
+
+  // Notes: the Task Bar's own writing. Local to this machine, never sent, and
+  // stored in halves — see src/main/notes.js for why the bodies are not in the
+  // list.
+  const notes = new NoteStore(userDataDir);
 
   // Threads that exist only on this machine. Nothing off the wire may claim one.
   function isLocalThreadId(id) {
@@ -778,6 +784,80 @@ function createIpc({
     return { ok: true, count };
   });
 
+  // ---- notes ----
+  //
+  // The Task Bar's first view. A note has no peer, no thread and no presence:
+  // it is this machine's own writing, and none of it goes anywhere.
+  //
+  // The bodies travel one at a time, on `readNote`. A list channel that carried
+  // them would send every word of every note across the bridge to draw a column
+  // of titles — and the whole reason the store is split in two is so that never
+  // has to happen.
+
+  // Both lists, always together, for the reason publishSessions gives: every
+  // change that matters moves a record from one of them to the other, and
+  // publishing one without the other is how a note ends up in two places or in
+  // neither.
+  function publishNotes() {
+    emit('notes', notes.list());
+    emit('noteTrash', notes.trashed());
+  }
+
+  ipcMain.handle('lanchat:listNotes', () => notes.list());
+  ipcMain.handle('lanchat:listNoteTrash', () => notes.trashed());
+  ipcMain.handle('lanchat:readNote', (_e, { id }) => notes.read(id));
+
+  ipcMain.handle('lanchat:createNote', (_e, draft) => {
+    const record = notes.create(draft || {});
+    publishNotes();
+    return record;
+  });
+
+  // The editor's save, and the one call in this file that is expected to arrive
+  // several times a second. It publishes only when the record actually moved —
+  // see notes.js: a body-only save inside the coalescing window leaves the
+  // metadata alone, and republishing an unchanged list would undo the point of
+  // that by re-rendering the column on every keystroke instead.
+  ipcMain.handle('lanchat:saveNote', (_e, { id, title, body, final }) => {
+    const before = notes.get(id);
+    const at = before ? before.updatedAt : null;
+    const record = notes.save(id, { title, body, final });
+    if (record && record.updatedAt !== at) publishNotes();
+    return record;
+  });
+
+  ipcMain.handle('lanchat:deleteNote', (_e, { id }) => {
+    const ok = notes.trash(id);
+    if (ok) publishNotes();
+    return { ok };
+  });
+
+  ipcMain.handle('lanchat:restoreNote', (_e, { id }) => {
+    const ok = notes.restore(id);
+    if (ok) publishNotes();
+    return { ok };
+  });
+
+  // The irreversible one. The window asks first; this end only does as it is
+  // told, because a confirmation belongs where the person is.
+  ipcMain.handle('lanchat:purgeNote', (_e, { id }) => {
+    const ok = notes.purge(id);
+    if (ok) publishNotes();
+    return { ok };
+  });
+
+  ipcMain.handle('lanchat:restoreAllNotes', () => {
+    const count = notes.restoreAll();
+    if (count) publishNotes();
+    return { ok: true, count };
+  });
+
+  ipcMain.handle('lanchat:purgeAllNotes', () => {
+    const count = notes.purgeAll();
+    if (count) publishNotes();
+    return { ok: true, count };
+  });
+
   // Clearing out errors an older version wrote into a session's history.
   //
   // The ids come from the window, which is where the person was asked whether
@@ -1329,7 +1409,7 @@ function createIpc({
     return { sent };
   }
 
-  return { emit };
+  return { emit, notes };
 }
 
 const MAX_AVATAR_BYTES = 96 * 1024;

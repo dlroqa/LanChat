@@ -20,6 +20,7 @@ import ConnectionPanel from './components/ConnectionPanel.jsx';
 import PttBar from './components/PttBar.jsx';
 import SidePanelDeck from './components/SidePanelDeck.jsx';
 import EmptyState from './components/EmptyState.jsx';
+import NotesView from './components/NotesView.jsx';
 import { DEFAULT_TASK_VIEW } from './lib/taskViews.js';
 import { PttManager, attachPttKey, defaultPttKey, hasOwnDictationKey } from './lib/ptt.js';
 import { DictationManager, shouldDictate, holdMode, dictateKeyMode, tapAction } from './lib/dictation.js';
@@ -138,6 +139,11 @@ export default function App() {
   // on the Activity Panel with a view selected underneath that nobody can see,
   // and the first press of the shortcut landing somewhere it was not left.
   const [taskView, setTaskView] = useState(DEFAULT_TASK_VIEW);
+  // The Task Bar's notes, and what has been deleted of them. Metadata only: the
+  // writing lives one file per note in main and is read when one is opened, so
+  // this list stays cheap enough to republish on every change.
+  const [notes, setNotes] = useState([]);
+  const [noteTrash, setNoteTrash] = useState([]);
   const [ptt, setPtt] = useState({ transmitting: false, connecting: false, talkers: [], inboundStreams: [] });
   const [dictation, setDictation] = useState({ phase: 'idle', threadId: null, startedAt: 0, error: null });
   // null = not asked yet, and treated as ready: a check that has not come back
@@ -696,6 +702,10 @@ export default function App() {
       // and kept current by the `sessions` event rather than polled.
       api.listSessions().then((list) => setSessions(list || []));
       api.listTrash().then((list) => setTrash(list || []));
+      // Notes, the same way and for the same reason. Metadata only — the
+      // writing itself is read one note at a time, when one is opened.
+      api.listNotes().then((list) => setNotes(list || []));
+      api.listNoteTrash().then((list) => setNoteTrash(list || []));
       // Windows only: start from whatever has already been measured, rather than
       // an empty panel until the next round trip lands. A window opened from the
       // tray after hours of uptime should not look like a link that has never
@@ -928,6 +938,15 @@ export default function App() {
         // the other.
         case 'trash':
           setTrash(payload || []);
+          break;
+        // The notes on this machine, and what has been deleted of them. Both
+        // arrive together for the reason the two above do: a note leaving one
+        // list is a note arriving in the other.
+        case 'notes':
+          setNotes(payload || []);
+          break;
+        case 'noteTrash':
+          setNoteTrash(payload || []);
           break;
         // Where a session's question stands. Arrives whenever anything about the
         // round changes and once more as it closes; the closed one is what ends
@@ -1891,7 +1910,21 @@ export default function App() {
   // deck: the deck knows there are three named views and how to move between
   // them, and nothing about what a note or a task is.
   const taskBody = {
-    notes: <EmptyState title="No notes yet">Anything you write here stays on this machine.</EmptyState>,
+    notes: (
+      <NotesView
+        notes={notes}
+        trash={noteTrash}
+        onCreate={() => api.createNote({})}
+        onRead={(id) => api.readNote(id)}
+        // Deliberately not awaited, and nothing merged back into the list: main
+        // republishes when the record actually moves, and a keystroke that did
+        // not move it must not re-render the column either.
+        onSave={(id, patch) => api.saveNote(id, patch)}
+        onDelete={(id) => api.deleteNote(id)}
+        onRestore={(id) => api.restoreNote(id)}
+        onPurge={(id) => api.purgeNote(id)}
+      />
+    ),
     agent: <EmptyState title="No tasks yet">Give an agent a standing job and run it from here.</EmptyState>,
     schedule: (
       <EmptyState title="Nothing scheduled">Tasks set to run on their own will be listed here.</EmptyState>
