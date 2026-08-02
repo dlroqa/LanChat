@@ -24,12 +24,17 @@ A simple, peer-to-peer **LAN & Tailscale chat** app — text, voice, video, and 
 | 🎥 **Video calls** | Camera calls with mute / camera toggle and picture-in-picture. |
 | 👥 **Group video calls** | Call several people at once — a direct peer-to-peer mesh, no server. Best for small groups (up to ~5 others). |
 | 📻 **Push to talk** | Hold ⌘ (Ctrl on Windows/Linux) to transmit instantly — walkie-talkie style, no ringing. |
+| 🎤 **Dictation** *(macOS)* | Speak instead of typing, in any thread. Tap the microphone on the side panel or hold a key, and the words land in the message box for you to read before they go. Transcribed on your own Mac by the [FluidVoice](https://github.com/altic-dev/FluidVoice) app, using whichever engine and custom dictionary you set up there — the audio never touches disk and never leaves the machine. |
 | 🎚️ **Source selection** | Choose your microphone and camera — in Settings, or switch live mid-call. |
 | 📺 **Docked call panel** | Video plays portrait in the right panel; one button expands it full screen. |
 | 🪟 **Picture-in-picture** | Minimise during a video call and it shrinks to a floating tile in the top-right corner, always on top. |
 | 📶 **Live connection graphs** | When not in a call, the panel charts real round-trip latency and link quality. |
 | 🤖 **Agents** | Add an AI agent in **Settings → Agents** and it becomes just another thread. Four ways to connect one — **HTTP API** (recommended), **ACP** over stdio, a **local command**, or an **SSH command** on another host. Share yours with people on your network and they reach it *through* you: approvals stay on your machine and are never handed to a peer, and everyone sharing it takes turns. A new agent is local-only until you grant reach, peer by peer. |
 | ✨ **Living agent status** | An agent has no latency worth charting, so it gets the graph's slot to say what it is *doing* — and the row moves while it does. The phrase types itself in under a block cursor, which then sweeps back across the finished word; the pip beside it throws a small firework in a fresh neon colour every burst; and light trails race the width of the row, timed so they fall back into step each time the phrase changes. The moment it finishes, a firework goes off from the middle of the row — neon rays spreading outward to fill it corner to corner, then fading away over a couple of seconds — and then it settles to a slow green-to-cyan wave running from the pip through the word. Behind the text the trails are damped down, so the word stays easily readable while they pass, and **reduce motion** removes the animation entirely rather than freezing it — the words still say everything. |
+| 🗂️ **Sessions** | A workspace on your machine that puts questions to your agents and keeps the answers filed with it, rather than in those agents' own threads. A session can ask several at once: tick the agents you want, or tick **All agents** and it stands as an instruction — one you add next week, or one a peer starts sharing, joins on its own. Ask **all at once** for opinions that have not influenced each other, or **in turn** to let them build on what has already been said. Every answer carries the name of the agent that gave it. |
+| 🗃️ **Sidebar categories** | The left panel is four headings — Sessions, Agents, People, On your tailnet — each keeping its list shut until you point at it, so the panel opens as four words instead of one long scroll. Pin any of them open, drag them into the order you want, and both come back next launch. A shut category with something unread lights its own title until the message is actually read. |
+| 🔎 **Search everything** | One box at the top of the panel searches all four categories at once, matching more than names — hostnames, the system a machine runs, its address, the connector an agent speaks — and saying which part matched when it isn't the one on show. Aim it at a single category with the chip on its left. Results open in the middle panel where there is room to read them, laid over your conversation rather than replacing it, so closing the search puts you back mid-sentence. |
+| 🔦 **Find in a conversation** | ⌘F on a Mac, Ctrl+F elsewhere — or the button beside the thread's name — opens a bar that counts every occurrence and walks them with arrows that wrap at both ends. Every hit is marked, not just the current one, so you can see a word's density in a long thread at a glance; file names and pinned excerpts are searched too. Escape puts it away and leaves the cursor in the composer. **Settings → Conversations** chooses whether every conversation gets the button or only sessions do. |
 | 🔊 **Sound choices** | 6 ringtones + 8 message sounds, each with volume control and a custom-file option — plus an optional bed of music that plays for as long as an agent is working. |
 | 📎 **File sharing** | Send any file, photo, or video — images & clips preview inline. Drag-and-drop supported. |
 | 🔗 **Links** | Links in messages are clickable and open in your own browser, never inside LanChat. LanChat also unfurls the first link in a message into a small card with the page's title, description, and picture — fetched by the app itself (there is no server to do it for you), only for a message you have actually scrolled to, and switched off in **Settings → Privacy** if you would rather nothing left your machine. |
@@ -211,6 +216,40 @@ cancellation, which a hand-rolled UDP sender would not.
 2. **Modifier keys stay usable.** Pressing another key during the hold (⌘C, ⌘V) ends
    transmission, and the key is ignored entirely while you are typing a message.
 
+### Dictation (macOS)
+
+Speak instead of typing, and read it before you send it. LanChat records; the
+[FluidVoice](https://github.com/altic-dev/FluidVoice) app on your Mac transcribes, using
+whichever engine and custom dictionary you have configured over there. The clip goes straight
+from memory to FluidVoice over the loopback address — it is never written to disk and never
+leaves the machine.
+
+**Turning it on.** FluidVoice talks to other apps over a local API that ships switched off and
+has no toggle inside FluidVoice itself. Quit it, run:
+
+```bash
+defaults write com.FluidApp.app LocalAPIEnabled -bool true
+```
+
+then open it again. In LanChat, **Settings → Push to talk → Check** should report
+`Connected — FluidVoice <version>`. Leave the port at **47733** unless you changed it.
+
+> That API has no password. Once it is on, any program running on your Mac can reach it,
+> including your FluidVoice dictation history. It refuses connections from other machines.
+
+**Using it.** In a thread with an agent or a session, tap the 🎤 on the right-hand panel — tap
+once to start, once to stop — or hold the dictation key. The words arrive in the message box, and
+speaking again adds to what is there rather than replacing it. If the card says FluidVoice isn't
+reachable, tapping it checks again; it also re-checks whenever you come back to the window, so
+starting FluidVoice after LanChat sorts itself out.
+
+**Choosing a key.** By default dictation borrows the push-to-talk key, which is why it only works
+in threads where that key has nothing else to do. Give it its own key under **Settings → Push to
+talk → Dictation key** and two things change: push-to-talk goes back to being only the radio, and
+dictation can write into a conversation with a person as well as an agent — there is a toggle for
+that, which stays disabled until the two keys really are different, since one key cannot open the
+radio and start the recorder in the same thread.
+
 ### Talking to people on another tailnet (Tailscale device sharing)
 
 You don't need to be on the same tailnet. Use [Tailscale device sharing](https://tailscale.com/kb/1084/sharing)
@@ -305,6 +344,13 @@ The on/off toggle is a full kill switch: it stops the transport but keeps the co
 
 If the agent needs an API key you can either store it encrypted on this device — sealed with your OS keychain (Keychain, libsecret, or DPAPI), so only ciphertext is written to disk — or have LanChat read it from an environment variable, in which case only the variable *name* is stored and the key never touches disk at all. Either way the key is never sent to the app's UI layer, and never leaves your machine.
 
+### Summoning one
+
+Type `@` in the message box and pick an agent from the menu. **Enter summons it on the spot** —
+nothing is left in the composer, nothing is added to the conversation, and the agent appears on
+the left with its row lit until you open it. **Tab** writes the name out instead, for when the
+mention is the start of a question rather than a summon.
+
 ### Approvals
 
 **Only HTTP and ACP can ask you to approve a tool call.** When the agent wants to run something, a prompt appears on *your* machine and waits for you.
@@ -341,6 +387,34 @@ Switching conversations mid-run does not interrupt it, a call silences it until 
 A custom file must be **Ogg Vorbis or Opus**: both stay small over a loop long enough to work to, and both repeat without a seam, where MP3's encoder padding becomes a small gap every time round.
 
 Building from source, the bundled list is yours: drop audio files into `src/renderer/assets/music/` and rebuild. The file name becomes the name in Settings — `sleepy-island.opus` is listed as "Sleepy island" — so adding a track needs no code change at all. Which one plays by default is the one named thing, `PREFERRED_DEFAULT` in `src/renderer/lib/agentMusicTrack.js`; if that file is absent the first track stands in. With the folder empty the setting says so and the build is otherwise unchanged.
+
+---
+
+## Sessions
+
+A session is a workspace on this machine that puts questions to your agents and files the answers
+with it, rather than in those agents' own threads. Nothing in one goes over the wire: the
+questions reach the agents the ordinary way, and what comes back is stored here.
+
+Make one with the **+** beside **Sessions** in the sidebar. The line under its name in the header
+chooses who it asks.
+
+### Asking several at once
+
+That line is a menu of checkboxes. Tick two agents and your next question goes to both. Tick
+**All agents** and it becomes a standing instruction rather than a list — an agent you add next
+week, or one a peer starts sharing, joins on its own without you going back to say so. Un-tick
+anybody and it is an ordinary list again.
+
+There are two ways to put the question:
+
+| | |
+|---|---|
+| **All at once** | Everybody gets it together and each answers independently. Use this when you want opinions that have not influenced each other. |
+| **In turn** | They answer one after another, each shown what has already been said. Use this when you want them building on each other. |
+
+The composer tells you which it will do before you type. Every answer carries the name of the
+agent that gave it, so three replies read as three contributions rather than one wall of text.
 
 ---
 
