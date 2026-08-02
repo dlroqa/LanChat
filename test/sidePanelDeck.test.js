@@ -161,9 +161,15 @@ test('the grip says what it does, in words and in keys', () => {
 // These read the sources rather than the render: they are the guards against a
 // later edit quietly undoing a decision the render cannot show.
 
-const deckSrc = fs.readFileSync(path.join(SRC, 'components', 'SidePanelDeck.jsx'), 'utf8');
-const appSrc = fs.readFileSync(path.join(SRC, 'App.jsx'), 'utf8');
-const css = fs.readFileSync(path.join(SRC, 'styles.css'), 'utf8');
+// Read with the line endings normalised. Git hands these files out with CRLF on
+// Windows, where a pattern written around \n matches nothing and the assertion
+// fails for a reason that has nothing to do with what it is asking about — which
+// is exactly how it failed on the windows runner, and only there.
+const source = (...where) => fs.readFileSync(path.join(SRC, ...where), 'utf8').replace(/\r\n/g, '\n');
+
+const deckSrc = source('components', 'SidePanelDeck.jsx');
+const appSrc = source('App.jsx');
+const css = source('styles.css');
 
 test('the shortcut stays modifier-gated', () => {
   // Plain arrows belong to the composer's mention menu, the search results and
