@@ -51,6 +51,15 @@ contextBridge.exposeInMainWorld('lanchat', {
   sessionRound: (id) => invoke('lanchat:sessionRound', { id }),
   deleteSession: (id) => invoke('lanchat:deleteSession', { id }),
   importSessionText: (id) => invoke('lanchat:importSessionText', { id }),
+
+  // The Trash: where a deleted session waits. `deleteSession` above is what puts
+  // one there; this is the list of what is in it, and the four ways back out —
+  // two that put a session back where it was, two that finish the job.
+  listTrash: () => invoke('lanchat:listTrash'),
+  restoreSession: (id) => invoke('lanchat:restoreSession', { id }),
+  purgeSession: (id) => invoke('lanchat:purgeSession', { id }),
+  restoreAllSessions: () => invoke('lanchat:restoreAllSessions'),
+  purgeAllSessions: () => invoke('lanchat:purgeAllSessions'),
   sweepSessionErrors: (id, ids) => invoke('lanchat:sweepSessionErrors', { id, ids }),
   purgeMessages: (id, ids) => invoke('lanchat:purgeMessages', { id, ids }),
   summonAgent: (threadId) => invoke('lanchat:summonAgent', { threadId }),

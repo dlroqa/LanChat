@@ -43,8 +43,17 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
     return sessions.list();
   }
 
+  // A session this machine can still do something with.
+  //
+  // One in the Trash is not one of those, and this is the single place that is
+  // decided. Everything that acts on a session reads it first — send(),
+  // importText(), the import handler in ipc.js — so a deleted session refuses
+  // the same way a session that never existed does, with no second rule to keep
+  // in step. The registry's own get() is the door for anything that has to see
+  // a trashed record, which is the trash pair below and nothing else.
   function get(id) {
-    return sessions.get(id);
+    const record = sessions.get(id);
+    return record && !record.deletedAt ? record : null;
   }
 
   function create(draft = {}) {
@@ -212,7 +221,7 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
   // whether they want this at all. Only what was really removed is counted:
   // pressing the button twice must not take the total down twice.
   function sweepErrors(sessionId, ids) {
-    const record = sessions.get(sessionId);
+    const record = get(sessionId);
     if (!record) return { removed: 0 };
     const removed = store.remove(sessionId, ids);
     if (!removed) return { removed: 0 };
@@ -224,14 +233,66 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
     return { removed, record: sessions.get(sessionId) };
   }
 
-  // Removing a session takes its conversation with it. The record and the
-  // transcript are two halves of one thing, and leaving the history file behind
-  // would keep a deleted workspace on disk under a name nothing points at any
-  // more.
-  function remove(id) {
-    if (!sessions.get(id)) return false;
+  // ---- the Trash ----
+  //
+  // Deleting a session is two steps, not one. The first takes it out of the
+  // window and leaves everything on disk; the second is the one that cannot be
+  // undone. What makes the first reversible is that it does not go near the
+  // store: the transcript stays filed under the session's own id, untouched,
+  // and restoring is therefore putting a record back rather than rebuilding a
+  // conversation out of something. There is nothing to rebuild it from.
+
+  function listTrash() {
+    return sessions.trashed();
+  }
+
+  // Into the Trash.
+  //
+  // Any question this session has out is closed on the way, because the answers
+  // have nowhere to arrive: the round is in memory, the window has stopped
+  // showing the session, and an open round left behind would keep a workspace
+  // nobody can see marked as busy until it went stale.
+  function trash(id) {
+    const record = sessions.get(id);
+    if (!record || record.deletedAt) return false;
+    const open = rounds.get(id);
+    if (open) closeRound(open);
+    return Boolean(sessions.trash(id));
+  }
+
+  function restore(id) {
+    return sessions.restore(id);
+  }
+
+  // The end of the road. Takes the conversation with the record: the two are
+  // halves of one thing, and leaving the history file behind would keep a
+  // deleted workspace on disk under a name nothing points at any more.
+  //
+  // Only reachable from the Trash, so nothing can lose a transcript in one
+  // click.
+  function purge(id) {
+    const record = sessions.get(id);
+    if (!record || !record.deletedAt) return false;
     store.clear(id);
     return sessions.remove(id);
+  }
+
+  // The two bulk doors, each returning how many it actually moved — pressing
+  // either on an empty Trash is not an error, it is nought.
+  function restoreAll() {
+    let count = 0;
+    for (const record of sessions.trashed()) {
+      if (sessions.restore(record.id)) count += 1;
+    }
+    return count;
+  }
+
+  function purgeAll() {
+    let count = 0;
+    for (const record of sessions.trashed()) {
+      if (purge(record.id)) count += 1;
+    }
+    return count;
   }
 
   // An agent that no longer exists cannot be asked anything. The sessions that
@@ -279,7 +340,10 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
   // claiming they asked three times; it would also have the session count three
   // commits for one piece of work, and put the same documents on three bubbles.
   function send(sessionId, text, { prompt, docs = [], context = null } = {}) {
-    const record = sessions.get(sessionId);
+    // get() rather than the registry's, so a session in the Trash refuses a
+    // question exactly the way one that was never here does — see the note on
+    // get() for why that rule lives in one place.
+    const record = get(sessionId);
     if (!record) return refuse(sessionId, text, docs, 'That session no longer exists.');
 
     // One round at a time. Two questions in flight at once would interleave two
@@ -486,7 +550,7 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
   // dialogs and files belong to ipc.js, and keeping them out of here is what
   // lets the whole of the parsing be tested without a window.
   function importText(sessionId, raw, { source = null, at = Date.now() } = {}) {
-    const record = sessions.get(sessionId);
+    const record = get(sessionId);
     if (!record) return { ok: false, error: 'That session no longer exists.' };
 
     const parsed = parseTranscript(raw, { at });
@@ -535,7 +599,12 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
     rename,
     setAgent,
     setCounsel,
-    remove,
+    listTrash,
+    trash,
+    restore,
+    purge,
+    restoreAll,
+    purgeAll,
     unbindAgent,
     sweepErrors,
     send,

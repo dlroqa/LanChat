@@ -107,10 +107,24 @@ class SessionRegistry {
 
   // Newest first: a session is a piece of work in progress, and the one you were
   // just in is the one you are most likely to want back.
+  //
+  // Everything in the Trash is left out. A deleted session is still a record on
+  // disk — that is the whole point, it can be put back — but it is not one of
+  // this machine's workspaces any more, and every reader of this list treats
+  // what it returns as exactly that.
   list() {
-    return [...this.records].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    return this.records.filter((r) => !r.deletedAt).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   }
 
+  // What is in the Trash, most recently deleted first — the order somebody
+  // looking for what they just lost reads in.
+  trashed() {
+    return this.records.filter((r) => r.deletedAt).sort((a, b) => b.deletedAt - a.deletedAt);
+  }
+
+  // Any record, in the Trash or out of it. The internal door: update(), touch()
+  // and the trash pair below all go through it, and so does the service layer,
+  // which puts the "not while it is deleted" rule on top rather than in here.
   get(id) {
     return this.records.find((r) => r.id === id) || null;
   }
@@ -206,6 +220,29 @@ class SessionRegistry {
     const record = this.get(id);
     if (!record) return null;
     record.updatedAt = Date.now();
+    this.#save();
+    return record;
+  }
+
+  // Into the Trash. The record stays exactly as it is and gains one field, so
+  // putting it back is deleting that field again — nothing about the session is
+  // rebuilt from anything, because nothing about it was ever taken apart.
+  //
+  // `updatedAt` is deliberately not touched, here or in restore(): when this
+  // comes back it belongs where it was in the list, not at the top. Deleting
+  // something by accident and putting it back should leave no trace at all.
+  trash(id) {
+    const record = this.get(id);
+    if (!record || record.deletedAt) return null;
+    record.deletedAt = Date.now();
+    this.#save();
+    return record;
+  }
+
+  restore(id) {
+    const record = this.get(id);
+    if (!record || !record.deletedAt) return null;
+    delete record.deletedAt;
     this.#save();
     return record;
   }

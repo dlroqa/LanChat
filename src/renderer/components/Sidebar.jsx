@@ -3,7 +3,7 @@ import Avatar from './Avatar.jsx';
 import QueueBadge from './QueueBadge.jsx';
 import SidebarSection from './SidebarSection.jsx';
 import SearchScope from './SearchScope.jsx';
-import { Settings, Plus, Refresh, Users, GroupCall, Code, Sessions } from '../lib/icons.jsx';
+import { Settings, Plus, Refresh, Users, GroupCall, Code, Sessions, Trash } from '../lib/icons.jsx';
 import { formatShortDate, platformLabel } from '../lib/util.js';
 import { sessionCounsel, sessionSubLine } from '../lib/counselCopy.js';
 import {
@@ -84,6 +84,13 @@ export default function Sidebar({
   onOpenDev,
   onOpenSettings,
   onNewSession,
+  // The Trash, and whether it is the thing currently filling the window. A
+  // toggle rather than a door: pressing it again puts the conversation back,
+  // which is what the other three buttons on that row cannot offer because they
+  // open dialogs.
+  onOpenTrash,
+  trashOpen = false,
+  trashCount = 0,
   onAddPeer,
   onRefresh,
   onNewGroupCall,
@@ -457,6 +464,22 @@ export default function Sidebar({
         </button>
         <button className="icon-btn" onClick={onNewSession} title="New session" aria-label="New session">
           <Sessions size={18} />
+        </button>
+        {/* Beside New session on purpose: one button makes a workspace and the
+            one next to it is where a workspace goes when it is deleted, so the
+            two ends of a session's life sit together. The count is the whole of
+            what it has to say — a Trash with something in it is a Trash worth
+            opening — and it is left off entirely when empty rather than shown
+            as a nought. */}
+        <button
+          className={`icon-btn ${trashOpen ? 'on' : ''}`}
+          onClick={onOpenTrash}
+          title={trashCount ? `Trash (${trashCount})` : 'Trash'}
+          aria-label={trashCount ? `Trash, ${trashCount} deleted` : 'Trash'}
+          aria-pressed={trashOpen}
+        >
+          <Trash size={18} />
+          {trashCount > 0 && <span className="trash-count">{trashCount}</span>}
         </button>
       </div>
 

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Sidebar from './components/Sidebar.jsx';
 import ChatPane from './components/ChatPane.jsx';
+import TrashPane from './components/TrashPane.jsx';
 import SearchResults from './components/SearchResults.jsx';
 import CallOverlay from './components/CallOverlay.jsx';
 import IncomingCall from './components/IncomingCall.jsx';
@@ -160,6 +161,16 @@ export default function App() {
   // The list comes from main and is republished whenever it changes there, so
   // this window never has to guess at it.
   const [sessions, setSessions] = useState([]);
+  // The Trash: sessions that have been deleted and can still be put back. It
+  // arrives from main alongside the list above and for the same reason — the two
+  // are one set of records seen from either side, and a window that worked out
+  // its own Trash by remembering what it had just deleted would disagree with
+  // the file the moment a second window did anything.
+  const [trash, setTrash] = useState([]);
+  // Whether the Trash is what the window is showing instead of a conversation.
+  // Not saved: it is a place you go to fix something, not a state to reopen the
+  // app into.
+  const [trashOpen, setTrashOpen] = useState(false);
   // The search box: what was typed, and which category it is aimed at. It lives
   // here rather than in the sidebar because what it finds is shown in the middle
   // panel — one search, read in two places.
@@ -669,6 +680,7 @@ export default function App() {
       // Sessions are local and always there, so the list is read once at start
       // and kept current by the `sessions` event rather than polled.
       api.listSessions().then((list) => setSessions(list || []));
+      api.listTrash().then((list) => setTrash(list || []));
       // Windows only: start from whatever has already been measured, rather than
       // an empty panel until the next round trip lands. A window opened from the
       // tray after hours of uptime should not look like a link that has never
@@ -895,6 +907,12 @@ export default function App() {
         // other agents, or deleted.
         case 'sessions':
           setSessions(payload || []);
+          break;
+        // What is in the Trash changed. Published with the list above every
+        // time, because a session leaving one of them is a session arriving in
+        // the other.
+        case 'trash':
+          setTrash(payload || []);
           break;
         // Where a session's question stands. Arrives whenever anything about the
         // round changes and once more as it closes; the closed one is what ends
@@ -1482,26 +1500,102 @@ export default function App() {
     );
   }
 
-  // Deleting a session takes the conversation in it with the record, so it asks
-  // first and names what goes — the same bargain as clearing a chat, and the
-  // same button.
+  // Deleting a session puts it in the Trash, conversation and all.
+  //
+  // No confirmation, and that is the point of the Trash: being asked "are you
+  // sure" before every reversible thing teaches people to click through the
+  // question, which is exactly the habit that loses a session on the day the
+  // dialog means it. The question now sits on the two actions in the Trash that
+  // really cannot be undone.
+  //
+  // The thread is dropped from this window the same way it always was — nothing
+  // in the Trash is openable — but `messages` is left alone, because the
+  // transcript is still on disk and clearing the cache here would mean a
+  // restored session came back looking empty until it was re-read.
   async function deleteSession(id) {
-    const record = sessions.find((s) => s.id === id);
-    const ok = window.confirm(
-      `Delete the session “${record?.title || 'this session'}”?\n\n` +
-        'Everything in it goes with it, including anything imported into it. This cannot be undone.'
-    );
-    if (!ok) return;
     const res = await api.deleteSession(id);
     if (!res?.ok) {
       toast('Could not delete the session.', 'error');
       return;
     }
     setSessions((list) => list.filter((s) => s.id !== id));
+    if (selectedRef.current === id) setSelectedId(null);
+    toast('Moved to Trash.');
+  }
+
+  // Out of the Trash and back in the list, then opened — "Recover to Sessions"
+  // should land somewhere you can see, rather than quietly changing a list
+  // behind the panel you are looking at.
+  async function restoreSession(id) {
+    const record = await api.restoreSession(id);
+    if (!record) {
+      toast('Could not restore that session.', 'error');
+      return;
+    }
+    setTrash((list) => list.filter((s) => s.id !== id));
+    setSessions((list) => [record, ...list.filter((s) => s.id !== record.id)]);
+    setTrashOpen(false);
+    setSelectedId(record.id);
+    toast(`Restored “${record.title}”.`);
+  }
+
+  // The irreversible ones, and the only two things in the app that ask before
+  // they act. Both name what goes: a count is the difference between emptying a
+  // Trash you have looked in and emptying one you have not.
+  async function purgeSession(id) {
+    const record = trash.find((s) => s.id === id);
+    const ok = window.confirm(
+      `Delete the session “${record?.title || 'this session'}” for good?\n\n` +
+        'Everything in it goes with it, including anything imported into it. This cannot be undone.'
+    );
+    if (!ok) return;
+    const res = await api.purgeSession(id);
+    if (!res?.ok) {
+      toast('Could not delete the session.', 'error');
+      return;
+    }
+    setTrash((list) => list.filter((s) => s.id !== id));
     setMessages((prev) => ({ ...prev, [id]: [] }));
     loadedPeers.current.delete(id);
-    if (selectedRef.current === id) setSelectedId(null);
     toast('Session deleted.');
+  }
+
+  // Everything at once. The list is re-read rather than patched here: putting
+  // several sessions back means merging them into a list main keeps in an order
+  // of its own, and working that order out a second time in the window is how
+  // the two come to disagree. One round trip on a button nobody presses twice.
+  async function restoreAllSessions() {
+    const res = await api.restoreAllSessions();
+    const count = res?.count || 0;
+    if (!count) return;
+    const restored = await api.listSessions();
+    setSessions(restored || []);
+    setTrash([]);
+    setTrashOpen(false);
+    toast(`Restored ${count} session${count === 1 ? '' : 's'}.`);
+  }
+
+  async function purgeAllSessions() {
+    const count = trash.length;
+    if (!count) return;
+    const ok = window.confirm(
+      `Delete ${count} session${count === 1 ? '' : 's'} in the Trash for good?\n\n` +
+        'Everything in them goes with them. This cannot be undone.'
+    );
+    if (!ok) return;
+    const res = await api.purgeAllSessions();
+    if (!res?.ok) {
+      toast('Could not empty the Trash.', 'error');
+      return;
+    }
+    for (const s of trash) loadedPeers.current.delete(s.id);
+    setMessages((prev) => {
+      const next = { ...prev };
+      for (const s of trash) delete next[s.id];
+      return next;
+    });
+    setTrash([]);
+    toast(`Deleted ${res.count} session${res.count === 1 ? '' : 's'}.`);
   }
 
   // Carrying one bubble into a new question.
@@ -1811,72 +1905,98 @@ export default function App() {
         onSectionPrefs={saveSectionPrefs}
         search={search}
         onSearch={(patch) => setSearch((s) => ({ ...s, ...patch }))}
-        onSelect={setSelectedId}
+        // Picking a conversation is also the way out of the Trash: nothing in
+        // there is selectable, so a click on the roster means "show me that"
+        // and the panel it replaces has nothing to say about it.
+        onSelect={(id) => {
+          setTrashOpen(false);
+          setSelectedId(id);
+        }}
         onOpenProfile={() => setModal('profile')}
         onOpenDev={() => setModal('devgate')}
         onOpenSettings={() => setModal('settings')}
-        onNewSession={() => newSession()}
+        onNewSession={() => {
+          setTrashOpen(false);
+          newSession();
+        }}
+        onOpenTrash={() => setTrashOpen((open) => !open)}
+        trashOpen={trashOpen}
+        trashCount={trash.length}
         onAddPeer={() => setModal('addpeer')}
         onNewGroupCall={() => setModal('newgroup')}
         onRefresh={() => (api.refresh(), toast('Refreshing…'))}
       />
 
       <div className="chat-wrap">
-        <ChatPane
-          peer={selectedPeer}
-          messages={messages[selectedId] || []}
-          typing={typing[selectedId]}
-          awaiting={Boolean(awaiting[selectedId])}
-          progress={progress}
-          approval={approvals[selectedId]}
-          agentStreams={selectedStreams}
-          round={rounds[selectedId] || null}
-          flash={flash[selectedId]}
-          onFlashDone={() => clearFlash(selectedId)}
-          onApprove={(choice) => {
-            const req = approvals[selectedId];
-            if (!req) return;
-            setApprovals((a) => ({ ...a, [selectedId]: null }));
-            api.answerAgentApproval(selectedId, req.runId, choice);
-          }}
-          previewUrl={previewUrl}
-          previewFallback={self?.platform === 'win32'}
-          showAddresses={config.showAddresses}
-          canFind={config.findSessionsOnly ? selectedPeer?.kind === 'session' : true}
-          onOpenLink={openLink}
-          linkPreview={fetchLinkPreview}
-          previewImage={fetchImagePreview}
-          onSaveImage={saveImage}
-          draft={draft && draft.threadId === selectedId ? draft : null}
-          docs={attachments[selectedId] || EMPTY_DOCS}
-          onRemoveDoc={(docPath) => removeAttachment(selectedId, docPath)}
-          context={contexts[selectedId] || null}
-          onRemoveContext={() => setContexts((c) => ({ ...c, [selectedId]: null }))}
-          agents={askableAgents}
-          mentionables={mentionables}
-          onSummon={summonAgent}
-          onRenameSession={renameSession}
-          onSetCounsel={setSessionCounsel}
-          onImportText={() => importSessionText(selectedId)}
-          // Branching is offered where a question can be asked from: inside a
-          // session, and in the agent threads a session can be started from.
-          onFork={isThinkingThread(selectedId) ? forkFrom : undefined}
-          // Offered on the same threads, and for the same reason: only somewhere
-          // that can answer a question is there any point putting one back.
-          onResend={isThinkingThread(selectedId) ? resendFrom : undefined}
-          onSend={sendText}
-          onAttach={attach}
-          onVoice={sendVoice}
-          onTyping={onTyping}
-          // In a session the same button means the same thing it always did —
-          // "this conversation goes" — and the session is the conversation.
-          onClearHistory={isSessionThread(selectedId) ? () => deleteSession(selectedId) : clearHistory}
-          onExportHistory={exportHistory}
-          onOpenFile={(p) => p && api.openFile(p)}
-          onRevealFile={(p) => p && api.revealFile(p)}
-          onVoiceCall={() => startCall(false)}
-          onVideoCall={() => startCall(true)}
-        />
+        {/* The Trash takes the conversation's place rather than covering it.
+            Nothing in there can be opened, so there is no thread underneath
+            worth keeping on screen — and coming back out selects something,
+            which puts a real conversation here again. */}
+        {trashOpen ? (
+          <TrashPane
+            trash={trash}
+            onRestore={restoreSession}
+            onPurge={purgeSession}
+            onRestoreAll={restoreAllSessions}
+            onPurgeAll={purgeAllSessions}
+          />
+        ) : (
+          <ChatPane
+            peer={selectedPeer}
+            messages={messages[selectedId] || []}
+            typing={typing[selectedId]}
+            awaiting={Boolean(awaiting[selectedId])}
+            progress={progress}
+            approval={approvals[selectedId]}
+            agentStreams={selectedStreams}
+            round={rounds[selectedId] || null}
+            flash={flash[selectedId]}
+            onFlashDone={() => clearFlash(selectedId)}
+            onApprove={(choice) => {
+              const req = approvals[selectedId];
+              if (!req) return;
+              setApprovals((a) => ({ ...a, [selectedId]: null }));
+              api.answerAgentApproval(selectedId, req.runId, choice);
+            }}
+            previewUrl={previewUrl}
+            previewFallback={self?.platform === 'win32'}
+            showAddresses={config.showAddresses}
+            canFind={config.findSessionsOnly ? selectedPeer?.kind === 'session' : true}
+            onOpenLink={openLink}
+            linkPreview={fetchLinkPreview}
+            previewImage={fetchImagePreview}
+            onSaveImage={saveImage}
+            draft={draft && draft.threadId === selectedId ? draft : null}
+            docs={attachments[selectedId] || EMPTY_DOCS}
+            onRemoveDoc={(docPath) => removeAttachment(selectedId, docPath)}
+            context={contexts[selectedId] || null}
+            onRemoveContext={() => setContexts((c) => ({ ...c, [selectedId]: null }))}
+            agents={askableAgents}
+            mentionables={mentionables}
+            onSummon={summonAgent}
+            onRenameSession={renameSession}
+            onSetCounsel={setSessionCounsel}
+            onImportText={() => importSessionText(selectedId)}
+            // Branching is offered where a question can be asked from: inside a
+            // session, and in the agent threads a session can be started from.
+            onFork={isThinkingThread(selectedId) ? forkFrom : undefined}
+            // Offered on the same threads, and for the same reason: only somewhere
+            // that can answer a question is there any point putting one back.
+            onResend={isThinkingThread(selectedId) ? resendFrom : undefined}
+            onSend={sendText}
+            onAttach={attach}
+            onVoice={sendVoice}
+            onTyping={onTyping}
+            // In a session the same button means the same thing it always did —
+            // "this conversation goes" — and the session is the conversation.
+            onClearHistory={isSessionThread(selectedId) ? () => deleteSession(selectedId) : clearHistory}
+            onExportHistory={exportHistory}
+            onOpenFile={(p) => p && api.openFile(p)}
+            onRevealFile={(p) => p && api.revealFile(p)}
+            onVoiceCall={() => startCall(false)}
+            onVideoCall={() => startCall(true)}
+          />
+        )}
         {dragOver && (
           <div className="drop-overlay">
             {isThinkingThread(selectedId)

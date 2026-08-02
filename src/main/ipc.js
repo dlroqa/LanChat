@@ -688,8 +688,13 @@ function createIpc({
   // store under its own id, so history, export and delete need nothing here —
   // only the list itself, and the one way text gets into one from outside.
 
+  // Both lists, always together. Every change that matters here moves a record
+  // from one of them to the other, so publishing one without the other is the
+  // one way the window could end up showing a session in two places or in
+  // neither.
   function publishSessions() {
     emit('sessions', sessions.list());
+    emit('trash', sessions.listTrash());
   }
 
   ipcMain.handle('lanchat:listSessions', () => sessions.list());
@@ -734,11 +739,43 @@ function createIpc({
   // reader who missed the push catches up.
   ipcMain.handle('lanchat:sessionRound', (_e, { id }) => sessions.roundFor(id));
 
-  // The record and the conversation go together — see sessions/index.js.
+  // Deleting a session puts it in the Trash. Same channel it has always been,
+  // and the same `{ ok }` back: what changed is that the transcript stays on
+  // disk until somebody says otherwise — see sessions/index.js.
   ipcMain.handle('lanchat:deleteSession', (_e, { id }) => {
-    const ok = sessions.remove(id);
+    const ok = sessions.trash(id);
     if (ok) publishSessions();
     return { ok };
+  });
+
+  // ---- the Trash ----
+
+  ipcMain.handle('lanchat:listTrash', () => sessions.listTrash());
+
+  ipcMain.handle('lanchat:restoreSession', (_e, { id }) => {
+    const record = sessions.restore(id);
+    if (record) publishSessions();
+    return record;
+  });
+
+  // The irreversible one. The window asks first; this end only does as it is
+  // told, because a confirmation belongs where the person is.
+  ipcMain.handle('lanchat:purgeSession', (_e, { id }) => {
+    const ok = sessions.purge(id);
+    if (ok) publishSessions();
+    return { ok };
+  });
+
+  ipcMain.handle('lanchat:restoreAllSessions', () => {
+    const count = sessions.restoreAll();
+    if (count) publishSessions();
+    return { ok: true, count };
+  });
+
+  ipcMain.handle('lanchat:purgeAllSessions', () => {
+    const count = sessions.purgeAll();
+    if (count) publishSessions();
+    return { ok: true, count };
   });
 
   // Clearing out errors an older version wrote into a session's history.

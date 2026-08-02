@@ -137,6 +137,10 @@ window.lanchat = {
   listSessions: () => Promise.resolve(SESSIONS.map((s) => ({
     ...s, agentIds: ['agent:tessie'], mode: 'parallel', createdAt: Date.parse('2026-08-01T20:00:00Z'),
   }))),
+  // Read on boot beside listSessions. Empty: this harness is about what a
+  // question does after it is re-sent, and the Trash has nothing to say about
+  // that — but the call has to be answerable, or App throws before it mounts.
+  listTrash: () => Promise.resolve([]),
   askableAgents: () => Promise.resolve([{ id: 'agent:tessie', name: 'Tessie' }]),
   getHistory: (id) => { calls.history.push(id); return Promise.resolve(histories[id] || []); },
   sessionRound: nothing,
