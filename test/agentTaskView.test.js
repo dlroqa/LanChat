@@ -299,3 +299,64 @@ test('driven: what is being written shows while it is being written', async () =
   assert.ok(!find(v.tree, byClass('primary')), 'no Run while it is running');
   v.unmount();
 });
+
+test('the live section leads, and says what is running that is not a task', () => {
+  const html = draw({
+    live: [
+      { kind: 'task', id: 'task:b', title: 'Disk check', who: 'Tessie', startedAt: 1 },
+      { kind: 'session', id: 'session:1', title: 'Quakes', who: 'Tessie, Bracket', startedAt: 0 },
+      { kind: 'peer', id: 'agent:t#peer:ada', title: 'Tessie', who: 'asked by Ada', startedAt: 0 },
+    ],
+  });
+  assert.ok(html.includes('Running now'));
+  assert.ok(html.includes('Tessie, Bracket'), 'a session names who it waits on');
+  assert.ok(html.includes('asked by Ada'), "and a peer's question says whose it is");
+  // It comes before the saved tasks: the question "what is happening" is asked
+  // more often than "what have I set up".
+  assert.ok(html.indexOf('Running now') < html.indexOf('task-rows'));
+});
+
+test('with nothing running the section is absent rather than empty', () => {
+  const html = draw({ live: [] });
+  assert.ok(!html.includes('Running now'));
+  assert.ok(!html.includes('task-live'));
+});
+
+test('the empty state keeps its ring only when there is nothing else on the floor', () => {
+  // A pulse ring is a focal point. Beside a list of live rows it is a second
+  // one competing with the thing that is actually moving.
+  assert.ok(draw({ tasks: [], live: [] }).includes('pulse-ring'));
+  const busy = draw({
+    tasks: [],
+    live: [{ kind: 'session', id: 'session:1', title: 'Quakes', who: 'Tessie', startedAt: 0 }],
+  });
+  assert.ok(!busy.includes('pulse-ring'));
+  assert.ok(busy.includes('No tasks yet'), 'but it still says what the view is for');
+});
+
+test('driven: a live task opens it, and a session is handed back to the window', async () => {
+  const opened = [];
+  const v = mount(AgentTaskView, {
+    ...props({
+      live: [
+        { kind: 'task', id: 'task:a', title: 'Nightly build', who: 'Tessie', startedAt: 1 },
+        { kind: 'session', id: 'session:1', title: 'Quakes', who: 'Tessie', startedAt: 0 },
+      ],
+    }),
+    onOpenThread: (id) => opened.push(id),
+  });
+
+  const rows = findAll(v.tree, byClass('task-live-row'));
+  assert.equal(rows.length, 2);
+
+  rows[1].props.onClick();
+  await v.settle();
+  assert.deepEqual(opened, ['session:1'], 'a session belongs in the middle of the window');
+  assert.ok(find(v.tree, byClass('task-list')), 'and this panel stayed where it was');
+
+  rows[0].props.onClick();
+  await v.settle();
+  assert.deepEqual(opened, ['session:1'], 'a task is not handed anywhere');
+  assert.ok(find(v.tree, byClass('task-editor')), 'it opens here');
+  v.unmount();
+});

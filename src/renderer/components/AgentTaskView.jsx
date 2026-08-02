@@ -45,12 +45,14 @@ export default function AgentTaskView({
   tasks = [],
   agents = [],
   streams = {},
+  live = [],
   onCreate,
   onUpdate,
   onRun,
   onStop,
   onDelete,
   onRuns,
+  onOpenThread,
 }) {
   const [openId, setOpenId] = useState(null);
   // What is in the two text fields. Held here rather than read straight off the
@@ -269,8 +271,59 @@ export default function AgentTaskView({
         </button>
       </div>
 
+      {/* What is under way right now, wherever it was started. A panel that
+          listed only its own tasks would say nothing is running with three
+          agents mid-sentence — so this leads, and it is the reason the empty
+          state below is about tasks rather than about activity. */}
+      {live.length > 0 ? (
+        <div className="task-live">
+          <div className="task-live-head">Running now</div>
+          {live.map((item) => {
+            const row = (
+              <>
+                <span className="task-dot working" aria-hidden="true">
+                  <Dot size={10} />
+                </span>
+                <span className="task-row-meta">
+                  <span className="task-row-title">{item.title}</span>
+                  <span className="task-row-sub">{item.who}</span>
+                </span>
+              </>
+            );
+            // A task is opened here; anything else is somewhere else in the
+            // window, and clicking it goes there rather than pretending this
+            // panel can show it.
+            return item.kind === 'task' ? (
+              <button
+                type="button"
+                className="task-live-row"
+                key={item.id}
+                onClick={() => setOpenId(item.id)}
+              >
+                {row}
+              </button>
+            ) : onOpenThread && (item.kind === 'session' || item.kind === 'agent') ? (
+              <button
+                type="button"
+                className="task-live-row"
+                key={item.id}
+                onClick={() => onOpenThread(item.id)}
+              >
+                {row}
+              </button>
+            ) : (
+              <div className="task-live-row" key={item.id}>
+                {row}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
       {tasks.length === 0 ? (
-        <EmptyState title="No tasks yet">Give an agent a standing job and run it from here.</EmptyState>
+        <EmptyState title="No tasks yet" ring={live.length === 0}>
+          Give an agent a standing job and run it from here.
+        </EmptyState>
       ) : (
         <div className="task-rows">
           {tasks.map((task) => {

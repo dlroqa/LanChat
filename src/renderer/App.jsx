@@ -23,6 +23,7 @@ import EmptyState from './components/EmptyState.jsx';
 import NotesView from './components/NotesView.jsx';
 import AgentTaskView from './components/AgentTaskView.jsx';
 import { DEFAULT_TASK_VIEW } from './lib/taskViews.js';
+import { liveWork } from './lib/liveWork.js';
 import { PttManager, attachPttKey, defaultPttKey, hasOwnDictationKey } from './lib/ptt.js';
 import { DictationManager, shouldDictate, holdMode, dictateKeyMode, tapAction } from './lib/dictation.js';
 import { toWavBytes } from './lib/wav.js';
@@ -1920,6 +1921,11 @@ export default function App() {
   // What the Task Bar floor is showing. Resolved here rather than inside the
   // deck: the deck knows there are three named views and how to move between
   // them, and nothing about what a note or a task is.
+  // Everything an agent on this machine is doing, from the four places one can
+  // be asked. Read off state main has already pushed rather than reassembled —
+  // see the aside in lib/liveWork.js.
+  const running = liveWork({ tasks, sessions, rounds, typing, peers, agents: askableAgents });
+
   const taskBody = {
     notes: (
       <NotesView
@@ -1945,6 +1951,13 @@ export default function App() {
         // What is being written this moment, keyed by thread — and a task's
         // thread is its own id. Nothing plumbs this specially.
         streams={streams}
+        live={running}
+        // A session or an agent conversation is not this panel's to show, so
+        // clicking one goes to it in the middle of the window instead.
+        onOpenThread={(id) => {
+          setTrashOpen(false);
+          setSelectedId(id);
+        }}
         onCreate={() => api.createTask({})}
         onUpdate={(id, patch) => api.updateTask(id, patch)}
         onRun={(id) => api.runTask(id)}
