@@ -25,8 +25,8 @@ export default function KeyChangeModal({ alarm, onAccept, onForget, onClose }) {
       <h3>Verify {who} again</h3>
       <p className="desc">
         {who} is using a different key than the one this device remembers. That happens when somebody
-        reinstalls LanChat — and it is also what it looks like when somebody else is pretending to be
-        them. Until this is resolved they cannot connect.
+        reinstalls LanChat — and it is also what it looks like when somebody else is pretending to be them.
+        Until this is resolved they cannot connect.
       </p>
 
       <div className="key-change-keys">
@@ -41,8 +41,8 @@ export default function KeyChangeModal({ alarm, onAccept, onForget, onClose }) {
       </div>
 
       <p className="desc">
-        Ask {who} — over a call, or in person, not over LanChat — to read out the key shown in their
-        own Settings. Accept only if it matches the second one above.
+        Ask {who} — over a call, or in person, not over LanChat — to read out the key shown in their own
+        Settings. Accept only if it matches the second one above.
       </p>
       <p className="desc">
         Accepting also takes back every agent {who} was allowed to reach. You can grant those again

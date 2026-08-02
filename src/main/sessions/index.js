@@ -127,7 +127,9 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
           // again would not be answered any sooner — see the refusal in
           // remote.js — so this end skips them for the same reason it skips one
           // of ours that is busy.
-          const held = Boolean(resolved && resolved.entry.held && resolved.entry.standing?.state === 'waiting');
+          const held = Boolean(
+            resolved && resolved.entry.held && resolved.entry.standing?.state === 'waiting'
+          );
           out.push({
             id: entry.id,
             name: entry.name,
@@ -453,7 +455,8 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
     const who = round.asked.find((t) => t.agentId === agentId);
     round.running.delete(agentId);
     round.lastAt = Date.now();
-    if (kind === 'answer') round.answers.push({ agentId, name: (who && who.name) || 'an agent', text, ts: Date.now() });
+    if (kind === 'answer')
+      round.answers.push({ agentId, name: (who && who.name) || 'an agent', text, ts: Date.now() });
     else if (kind === 'empty') round.empty.add(agentId);
     else round.failed.add(agentId);
 

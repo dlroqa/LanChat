@@ -70,7 +70,20 @@ function makeNode(name, port, dir = null) {
   const alarms = [];
   bus.on('peer-auth-failed', (e) => failures.push(e));
   bus.on('peer-key-alarm', (e) => alarms.push(e));
-  return { dir: home, config, bus, getIdentity, deviceKey, pins, hub, server, port, failures, alarms, grants };
+  return {
+    dir: home,
+    config,
+    bus,
+    getIdentity,
+    deviceKey,
+    pins,
+    hub,
+    server,
+    port,
+    failures,
+    alarms,
+    grants,
+  };
 }
 
 function waitFor(fn, ms = 5000, what = 'condition') {
@@ -129,7 +142,14 @@ function attacker(port) {
 
 // Build a client hello the way an honest peer would, with the pieces exposed so
 // a test can corrupt exactly one of them.
-function clientHello({ serverHello, id, key, kx = proto.generateAgreementKey(), nonce = proto.newNonce(), role = proto.ROLE_CLIENT }) {
+function clientHello({
+  serverHello,
+  id,
+  key,
+  kx = proto.generateAgreementKey(),
+  nonce = proto.newNonce(),
+  role = proto.ROLE_CLIENT,
+}) {
   const t = proto.transcript({
     role,
     proto: proto.PROTO,
@@ -334,7 +354,11 @@ test('an old build is refused, and named as an old build rather than an attack',
   await old.open();
   await old.serverHello();
   // Exactly what 0.4.24 sends.
-  old.send({ type: 'hello', from: 'legacy-uuid', identity: { id: 'legacy-uuid', name: 'Legacy', servicePort: 1 } });
+  old.send({
+    type: 'hello',
+    from: 'legacy-uuid',
+    identity: { id: 'legacy-uuid', name: 'Legacy', servicePort: 1 },
+  });
 
   await waitFor(() => old.closed(), 5000, 'the refusal');
   assert.ok(!B.hub.isConnected('legacy-uuid'));
@@ -441,7 +465,13 @@ test('REFLECTION: the server proof cannot be bounced back as a client proof', as
     type: 'hello',
     proto: proto.PROTO,
     from: hello2.from,
-    identity: { id: hello2.from, name: 'bob', servicePort: 1, publicKey: hello2.auth.key, proto: proto.PROTO },
+    identity: {
+      id: hello2.from,
+      name: 'bob',
+      servicePort: 1,
+      publicKey: hello2.auth.key,
+      proto: proto.PROTO,
+    },
     auth: { nonce: hello.auth.nonce, key: hello2.auth.key, kx: hello.auth.kx, sig: serverProof.sig },
   });
 
@@ -482,7 +512,11 @@ test('a second socket for a live peer is fine under the same key, refused under 
   const impostor = attacker(pb);
   await impostor.open();
   impostor.send(
-    clientHello({ serverHello: await impostor.serverHello(), id: 'alice-uuid', key: proto.generateSigningKey() }).frame
+    clientHello({
+      serverHello: await impostor.serverHello(),
+      id: 'alice-uuid',
+      key: proto.generateSigningKey(),
+    }).frame
   );
   await waitFor(() => impostor.closed(), 5000, 'the impostor to be refused');
   assert.equal(B.hub.sockets.get('alice-uuid').size, 2, 'the honest sockets are untouched');

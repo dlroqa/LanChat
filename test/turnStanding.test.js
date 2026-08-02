@@ -64,7 +64,10 @@ test('a lost connection replaces the standing rather than freezing it', () => {
   // The standing is pushed, so nothing can arrive to correct these fields once
   // the socket is gone. Counting down to a handover that will never happen is
   // worse than saying nothing; saying why is better than either.
-  const s = turnStanding(shared({ online: false, queueState: 'waiting', queueExpiring: true, queueExpiresInSec: 11 }), 11);
+  const s = turnStanding(
+    shared({ online: false, queueState: 'waiting', queueExpiring: true, queueExpiresInSec: 11 }),
+    11
+  );
   assert.deepEqual(s, { key: 'offline', word: null, text: 'Offline' });
 });
 

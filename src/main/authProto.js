@@ -209,7 +209,8 @@ function sessionKeys({ privateKey, peerPublicB64u, transcriptBuf }) {
   // Salting with the transcript binds the session keys to the identities that
   // were proved — a shared secret alone would be the same for a relayed pair.
   const salt = crypto.createHash('sha256').update(transcriptBuf).digest();
-  const derive = (label) => Buffer.from(crypto.hkdfSync('sha256', shared, salt, Buffer.from(label, 'utf8'), 32));
+  const derive = (label) =>
+    Buffer.from(crypto.hkdfSync('sha256', shared, salt, Buffer.from(label, 'utf8'), 32));
   return { s2c: derive(`${DOMAIN}:s2c`), c2s: derive(`${DOMAIN}:c2s`) };
 }
 

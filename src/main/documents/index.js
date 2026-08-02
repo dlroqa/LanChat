@@ -33,13 +33,61 @@ const SNIFF_BYTES = 8192;
 // Extensions whose content is binary by definition. Checked before sniffing so
 // the message can name the file type rather than saying "this looks binary".
 const BINARY_EXTENSIONS = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.tif', '.tiff',
-  '.mp4', '.webm', '.mov', '.mkv', '.avi', '.wmv',
-  '.mp3', '.wav', '.ogg', '.weba', '.m4a', '.flac', '.opus',
-  '.zip', '.gz', '.bz2', '.xz', '.7z', '.rar', '.tar', '.jar',
-  '.exe', '.dll', '.so', '.dylib', '.bin', '.dmg', '.iso', '.appimage',
-  '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp',
-  '.sqlite', '.db', '.woff', '.woff2', '.ttf', '.otf', '.psd', '.blend',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.bmp',
+  '.ico',
+  '.tif',
+  '.tiff',
+  '.mp4',
+  '.webm',
+  '.mov',
+  '.mkv',
+  '.avi',
+  '.wmv',
+  '.mp3',
+  '.wav',
+  '.ogg',
+  '.weba',
+  '.m4a',
+  '.flac',
+  '.opus',
+  '.zip',
+  '.gz',
+  '.bz2',
+  '.xz',
+  '.7z',
+  '.rar',
+  '.tar',
+  '.jar',
+  '.exe',
+  '.dll',
+  '.so',
+  '.dylib',
+  '.bin',
+  '.dmg',
+  '.iso',
+  '.appimage',
+  '.doc',
+  '.docx',
+  '.xls',
+  '.xlsx',
+  '.ppt',
+  '.pptx',
+  '.odt',
+  '.ods',
+  '.odp',
+  '.sqlite',
+  '.db',
+  '.woff',
+  '.woff2',
+  '.ttf',
+  '.otf',
+  '.psd',
+  '.blend',
 ]);
 
 const CANNOT_READ = 'LanChat can only give agents text and PDF documents.';
@@ -59,7 +107,9 @@ function readDocument(filePath) {
   if (stat.isDirectory()) throw new Error(`${name} is a folder, not a document.`);
   if (stat.size === 0) throw new Error(`${name} is empty.`);
   if (stat.size > MAX_BYTES) {
-    throw new Error(`${name} is too large (${formatBytes(stat.size)}; the limit is ${formatBytes(MAX_BYTES)}).`);
+    throw new Error(
+      `${name} is too large (${formatBytes(stat.size)}; the limit is ${formatBytes(MAX_BYTES)}).`
+    );
   }
 
   const ext = path.extname(name).toLowerCase();
@@ -122,9 +172,16 @@ function composePrompt(text, docs) {
   const share = Math.floor(MAX_DOC_CHARS / docs.length);
   const blocks = docs.map((doc) => {
     const body = doc.text.length > share ? doc.text.slice(0, share) : doc.text;
-    const lines = [`[Attached document: ${doc.name} — ${doc.path} (${formatBytes(doc.bytes)})]`, '<<<', body, '>>>'];
+    const lines = [
+      `[Attached document: ${doc.name} — ${doc.path} (${formatBytes(doc.bytes)})]`,
+      '<<<',
+      body,
+      '>>>',
+    ];
     if (doc.text.length > share) {
-      lines.push(`[Truncated at ${share.toLocaleString('en-US')} characters. The whole file is at ${doc.path}]`);
+      lines.push(
+        `[Truncated at ${share.toLocaleString('en-US')} characters. The whole file is at ${doc.path}]`
+      );
     }
     return lines.join('\n');
   });

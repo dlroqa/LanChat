@@ -20,24 +20,21 @@ const TAILSCALE_STATUS_TIMEOUT = 4000;
 
 function probeWhoami(ip, port) {
   return new Promise((resolve) => {
-    const req = http.get(
-      { host: ip, port, path: '/lanchat/whoami', timeout: PROBE_TIMEOUT },
-      (res) => {
-        if (res.statusCode !== 200) {
-          res.resume();
-          return resolve(null);
-        }
-        let body = '';
-        res.on('data', (c) => (body += c));
-        res.on('end', () => {
-          try {
-            resolve(JSON.parse(body));
-          } catch {
-            resolve(null);
-          }
-        });
+    const req = http.get({ host: ip, port, path: '/lanchat/whoami', timeout: PROBE_TIMEOUT }, (res) => {
+      if (res.statusCode !== 200) {
+        res.resume();
+        return resolve(null);
       }
-    );
+      let body = '';
+      res.on('data', (c) => (body += c));
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(body));
+        } catch {
+          resolve(null);
+        }
+      });
+    });
     req.on('timeout', () => req.destroy());
     req.on('error', () => resolve(null));
   });
@@ -177,7 +174,12 @@ function runTailscaleStatus(bin) {
         // ENOENT: this path isn't a runnable binary. Anything else: it ran but
         // gave us no status (daemon down, signed out, timed out).
         if (err && err.code === 'ENOENT') return resolve({ missing: true });
-        resolve({ detail: String(stderr || (err && err.message) || '').trim().slice(0, 300) || null });
+        resolve({
+          detail:
+            String(stderr || (err && err.message) || '')
+              .trim()
+              .slice(0, 300) || null,
+        });
       }
     );
   });

@@ -50,12 +50,35 @@ function makeNode(name, port) {
   const getPublicCard = () => buildPublicCard(config, deviceKey);
   const hub = new PeerHub({ getIdentity, bus, deviceKey, pins });
   const grants = createGrants();
-  const server = createServer({ config, getIdentity, getPublicCard, deviceKey, pins, grants, hub, bus, downloadsDir });
+  const server = createServer({
+    config,
+    getIdentity,
+    getPublicCard,
+    deviceKey,
+    pins,
+    grants,
+    hub,
+    bus,
+    downloadsDir,
+  });
   const fileSender = createFileSender({ hub, getIdentity, bus });
   // The same wiring main.js does: a file offer earns a permit, and the permit is
   // what the upload presents. Without it a node can receive nothing.
   attachGrantIssuer({ hub, bus, grants });
-  return { dir, config, bus, getIdentity, hub, server, fileSender, downloadsDir, port, deviceKey, pins, grants };
+  return {
+    dir,
+    config,
+    bus,
+    getIdentity,
+    hub,
+    server,
+    fileSender,
+    downloadsDir,
+    port,
+    deviceKey,
+    pins,
+    grants,
+  };
 }
 
 function waitFor(fn, timeout = 4000) {
@@ -189,8 +212,19 @@ test('a message typed while a peer is offline is delivered when they reconnect',
   const idA = A.getIdentity().id;
 
   // B is not connected yet, so the send fails and the message is held.
-  const message = { id: 'queued-1', peerId: idB, direction: 'out', kind: 'text', text: 'sent while away', ts: Date.now() };
-  assert.equal(A.hub.send(idB, { type: 'chat', ...message }), false, 'nothing should reach an unconnected peer');
+  const message = {
+    id: 'queued-1',
+    peerId: idB,
+    direction: 'out',
+    kind: 'text',
+    text: 'sent while away',
+    ts: Date.now(),
+  };
+  assert.equal(
+    A.hub.send(idB, { type: 'chat', ...message }),
+    false,
+    'nothing should reach an unconnected peer'
+  );
   store.append(idB, { ...message, pending: true });
   outbox.enqueue(idB, message);
   assert.equal(outbox.pendingCount(idB), 1);

@@ -130,7 +130,11 @@ function createHandshake({ role, deviceKey, getIdentity }) {
   // Our half of the mutual proof, sent only after theirs checked out.
   function serverProof() {
     done = true;
-    return { type: 'auth', proto: proto.PROTO, sig: proto.sign(deviceKey.privateKey(), transcriptFor(proto.ROLE_SERVER)) };
+    return {
+      type: 'auth',
+      proto: proto.PROTO,
+      sig: proto.sign(deviceKey.privateKey(), transcriptFor(proto.ROLE_SERVER)),
+    };
   }
 
   // --- client side -------------------------------------------------------

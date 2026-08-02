@@ -91,7 +91,15 @@ test('a peer cannot point a preview at anything on our own network', () => {
 });
 
 test('names that can only mean "this network" are refused without a lookup', () => {
-  for (const host of ['localhost', 'nas.local', 'printer.lan', 'wiki.internal', 'router', 'foo.home.arpa', '']) {
+  for (const host of [
+    'localhost',
+    'nas.local',
+    'printer.lan',
+    'wiki.internal',
+    'router',
+    'foo.home.arpa',
+    '',
+  ]) {
     assert.equal(hostLooksInternal(host), true, host);
   }
   for (const host of ['example.com', 'techcrunch.com', 'sub.example.co.uk']) {
@@ -103,7 +111,10 @@ test('a name that resolves onto this machine is refused where the socket resolve
   // The guard the socket itself uses, so a name that only *looks* public cannot
   // answer with a private address between the check and the connection.
   await assert.rejects(
-    () => new Promise((resolve, reject) => guardedLookup('localhost', {}, (err) => (err ? reject(err) : resolve()))),
+    () =>
+      new Promise((resolve, reject) =>
+        guardedLookup('localhost', {}, (err) => (err ? reject(err) : resolve()))
+      ),
     /private address/
   );
 });
@@ -175,7 +186,7 @@ test('only the head is parsed, so body content cannot pose as the page', () => {
 test('entities are decoded, including numeric ones', () => {
   assert.equal(
     decodeEntities('a &amp; b &lt;c&gt; &quot;d&quot; &#39;e&#39; &#8212; &#x27;f&#x27;'),
-    'a & b <c> "d" \'e\' — \'f\''
+    "a & b <c> \"d\" 'e' — 'f'"
   );
 });
 
@@ -334,7 +345,8 @@ test('an oversized image is refused, and the card survives without it', async ()
     res.writeHead(200, { 'content-type': 'text/html' });
     res.end(
       page({
-        extra: '<meta property="og:title" content="Still a card"><meta property="og:image" content="/huge.png">',
+        extra:
+          '<meta property="og:title" content="Still a card"><meta property="og:image" content="/huge.png">',
       })
     );
   });

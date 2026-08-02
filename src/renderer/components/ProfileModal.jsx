@@ -47,59 +47,62 @@ export default function ProfileModal({ self, firstRun, onSave, onClose }) {
       }
       onClose={firstRun ? null : onClose}
     >
-
-        <div className="avatar-edit">
-          <Avatar name={name || '?'} id={self?.id} avatar={{ color, image }} size="lg" />
-          <div className="avatar-edit-actions">
-            <button className="btn" onClick={choosePhoto} disabled={busy}>
-              <Plus size={15} /> {busy ? 'Loading…' : image ? 'Change photo' : 'Upload photo'}
-            </button>
-            {image && (
-              <button className="btn ghost" onClick={() => setImage(null)} title="Remove photo">
-                <X size={15} /> Remove
-              </button>
-            )}
-          </div>
-          {error && <div className="hint" style={{ color: 'var(--danger)' }}>{error}</div>}
-        </div>
-
-        <div className="field">
-          <label htmlFor="dn">Display name</label>
-          <input
-            id="dn"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Alex"
-            maxLength={40}
-            autoFocus
-            onKeyDown={(e) => e.key === 'Enter' && save()}
-          />
-        </div>
-
-        <div className="field">
-          <label>{image ? 'Color (used if you remove the photo)' : 'Color'}</label>
-          <div className="avatar-picker">
-            {SWATCHES.map((c) => (
-              <span
-                key={c}
-                className={`swatch ${c === color ? 'sel' : ''}`}
-                style={{ background: c }}
-                onClick={() => setColor(c)}
-              />
-            ))}
-          </div>
-        </div>
-
-        <div className="modal-actions">
-          {!firstRun && (
-            <button className="btn ghost" onClick={onClose}>
-              Cancel
+      <div className="avatar-edit">
+        <Avatar name={name || '?'} id={self?.id} avatar={{ color, image }} size="lg" />
+        <div className="avatar-edit-actions">
+          <button className="btn" onClick={choosePhoto} disabled={busy}>
+            <Plus size={15} /> {busy ? 'Loading…' : image ? 'Change photo' : 'Upload photo'}
+          </button>
+          {image && (
+            <button className="btn ghost" onClick={() => setImage(null)} title="Remove photo">
+              <X size={15} /> Remove
             </button>
           )}
-          <button className="btn primary" onClick={save} disabled={!name.trim()}>
-            {firstRun ? 'Get started' : 'Save'}
-          </button>
         </div>
+        {error && (
+          <div className="hint" style={{ color: 'var(--danger)' }}>
+            {error}
+          </div>
+        )}
+      </div>
+
+      <div className="field">
+        <label htmlFor="dn">Display name</label>
+        <input
+          id="dn"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="e.g. Alex"
+          maxLength={40}
+          autoFocus
+          onKeyDown={(e) => e.key === 'Enter' && save()}
+        />
+      </div>
+
+      <div className="field">
+        <label>{image ? 'Color (used if you remove the photo)' : 'Color'}</label>
+        <div className="avatar-picker">
+          {SWATCHES.map((c) => (
+            <span
+              key={c}
+              className={`swatch ${c === color ? 'sel' : ''}`}
+              style={{ background: c }}
+              onClick={() => setColor(c)}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="modal-actions">
+        {!firstRun && (
+          <button className="btn ghost" onClick={onClose}>
+            Cancel
+          </button>
+        )}
+        <button className="btn primary" onClick={save} disabled={!name.trim()}>
+          {firstRun ? 'Get started' : 'Save'}
+        </button>
+      </div>
     </ModalShell>
   );
 }

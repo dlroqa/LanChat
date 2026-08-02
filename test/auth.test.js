@@ -155,8 +155,16 @@ test('a garbage signature is false, not an exception', () => {
 test('both sides derive the same pair of directional keys', () => {
   const { kxS, kxC, base } = parties();
   const t = proto.transcript({ ...base, role: proto.ROLE_SERVER });
-  const a = proto.sessionKeys({ privateKey: kxS.privateKey, peerPublicB64u: kxC.publicKey, transcriptBuf: t });
-  const b = proto.sessionKeys({ privateKey: kxC.privateKey, peerPublicB64u: kxS.publicKey, transcriptBuf: t });
+  const a = proto.sessionKeys({
+    privateKey: kxS.privateKey,
+    peerPublicB64u: kxC.publicKey,
+    transcriptBuf: t,
+  });
+  const b = proto.sessionKeys({
+    privateKey: kxC.privateKey,
+    peerPublicB64u: kxS.publicKey,
+    transcriptBuf: t,
+  });
   assert.ok(a.s2c.equals(b.s2c) && a.c2s.equals(b.c2s), 'the two ends agree');
   assert.ok(!a.s2c.equals(a.c2s), 'and the two directions differ');
   assert.equal(a.s2c.length, 32);
@@ -168,15 +176,26 @@ test('session keys are bound to the transcript, not just to the shared secret', 
   const { kxS, kxC, base } = parties();
   const t1 = proto.transcript({ ...base, role: proto.ROLE_SERVER });
   const t2 = proto.transcript({ ...base, role: proto.ROLE_SERVER, idC: 'somebody-else' });
-  const a = proto.sessionKeys({ privateKey: kxS.privateKey, peerPublicB64u: kxC.publicKey, transcriptBuf: t1 });
-  const b = proto.sessionKeys({ privateKey: kxS.privateKey, peerPublicB64u: kxC.publicKey, transcriptBuf: t2 });
+  const a = proto.sessionKeys({
+    privateKey: kxS.privateKey,
+    peerPublicB64u: kxC.publicKey,
+    transcriptBuf: t1,
+  });
+  const b = proto.sessionKeys({
+    privateKey: kxS.privateKey,
+    peerPublicB64u: kxC.publicKey,
+    transcriptBuf: t2,
+  });
   assert.ok(!a.s2c.equals(b.s2c));
 });
 
 test('a malformed agreement key yields no session rather than a crash', () => {
   const { kxS, base } = parties();
   const t = proto.transcript({ ...base, role: proto.ROLE_SERVER });
-  assert.equal(proto.sessionKeys({ privateKey: kxS.privateKey, peerPublicB64u: 'nope', transcriptBuf: t }), null);
+  assert.equal(
+    proto.sessionKeys({ privateKey: kxS.privateKey, peerPublicB64u: 'nope', transcriptBuf: t }),
+    null
+  );
 });
 
 // ----------------------------------------------------------- fingerprints

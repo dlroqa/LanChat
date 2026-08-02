@@ -8,7 +8,13 @@ const { parseTailnetPeers } = require('../src/main/discovery.js');
 const SAMPLE = {
   Self: { HostName: 'me', TailscaleIPs: ['100.85.49.69', 'fd7a:115c:a1e0::ad35:3147'] },
   Peer: {
-    k1: { HostName: 'eds-macbook-air', DNSName: 'eds-macbook-air.tail.ts.net.', TailscaleIPs: ['100.105.210.28', 'fd7a::1'], OS: 'macOS', Online: true },
+    k1: {
+      HostName: 'eds-macbook-air',
+      DNSName: 'eds-macbook-air.tail.ts.net.',
+      TailscaleIPs: ['100.105.210.28', 'fd7a::1'],
+      OS: 'macOS',
+      Online: true,
+    },
     k2: { HostName: 'old-box', TailscaleIPs: ['100.75.4.89'], OS: 'linux', Online: false },
     kself: { HostName: 'me-dup', TailscaleIPs: ['100.85.49.69'], OS: 'linux', Online: true },
   },
@@ -90,7 +96,10 @@ test('known install locations are probed for each platform', () => {
     TAILSCALE_PATHS.darwin.includes('/Applications/Tailscale.app/Contents/MacOS/Tailscale'),
     'the Mac App Store install path must be probed'
   );
-  assert.ok(TAILSCALE_PATHS.darwin.some((p) => p.includes('homebrew')), 'Homebrew installs must be probed');
+  assert.ok(
+    TAILSCALE_PATHS.darwin.some((p) => p.includes('homebrew')),
+    'Homebrew installs must be probed'
+  );
   for (const platform of ['darwin', 'linux', 'win32']) {
     assert.ok(TAILSCALE_PATHS[platform].every((p) => p.includes('tailscale') || p.includes('Tailscale')));
   }

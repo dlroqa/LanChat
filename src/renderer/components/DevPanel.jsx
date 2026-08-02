@@ -54,7 +54,12 @@ export default function DevPanel({ peers, onRequestSupport, onClose }) {
       <div className="section-head">Change developer password</div>
       <div className="field">
         <label htmlFor="newpw">New password</label>
-        <input id="newpw" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+        <input
+          id="newpw"
+          type="password"
+          value={newPassword}
+          onChange={(e) => setNewPassword(e.target.value)}
+        />
       </div>
       <div className="field">
         <label htmlFor="confirmpw">Confirm new password</label>
@@ -76,7 +81,8 @@ export default function DevPanel({ peers, onRequestSupport, onClose }) {
 
       <div className="section-head">Online contacts</div>
       <div className="hint" style={{ marginBottom: 8 }}>
-        A support session is a normal video call — the contact sees who is asking and must accept it themselves.
+        A support session is a normal video call — the contact sees who is asking and must accept it
+        themselves.
       </div>
       {online.length === 0 ? (
         <div className="hint">No contacts are online right now.</div>

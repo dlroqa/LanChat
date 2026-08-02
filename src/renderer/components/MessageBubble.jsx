@@ -225,7 +225,10 @@ export default function MessageBubble({
             </span>
           )}
           {rejected && (
-            <span className="rejected-mark" title="Not sent — your first question is still waiting to be read">
+            <span
+              className="rejected-mark"
+              title="Not sent — your first question is still waiting to be read"
+            >
               · not your turn
             </span>
           )}

@@ -624,7 +624,11 @@ test('a session can ask an agent a peer shared, over a real socket', async (t) =
   B.call('lanchat:sendChat', { peerId: session.id, text: 'why did it move?', context: quoted });
 
   await waitFor(() => A.log.length === 1, 5000, 'the question to reach the agent');
-  assert.equal(A.log[0], composeContext(quoted, 'why did it move?'), 'the excerpt travelled with the question');
+  assert.equal(
+    A.log[0],
+    composeContext(quoted, 'why did it move?'),
+    'the excerpt travelled with the question'
+  );
 
   await waitFor(
     () => B.store.read(session.id).some((m) => m.direction === 'in'),
@@ -698,7 +702,10 @@ test('one question put to three agents is one question and three answers', async
   );
   assert.equal(commitCount(thread), 1, 'and it counts as one piece of work, not three');
   assert.deepEqual(
-    thread.slice(1).map((m) => m.speaker).sort(),
+    thread
+      .slice(1)
+      .map((m) => m.speaker)
+      .sort(),
     ['Fable', 'Hermes', 'Tessie'],
     'every answer says which agent gave it'
   );
@@ -838,10 +845,18 @@ test('an old record is read as a counsel of one, and a downgrade still finds an 
   fs.writeFileSync(file, JSON.stringify(before, null, 2), 'utf8');
 
   const registry = new SessionRegistry(dir);
-  assert.deepEqual(registry.get('session:old').agentIds, ['agent:1'], 'the one agent it asked is its counsel');
+  assert.deepEqual(
+    registry.get('session:old').agentIds,
+    ['agent:1'],
+    'the one agent it asked is its counsel'
+  );
   assert.equal(registry.get('session:old').allAgents, false);
   assert.equal(registry.get('session:old').mode, 'parallel');
-  assert.equal(fs.readFileSync(file, 'utf8'), JSON.stringify(before, null, 2), 'and the file is not rewritten');
+  assert.equal(
+    fs.readFileSync(file, 'utf8'),
+    JSON.stringify(before, null, 2),
+    'and the file is not rewritten'
+  );
 
   registry.update('session:old', { agentIds: ['agent:2', 'agent:3'] });
   const back = new SessionRegistry(dir).get('session:old');
@@ -860,7 +875,11 @@ test('an agent that has gone leaves the counsel, and the rest carry on', () => {
   assert.equal(registry.unbindAgent('agent:2'), true);
   assert.deepEqual(registry.get(many.id).agentIds, ['agent:1', 'agent:3'], 'one leaves, the others stay');
   assert.equal(registry.get(many.id).agentId, 'agent:1', 'and the mirror follows the head of the list');
-  assert.deepEqual(registry.get(one.id).agentIds, [], 'a counsel of one is left with nobody, as it always was');
+  assert.deepEqual(
+    registry.get(one.id).agentIds,
+    [],
+    'a counsel of one is left with nobody, as it always was'
+  );
   assert.equal(registry.get(one.id).agentId, null);
   assert.equal(
     JSON.stringify(registry.get(standing.id)),

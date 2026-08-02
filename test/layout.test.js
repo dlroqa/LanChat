@@ -26,7 +26,9 @@ const SRC = path.join(__dirname, '..', 'src', 'renderer');
 const css = fs.readFileSync(path.join(SRC, 'styles.css'), 'utf8');
 
 function block(selector) {
-  const m = css.match(new RegExp(`(^|\\n)${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`));
+  const m = css.match(
+    new RegExp(`(^|\\n)${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`)
+  );
   return m ? m[2] : null;
 }
 
@@ -183,9 +185,15 @@ test('the input has one ceiling, and it knows how tall the window is', () => {
   // Its effect must not depend on the text: reading geometry after a style write
   // is a forced synchronous layout of the whole window, and it measured 2.6ms a
   // character with a long conversation open against 0.8ms without.
-  const observerEffect = composer.match(/useEffect\(\(\) => \{[^]*?new ResizeObserver[^]*?\}, \[([^\]]*)\]\)/);
+  const observerEffect = composer.match(
+    /useEffect\(\(\) => \{[^]*?new ResizeObserver[^]*?\}, \[([^\]]*)\]\)/
+  );
   assert.ok(observerEffect, 'the observer should live in its own effect');
-  assert.doesNotMatch(observerEffect[1], /\btext\b/, 'the observer must not be rebuilt when the text changes');
+  assert.doesNotMatch(
+    observerEffect[1],
+    /\btext\b/,
+    'the observer must not be rebuilt when the text changes'
+  );
 });
 
 test('the responsive override comes after the rule it overrides', () => {
@@ -229,7 +237,12 @@ test('the harness mirrors the nesting the app actually renders', () => {
   // column, and a harness missing one of them measures a sidebar the app does
   // not have.
   const sidebar = fs.readFileSync(path.join(SRC, 'components', 'Sidebar.jsx'), 'utf8');
-  const order = ['className="me"', 'className="me-actions"', 'className="sidebar-search"', 'className="peer-list"'];
+  const order = [
+    'className="me"',
+    'className="me-actions"',
+    'className="sidebar-search"',
+    'className="peer-list"',
+  ];
   let at = -1;
   for (const marker of order) {
     const next = sidebar.indexOf(marker);
@@ -305,7 +318,11 @@ test('laid out in a browser: the composer is on screen at every window size', as
     assert.equal(m.pageOverflow, 0, `${where}: ${m.pageOverflow}px of the window is off screen`);
 
     // The composer sits on the bottom edge — present, whole, and not scrolled to.
-    assert.equal(m.composer.bottom, m.viewport.h, `${where}: the composer is not at the bottom of the window`);
+    assert.equal(
+      m.composer.bottom,
+      m.viewport.h,
+      `${where}: the composer is not at the bottom of the window`
+    );
     assert.ok(m.composer.h > 0, `${where}: the composer has no height`);
 
     // And it is a composer, not a panel: the conversation keeps most of the room
@@ -315,7 +332,10 @@ test('laid out in a browser: the composer is on screen at every window size', as
 
     // Every panel is bounded by the window rather than by its own contents.
     for (const part of ['sidebar', 'chatWrap', 'peerList', 'messages']) {
-      assert.ok(m[part].bottom <= m.viewport.h + 1, `${where}: .${part} runs ${m[part].bottom - m.viewport.h}px past the bottom`);
+      assert.ok(
+        m[part].bottom <= m.viewport.h + 1,
+        `${where}: .${part} runs ${m[part].bottom - m.viewport.h}px past the bottom`
+      );
     }
   }
 });
@@ -342,7 +362,11 @@ test('laid out in a browser: the four actions under the name are whole at every 
 
     // Eight of the 34px sit inside each button, so the first glyph lands on the
     // same left edge as the avatar above it rather than a few pixels in.
-    assert.equal(m.actionButtons[0].x, m.sidebar.x + 6, `${where}: the row does not line up with the name above it`);
+    assert.equal(
+      m.actionButtons[0].x,
+      m.sidebar.x + 6,
+      `${where}: the row does not line up with the name above it`
+    );
 
     // And the row is a row: the search box follows it, rather than being pushed
     // out of the sidebar by it.

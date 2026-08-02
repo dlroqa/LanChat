@@ -36,7 +36,8 @@ contextBridge.exposeInMainWorld('lanchat', {
   getHistory: (peerId) => invoke('lanchat:getHistory', peerId),
   clearHistory: (peerId) => invoke('lanchat:clearHistory', { peerId }),
   exportHistory: (peerId, name) => invoke('lanchat:exportHistory', { peerId, name }),
-  sendChat: (peerId, text, docPaths, context) => invoke('lanchat:sendChat', { peerId, text, docPaths, context }),
+  sendChat: (peerId, text, docPaths, context) =>
+    invoke('lanchat:sendChat', { peerId, text, docPaths, context }),
 
   // Sessions: local workspaces that ask an agent, or several at once. Their
   // messages travel the ordinary chat channels — these are only the list, who

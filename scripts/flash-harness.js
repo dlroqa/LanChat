@@ -31,7 +31,10 @@ function buildPage() {
   const esbuild = require('esbuild');
   const css = fs.readFileSync(path.join(SRC, 'styles.css'), 'utf8');
   const component = fs.readFileSync(path.join(SRC, 'components', 'AgentFlash.jsx'), 'utf8');
-  const react = fs.readFileSync(path.join(ROOT, 'node_modules', 'react', 'umd', 'react.development.js'), 'utf8');
+  const react = fs.readFileSync(
+    path.join(ROOT, 'node_modules', 'react', 'umd', 'react.development.js'),
+    'utf8'
+  );
   const reactDom = fs.readFileSync(
     path.join(ROOT, 'node_modules', 'react-dom', 'umd', 'react-dom.development.js'),
     'utf8'
@@ -273,7 +276,12 @@ async function measure(chrome, dir, keptDir) {
        <script>window.__render(${extra});</script></body>`
     );
 
-  const withLight = screenshot(chrome, dir, frozen(`{ nonce: 1, mode: 'connected', ms: 6000 }`), 'with-light');
+  const withLight = screenshot(
+    chrome,
+    dir,
+    frozen(`{ nonce: 1, mode: 'connected', ms: 6000 }`),
+    'with-light'
+  );
   const without = screenshot(chrome, dir, frozen('null'), 'without-light');
   result.bubbleContrastDelta = compareGlyphs(withLight, without, result.textRect);
 

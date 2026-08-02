@@ -44,7 +44,11 @@ export default function GroupInvite({ invite, onAccept, onDecline }) {
         <button className="round-btn decline" onClick={onDecline} title="Decline">
           <PhoneOff size={20} />
         </button>
-        <button className="round-btn accept pulse" onClick={() => onAccept({ muted, cameraOff })} title="Join">
+        <button
+          className="round-btn accept pulse"
+          onClick={() => onAccept({ muted, cameraOff })}
+          title="Join"
+        >
           {invite.withVideo ? <Video size={20} /> : <Users size={20} />}
         </button>
       </div>

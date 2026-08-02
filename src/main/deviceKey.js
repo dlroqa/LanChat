@@ -71,9 +71,7 @@ function createDeviceKey({ userDataDir, safeStorage = null }) {
       // reset, a restored backup — the roster and the fingerprint still work and
       // the failure is legible instead of total.
       publicKey: pair.publicKey,
-      privateKey: sealed
-        ? safeStorage.encryptString(pair.privateKey).toString('base64')
-        : pair.privateKey,
+      privateKey: sealed ? safeStorage.encryptString(pair.privateKey).toString('base64') : pair.privateKey,
     };
     writeAtomic(data);
     return { ...data, plainPrivate: pair.privateKey };

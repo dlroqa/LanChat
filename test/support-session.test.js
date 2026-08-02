@@ -33,7 +33,12 @@ test('offerPayload marks a support session and defaults to false', () => {
   assert.equal(supportOffer.kind, 'offer');
   assert.equal(supportOffer.support, true);
 
-  const plainOffer = offerPayload({ callId: 'c2', withVideo: true, name: 'Alex', sdp: { type: 'offer', sdp: 'x' } });
+  const plainOffer = offerPayload({
+    callId: 'c2',
+    withVideo: true,
+    name: 'Alex',
+    sdp: { type: 'offer', sdp: 'x' },
+  });
   assert.equal(plainOffer.support, false);
 });
 
@@ -42,14 +47,29 @@ test('answerPayload only attaches deviceInfo for a support session', () => {
 
   // An ordinary call's answer shape must be unchanged, even if a stray
   // deviceInfo were ever computed for it.
-  const plain = answerPayload({ callId: 'c1', sdp: { type: 'answer', sdp: 'x' }, support: false, deviceInfo });
+  const plain = answerPayload({
+    callId: 'c1',
+    sdp: { type: 'answer', sdp: 'x' },
+    support: false,
+    deviceInfo,
+  });
   assert.ok(!('deviceInfo' in plain));
 
-  const support = answerPayload({ callId: 'c1', sdp: { type: 'answer', sdp: 'x' }, support: true, deviceInfo });
+  const support = answerPayload({
+    callId: 'c1',
+    sdp: { type: 'answer', sdp: 'x' },
+    support: true,
+    deviceInfo,
+  });
   assert.deepEqual(support.deviceInfo, deviceInfo);
 
   // A support session where labels failed to resolve must not add a null key.
-  const noInfo = answerPayload({ callId: 'c1', sdp: { type: 'answer', sdp: 'x' }, support: true, deviceInfo: null });
+  const noInfo = answerPayload({
+    callId: 'c1',
+    sdp: { type: 'answer', sdp: 'x' },
+    support: true,
+    deviceInfo: null,
+  });
   assert.ok(!('deviceInfo' in noInfo));
 });
 

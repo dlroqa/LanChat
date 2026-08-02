@@ -96,7 +96,12 @@ test('an env-backed secret stores only the variable name', () => {
   const dir = tmpdir('env');
   const reg = new AgentRegistry(dir, { safeStorage: fakeSafeStorage });
   process.env.LANCHAT_TEST_KEY = 'from-env';
-  const rec = reg.add({ name: 'E', kind: 'http', config: {}, secret: { mode: 'env', name: 'LANCHAT_TEST_KEY' } });
+  const rec = reg.add({
+    name: 'E',
+    kind: 'http',
+    config: {},
+    secret: { mode: 'env', name: 'LANCHAT_TEST_KEY' },
+  });
   assert.equal(reg.secretFor(rec.id), 'from-env');
   assert.ok(!fs.readFileSync(path.join(dir, 'agents.json'), 'utf8').includes('from-env'));
   delete process.env.LANCHAT_TEST_KEY;
@@ -113,9 +118,12 @@ test('editing an agent without supplying a secret keeps the existing one', () =>
 
 test('a refused connection explains the loopback trap instead of dumping the raw error', () => {
   const url = new URL('http://100.85.49.69:8642/v1/models');
-  const err = describeSocketError(Object.assign(new Error('connect ECONNREFUSED 100.85.49.69:8642'), {
-    code: 'ECONNREFUSED',
-  }), url);
+  const err = describeSocketError(
+    Object.assign(new Error('connect ECONNREFUSED 100.85.49.69:8642'), {
+      code: 'ECONNREFUSED',
+    }),
+    url
+  );
 
   assert.match(err.message, /Nothing is listening on 100\.85\.49\.69:8642/);
   assert.match(err.message, /127\.0\.0\.1/, 'should name the address that would work');
@@ -333,13 +341,24 @@ test('removing an agent leaves nothing behind', async () => {
     config: {},
     secret: { mode: 'sealed', value: 'k' },
   });
-  store.append(agent.id, { id: '1', peerId: agent.id, direction: 'in', kind: 'text', text: 'hi', ts: Date.now() });
+  store.append(agent.id, {
+    id: '1',
+    peerId: agent.id,
+    direction: 'in',
+    kind: 'text',
+    text: 'hi',
+    ts: Date.now(),
+  });
   assert.ok(fs.existsSync(store.fileFor(agent.id)));
 
   await agentHub.remove(agent.id);
 
   assert.equal(agentHub.list().length, 0, 'record is gone');
-  assert.equal(hub.presenceList().find((p) => p.id === agent.id), undefined, 'roster entry is gone');
+  assert.equal(
+    hub.presenceList().find((p) => p.id === agent.id),
+    undefined,
+    'roster entry is gone'
+  );
   assert.equal(fs.existsSync(store.fileFor(agent.id)), false, 'history file is deleted');
 });
 
@@ -407,7 +426,11 @@ test('editing an agent in place keeps its stored key', async () => {
 
 test('switching transport replaces the config instead of leaving stale settings behind', async () => {
   const reg = new AgentRegistry(tmpdir('switch'), { safeStorage: fakeSafeStorage });
-  const rec = reg.add({ name: 'H', kind: 'http', config: { baseUrl: 'http://127.0.0.1:8642', timeoutMs: 5000 } });
+  const rec = reg.add({
+    name: 'H',
+    kind: 'http',
+    config: { baseUrl: 'http://127.0.0.1:8642', timeoutMs: 5000 },
+  });
 
   // A same-transport edit merges, so fields the form never shows survive.
   reg.update(rec.id, { kind: 'http', config: { baseUrl: 'http://localhost:9999' } });
@@ -508,7 +531,12 @@ test('an allowlisted peer must still address the agent explicitly', async () => 
 
 test('the enabled toggle is a hard gate, not a UI hint', async () => {
   const { agentHub } = makeHub();
-  const { agent } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {}, allowedPeers: ['friend'] });
+  const { agent } = await agentHub.add({
+    name: 'Hermes',
+    kind: 'http',
+    config: {},
+    allowedPeers: ['friend'],
+  });
   await agentHub.setEnabled(agent.id, false);
   assert.equal(
     agentHub.routeFromPeer('friend', '@Hermes run something'),
@@ -590,7 +618,11 @@ test('removing an agent deletes every delegate thread, not just its own history'
   // "Nothing permanent" has to include the transcripts of other people's
   // conversations with it, or removal quietly leaves them on disk.
   assert.equal(fs.existsSync(store.fileFor(delegate)), false, 'delegate transcript is gone');
-  assert.equal(hub.presenceList().find((p) => p.id === delegate), undefined, 'and its roster card');
+  assert.equal(
+    hub.presenceList().find((p) => p.id === delegate),
+    undefined,
+    'and its roster card'
+  );
 });
 
 test('an approval raised by a remote peer is surfaced locally and never relayed', async () => {
@@ -1398,7 +1430,9 @@ test('withdrawal and an owner going offline both remove the contact', () => {
 test('the local-origin marker is a Symbol, so JSON from the wire cannot forge it', () => {
   // This is the property the impersonation guard in ipc.js relies on.
   assert.equal(typeof LOCAL_ORIGIN, 'symbol');
-  const forged = JSON.parse('{"from":"agent:evil","type":"chat","text":"x","lanchat.agent.localOrigin":true}');
+  const forged = JSON.parse(
+    '{"from":"agent:evil","type":"chat","text":"x","lanchat.agent.localOrigin":true}'
+  );
   assert.equal(forged[LOCAL_ORIGIN], undefined, 'a parsed frame can never carry the Symbol');
 });
 
@@ -1524,7 +1558,12 @@ test('a peer is told the agent failed, but never what is on this machine', async
     },
   });
 
-  const { agent } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {}, allowedPeers: ['friend'] });
+  const { agent } = await agentHub.add({
+    name: 'Hermes',
+    kind: 'http',
+    config: {},
+    allowedPeers: ['friend'],
+  });
   assert.ok(agent);
 
   const local = [];
@@ -1572,31 +1611,35 @@ test('the ACP arguments hint does not tell users to write {prompt}', () => {
 // Off by default: it needs Hermes installed and configured, and the adapter
 // spends several seconds loading its environment and MCP servers before it
 // answers `initialize`. Run with LANCHAT_ACP_LIVE=1.
-test('a real ACP agent starts from a PATH that does not contain it', { skip: !process.env.LANCHAT_ACP_LIVE }, async (t) => {
-  const { createAcpTransport } = require('../src/main/agents/transports/acp.js');
-  const oldPath = process.env.PATH;
-  t.after(() => {
-    process.env.PATH = oldPath;
-  });
-  // Exactly what a GUI-launched Electron process sees: no per-user bin dir.
-  process.env.PATH = (oldPath || '')
-    .split(path.delimiter)
-    .filter((d) => d && !d.includes(`${path.sep}.local${path.sep}bin`))
-    .join(path.delimiter);
+test(
+  'a real ACP agent starts from a PATH that does not contain it',
+  { skip: !process.env.LANCHAT_ACP_LIVE },
+  async (t) => {
+    const { createAcpTransport } = require('../src/main/agents/transports/acp.js');
+    const oldPath = process.env.PATH;
+    t.after(() => {
+      process.env.PATH = oldPath;
+    });
+    // Exactly what a GUI-launched Electron process sees: no per-user bin dir.
+    process.env.PATH = (oldPath || '')
+      .split(path.delimiter)
+      .filter((d) => d && !d.includes(`${path.sep}.local${path.sep}bin`))
+      .join(path.delimiter);
 
-  const transport = createAcpTransport({
-    id: 'agent:live',
-    name: 'Hermes',
-    config: { command: 'hermes', args: ['acp'] },
-    timeoutMs: 90000,
-  });
-  try {
-    const info = await transport.start();
-    assert.match(info.detail, /ACP session with/);
-  } finally {
-    await transport.stop();
+    const transport = createAcpTransport({
+      id: 'agent:live',
+      name: 'Hermes',
+      config: { command: 'hermes', args: ['acp'] },
+      timeoutMs: 90000,
+    });
+    try {
+      const info = await transport.start();
+      assert.match(info.detail, /ACP session with/);
+    } finally {
+      await transport.stop();
+    }
   }
-});
+);
 
 // ---- ACP against a scripted agent ----
 
@@ -1820,7 +1863,9 @@ test('a summon spends no turn, so the introduction does not cost the first quest
 test('a summon never displaces a turn-holder and never joins the queue', async () => {
   await withFakeClock(async () => {
     const { hub, agentHub, agent, log } = makeHub();
-    const { agent: rec } = { agent: (await agentHub.add({ name: 'Hermes', kind: 'http', config: {} })).agent };
+    const { agent: rec } = {
+      agent: (await agentHub.add({ name: 'Hermes', kind: 'http', config: {} })).agent,
+    };
     await agentHub.setSharing(rec.id, { networkWide: true });
     joinPeer(hub, 'alice');
     joinPeer(hub, 'bob');
@@ -1875,8 +1920,15 @@ test('a summon from a peer who may not reach the agent gets nothing at all', asy
   // Configured, allowed, but the transport never came up.
   {
     const { agentHub, agent, relayed } = await summonHub({ startError: 'nope' });
-    assert.equal(agentHub.routeSummon('friend', agent.id), false, 'an agent that is not running cannot answer');
-    assert.deepEqual(relayed.filter((r) => r.obj.type === 'agent-reply'), []);
+    assert.equal(
+      agentHub.routeSummon('friend', agent.id),
+      false,
+      'an agent that is not running cannot answer'
+    );
+    assert.deepEqual(
+      relayed.filter((r) => r.obj.type === 'agent-reply'),
+      []
+    );
   }
 
   // An id nobody has.
@@ -1899,7 +1951,11 @@ test('a summon flood is absorbed, and still never lands in the human chat', asyn
   // the roster: ensureDelegateIdentity touches it, and republishing presence
   // twenty times on twenty keystrokes is a denial of service whether or not any
   // text comes with it.
-  assert.deepEqual(relayed.filter((r) => r.obj.type === 'agent-reply'), [], 'nothing is said back');
+  assert.deepEqual(
+    relayed.filter((r) => r.obj.type === 'agent-reply'),
+    [],
+    'nothing is said back'
+  );
   assert.deepEqual(requests, [], 'and nothing is written down');
   assert.deepEqual(log, [], 'nothing was ever run');
   // The load-bearing one. ipc.js reads this return value to decide whether the
@@ -1972,10 +2028,11 @@ test('a run that finishes silently is signalled, not written down as an error', 
 
 test('a profile becomes a leading flag, and only for Hermes', () => {
   const { hermesLaunchArgs } = require('../src/main/agents/profiles.js');
-  assert.deepEqual(
-    hermesLaunchArgs({ command: 'hermes', args: ['acp'], profile: 'lanchat' }),
-    ['--profile', 'lanchat', 'acp']
-  );
+  assert.deepEqual(hermesLaunchArgs({ command: 'hermes', args: ['acp'], profile: 'lanchat' }), [
+    '--profile',
+    'lanchat',
+    'acp',
+  ]);
   assert.deepEqual(
     hermesLaunchArgs({ command: '/home/me/.local/bin/hermes', args: [], profile: 'lanchat' }),
     ['--profile', 'lanchat', 'acp'],
@@ -2020,7 +2077,10 @@ test('ACP profiles are discovered from this machine, but only for Hermes', () =>
       'another ACP agent is offered nothing, because --profile would break it'
     );
     // An ACP agent is a child process here, so no localhost question applies.
-    assert.deepEqual(discoverProfiles({ kind: 'acp', command: 'hermes', baseUrl: undefined }), ['iris', 'tessie']);
+    assert.deepEqual(discoverProfiles({ kind: 'acp', command: 'hermes', baseUrl: undefined }), [
+      'iris',
+      'tessie',
+    ]);
   } finally {
     if (old === undefined) delete process.env.HERMES_HOME;
     else process.env.HERMES_HOME = old;
@@ -2073,7 +2133,12 @@ test('sharing an agent tells the peer it exists and nothing about how it is run'
   await agentHub.add({
     name: 'Hermes',
     kind: 'acp',
-    config: { command: '/home/me/.local/bin/hermes', args: ['acp'], cwd: '/home/me/secrets', profile: 'lanchat' },
+    config: {
+      command: '/home/me/.local/bin/hermes',
+      args: ['acp'],
+      cwd: '/home/me/secrets',
+      profile: 'lanchat',
+    },
     allowedPeers: ['friend'],
   });
 
@@ -2100,42 +2165,46 @@ test('sharing an agent tells the peer it exists and nothing about how it is run'
 
 // Profiles against the real Hermes. Off by default for the same reasons as the
 // launch test above; run with LANCHAT_ACP_LIVE=1.
-test('a real ACP agent starts under a named profile, and says so when the name is wrong', { skip: !process.env.LANCHAT_ACP_LIVE }, async () => {
-  const { createAcpTransport } = require('../src/main/agents/transports/acp.js');
-  const { hermesLaunchArgs, localProfiles } = require('../src/main/agents/profiles.js');
-  const available = localProfiles();
-  assert.ok(available.length, 'this machine has at least one Hermes profile to test with');
+test(
+  'a real ACP agent starts under a named profile, and says so when the name is wrong',
+  { skip: !process.env.LANCHAT_ACP_LIVE },
+  async () => {
+    const { createAcpTransport } = require('../src/main/agents/transports/acp.js');
+    const { hermesLaunchArgs, localProfiles } = require('../src/main/agents/profiles.js');
+    const available = localProfiles();
+    assert.ok(available.length, 'this machine has at least one Hermes profile to test with');
 
-  const build = (profile) =>
-    createAcpTransport({
-      id: 'agent:live-profile',
-      name: 'Hermes',
-      config: { command: 'hermes', args: hermesLaunchArgs({ command: 'hermes', args: ['acp'], profile }) },
-      timeoutMs: 90000,
-    });
+    const build = (profile) =>
+      createAcpTransport({
+        id: 'agent:live-profile',
+        name: 'Hermes',
+        config: { command: 'hermes', args: hermesLaunchArgs({ command: 'hermes', args: ['acp'], profile }) },
+        timeoutMs: 90000,
+      });
 
-  const good = build(available[0]);
-  try {
-    assert.match((await good.start()).detail, /ACP session with/);
-  } finally {
-    await good.stop();
+    const good = build(available[0]);
+    try {
+      assert.match((await good.start()).detail, /ACP session with/);
+    } finally {
+      await good.stop();
+    }
+
+    // Unlike HTTP, a name Hermes does not know is an error rather than a silent
+    // fallback — and it is only legible because stderr is kept.
+    const bad = build('nosuchprofilehere');
+    try {
+      await assert.rejects(
+        () => bad.start(),
+        (err) => {
+          assert.match(err.detail || '', /does not exist/);
+          return true;
+        }
+      );
+    } finally {
+      await bad.stop();
+    }
   }
-
-  // Unlike HTTP, a name Hermes does not know is an error rather than a silent
-  // fallback — and it is only legible because stderr is kept.
-  const bad = build('nosuchprofilehere');
-  try {
-    await assert.rejects(
-      () => bad.start(),
-      (err) => {
-        assert.match(err.detail || '', /does not exist/);
-        return true;
-      }
-    );
-  } finally {
-    await bad.stop();
-  }
-});
+);
 
 // ---- pictures an agent made ----
 //

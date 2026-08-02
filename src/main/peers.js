@@ -318,11 +318,7 @@ class PeerHub {
   // Snapshot of everyone we know about, with live connection state.
   presenceList() {
     const out = [];
-    const ids = new Set([
-      ...this.identities.keys(),
-      ...this.sockets.keys(),
-      ...this.discoveryHints.keys(),
-    ]);
+    const ids = new Set([...this.identities.keys(), ...this.sockets.keys(), ...this.discoveryHints.keys()]);
     for (const id of ids) {
       if (id === this.getIdentity().id) continue;
       out.push({

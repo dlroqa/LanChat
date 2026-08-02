@@ -21,13 +21,19 @@ export default function QueueBadge({ peer }) {
   if (peer.queueState === 'active') {
     if (counting) {
       return (
-        <span className="tag warn counting" title={`Idle — the turn passes in ${left}s unless you ask something`}>
+        <span
+          className="tag warn counting"
+          title={`Idle — the turn passes in ${left}s unless you ask something`}
+        >
           {left}s left
         </span>
       );
     }
     return (
-      <span className="tag good" title={`${peer.queueRemaining} of ${peer.queueQuota} queries left this turn`}>
+      <span
+        className="tag good"
+        title={`${peer.queueRemaining} of ${peer.queueQuota} queries left this turn`}
+      >
         {peer.queueRemaining}/{peer.queueQuota} left
       </span>
     );
@@ -48,7 +54,12 @@ export default function QueueBadge({ peer }) {
           peer.queueAhead === 1 ? 'query' : 'queries'
         } ahead of you`;
     return (
-      <span className={`queue-dots ${counting ? 'counting' : ''}`} title={label} aria-label={label} role="status">
+      <span
+        className={`queue-dots ${counting ? 'counting' : ''}`}
+        title={label}
+        aria-label={label}
+        role="status"
+      >
         <i />
         <i />
         <i />

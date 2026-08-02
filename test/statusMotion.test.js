@@ -61,8 +61,14 @@ test('an empty label asks for no cursor at all', () => {
 test('every burst picks a hue different from the one already burning', () => {
   for (const current of BURST_HUES) {
     // Both ends of the random range, so neither rounds back onto `current`.
-    assert.notStrictEqual(nextHue(current, () => 0), current);
-    assert.notStrictEqual(nextHue(current, () => 0.999999), current);
+    assert.notStrictEqual(
+      nextHue(current, () => 0),
+      current
+    );
+    assert.notStrictEqual(
+      nextHue(current, () => 0.999999),
+      current
+    );
   }
 });
 

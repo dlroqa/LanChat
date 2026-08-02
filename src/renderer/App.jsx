@@ -238,7 +238,8 @@ export default function App() {
       getDeviceLabels: async () => {
         const { audioInputs, videoInputs } = await listDevices();
         const mic = audioInputs.find((d) => d.deviceId === configRef.current.audioInputId) || audioInputs[0];
-        const camera = videoInputs.find((d) => d.deviceId === configRef.current.videoInputId) || videoInputs[0];
+        const camera =
+          videoInputs.find((d) => d.deviceId === configRef.current.videoInputId) || videoInputs[0];
         return {
           mic: mic ? labelFor(mic, audioInputs.indexOf(mic), 'Microphone') : null,
           camera: camera ? labelFor(camera, videoInputs.indexOf(camera), 'Camera') : null,
@@ -739,7 +740,11 @@ export default function App() {
           // An answer — or a refusal explaining the queue — ends the wait. Not in
           // a session, where the wait is the whole round and one answer of three
           // does not end it; there it is the closing round that says so.
-          if (payload.direction === 'in' && isThinkingThread(payload.peerId) && !isSessionThread(payload.peerId)) {
+          if (
+            payload.direction === 'in' &&
+            isThinkingThread(payload.peerId) &&
+            !isSessionThread(payload.peerId)
+          ) {
             setAwaiting((a) => (a[payload.peerId] ? { ...a, [payload.peerId]: false } : a));
           }
           if (payload.direction === 'in') {
@@ -1523,7 +1528,9 @@ export default function App() {
       // Attaching the same file twice would send it twice; the second time is
       // almost always somebody making sure the first one landed.
       const seen = new Set(existing.map((d) => d.path));
-      const added = good.filter((d) => !seen.has(d.path)).map((d) => ({ path: d.path, name: d.name, bytes: d.bytes }));
+      const added = good
+        .filter((d) => !seen.has(d.path))
+        .map((d) => ({ path: d.path, name: d.name, bytes: d.bytes }));
       return added.length ? { ...a, [threadId]: [...existing, ...added] } : a;
     });
   }
@@ -1584,7 +1591,9 @@ export default function App() {
 
   function startCall(withVideo) {
     if (!selectedPeer || !selectedPeer.online) return;
-    callRef.current.start(selectedPeer, withVideo).catch((err) => toast(`Cannot start call: ${err.message}`, 'error'));
+    callRef.current
+      .start(selectedPeer, withVideo)
+      .catch((err) => toast(`Cannot start call: ${err.message}`, 'error'));
   }
 
   // Developer panel → "Request support session". This is not a silent path to
@@ -1975,7 +1984,9 @@ export default function App() {
       {incoming && (
         <IncomingCall
           call={call}
-          onAccept={(prefs) => callRef.current.accept(prefs).catch((err) => toast(`Cannot answer: ${err.message}`, 'error'))}
+          onAccept={(prefs) =>
+            callRef.current.accept(prefs).catch((err) => toast(`Cannot answer: ${err.message}`, 'error'))
+          }
           onDecline={() => callRef.current.decline()}
         />
       )}

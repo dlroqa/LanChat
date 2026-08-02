@@ -382,10 +382,13 @@ function VoiceButton({ disabled, onRecorded }) {
   };
 
   // A recording must never outlive the component, or the mic stays live.
-  useEffect(() => () => {
-    handle.current?.cancel();
-    clearInterval(timer.current);
-  }, []);
+  useEffect(
+    () => () => {
+      handle.current?.cancel();
+      clearInterval(timer.current);
+    },
+    []
+  );
 
   async function begin(e) {
     if (disabled || handle.current) return;

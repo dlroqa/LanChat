@@ -30,7 +30,10 @@ const found = import.meta.glob('../assets/music/*.{opus,ogg,mp3,m4a,wav,flac}', 
 
 // "../assets/music/sleepy-island.opus" -> "sleepy-island"
 export function trackKey(filePath) {
-  return filePath.split('/').pop().replace(/\.[^.]+$/, '');
+  return filePath
+    .split('/')
+    .pop()
+    .replace(/\.[^.]+$/, '');
 }
 
 // "sleepy-island" -> "Sleepy island". Sentence case rather than Title Case

@@ -138,7 +138,11 @@ function AgentPanel({ peer, status, awaiting }) {
         <div style={{ minWidth: 0 }}>
           <div className="conn-name">{peer.name}</div>
           <div className={`conn-sub agent-tone-${state.tone}`}>
-            {peer.delegate ? `${peer.viaName}'s conversation` : peer.remote ? `Shared by ${peer.viaName}` : 'Your agent'}
+            {peer.delegate
+              ? `${peer.viaName}'s conversation`
+              : peer.remote
+                ? `Shared by ${peer.viaName}`
+                : 'Your agent'}
           </div>
         </div>
       </div>
@@ -176,8 +180,8 @@ function AgentPanel({ peer, status, awaiting }) {
           the moment the question is read. */}
       {peer.queueHeld && (
         <div className="conn-note conn-note-held">
-          Your question is held — it will be read the moment your turn comes, and it does not spend one of your
-          queries.
+          Your question is held — it will be read the moment your turn comes, and it does not spend one of
+          your queries.
         </div>
       )}
     </div>
@@ -222,9 +226,7 @@ function SessionPanel({ peer, streaming, awaiting, typing, commits }) {
         </span>
         <div style={{ minWidth: 0 }}>
           <div className="conn-name">{peer.name}</div>
-          <div className={`conn-sub agent-tone-${standing.tone}`}>
-            {who ? `Asks ${who}` : 'No agent yet'}
-          </div>
+          <div className={`conn-sub agent-tone-${standing.tone}`}>{who ? `Asks ${who}` : 'No agent yet'}</div>
         </div>
       </div>
 
@@ -634,7 +636,12 @@ function StreamGraph({ samples, color, live }) {
 
   return (
     <div className="stream-graph">
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label="Connection latency over time">
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        role="img"
+        aria-label="Connection latency over time"
+      >
         {ticks.map((t) => (
           <line key={t} x1="0" x2={W} y1={H * t} y2={H * t} className="graph-grid" />
         ))}

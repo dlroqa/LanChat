@@ -96,20 +96,31 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
       const update = msg.params?.update || {};
       const text = update.content?.text || '';
       if (update.sessionUpdate === 'agent_message_chunk' && text) liveHandlers?.onDelta?.(text);
-      else if (update.sessionUpdate === 'tool_call') liveHandlers?.onStatus?.(`Running ${update.title || 'a tool'}…`);
-      else if (update.sessionUpdate === 'tool_call_update' && update.status === 'completed') liveHandlers?.onStatus?.(null);
+      else if (update.sessionUpdate === 'tool_call')
+        liveHandlers?.onStatus?.(`Running ${update.title || 'a tool'}…`);
+      else if (update.sessionUpdate === 'tool_call_update' && update.status === 'completed')
+        liveHandlers?.onStatus?.(null);
       return;
     }
 
     if (msg.method === 'session/request_permission') {
       // Park the JSON-RPC request id; the reply goes back only once a human answers.
-      const options = (msg.params?.options || []).map((o) => ({ id: o.optionId, label: o.name, kind: o.kind }));
+      const options = (msg.params?.options || []).map((o) => ({
+        id: o.optionId,
+        label: o.name,
+        kind: o.kind,
+      }));
       const approvalId = `acp-${msg.id}`;
       openApprovals.set(approvalId, msg.id);
       liveHandlers?.onApproval?.({
         runId: approvalId,
         command: msg.params?.toolCall?.title || msg.params?.toolCall?.rawInput || 'a tool call',
-        choices: options.length ? options : [{ id: 'allow', label: 'Allow' }, { id: 'deny', label: 'Deny' }],
+        choices: options.length
+          ? options
+          : [
+              { id: 'allow', label: 'Allow' },
+              { id: 'deny', label: 'Deny' },
+            ],
       });
     }
   }
@@ -168,9 +179,7 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
       // and Node's own text ("spawn hermes ENOENT") does not hint at it. The
       // command name is local, so it travels as detail.
       const failure =
-        err.code === 'ENOENT'
-          ? localError('The agent could not be started.', notFoundMessage(file))
-          : err;
+        err.code === 'ENOENT' ? localError('The agent could not be started.', notFoundMessage(file)) : err;
       for (const [, entry] of pending) entry.reject(failure);
       pending.clear();
     });
@@ -207,11 +216,16 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
     } catch (err) {
       // The agent's own words are the detail; what reaches a peer is only that
       // the session could not be opened.
-      throw localError('The agent did not start a session.', [err.message, authHint()].filter(Boolean).join(' '));
+      throw localError(
+        'The agent did not start a session.',
+        [err.message, authHint()].filter(Boolean).join(' ')
+      );
     }
     sessionId = session?.sessionId;
     if (!sessionId) throw localError('The agent did not start a session.', authHint());
-    return { detail: `ACP session with ${init?.agentInfo?.name || file} (protocol v${init?.protocolVersion ?? PROTOCOL_VERSION})` };
+    return {
+      detail: `ACP session with ${init?.agentInfo?.name || file} (protocol v${init?.protocolVersion ?? PROTOCOL_VERSION})`,
+    };
   }
 
   // Why an empty answer is empty. Unrecognised reasons are reported rather than
@@ -229,7 +243,13 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
     // session/prompt resolves with only a stop reason, so the reply text has to
     // be accumulated from the session/update chunks as they arrive.
     let collected = '';
-    liveHandlers = { ...handlers, onDelta: (d) => { collected += d; handlers.onDelta?.(d); } };
+    liveHandlers = {
+      ...handlers,
+      onDelta: (d) => {
+        collected += d;
+        handlers.onDelta?.(d);
+      },
+    };
     try {
       if (!child) await start();
       const result = await call('session/prompt', { sessionId, prompt: [{ type: 'text', text }] });

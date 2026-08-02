@@ -59,8 +59,14 @@ test('pickAsset prefers the NSIS installer over the portable exe on Windows', ()
 });
 
 test('pickAsset chooses AppImage vs deb based on how Linux is running', () => {
-  assert.equal(pickAsset(ASSETS, { platform: 'linux', arch: 'x64', isAppImage: true }).name, 'LanChat-0.1.4.AppImage');
-  assert.equal(pickAsset(ASSETS, { platform: 'linux', arch: 'x64', isAppImage: false }).name, 'lanchat_0.1.4_amd64.deb');
+  assert.equal(
+    pickAsset(ASSETS, { platform: 'linux', arch: 'x64', isAppImage: true }).name,
+    'LanChat-0.1.4.AppImage'
+  );
+  assert.equal(
+    pickAsset(ASSETS, { platform: 'linux', arch: 'x64', isAppImage: false }).name,
+    'lanchat_0.1.4_amd64.deb'
+  );
 });
 
 // The macOS updater consumes the ZIP. Artifact names must keep resolving under

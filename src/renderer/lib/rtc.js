@@ -16,11 +16,22 @@ export function offerPayload({ callId, withVideo, name, sdp, support }) {
 // `deviceInfo` (mic/camera labels) is only ever attached when the callee is
 // accepting a support session — an ordinary call's answer shape is unchanged.
 export function answerPayload({ callId, sdp, support, deviceInfo }) {
-  return support && deviceInfo ? { kind: 'answer', callId, sdp, deviceInfo } : { kind: 'answer', callId, sdp };
+  return support && deviceInfo
+    ? { kind: 'answer', callId, sdp, deviceInfo }
+    : { kind: 'answer', callId, sdp };
 }
 
 export class CallManager {
-  constructor({ sendSignal, onState, getIceServers, getSelfName, getDevices, getDeviceLabels, onError, onPeerLeft }) {
+  constructor({
+    sendSignal,
+    onState,
+    getIceServers,
+    getSelfName,
+    getDevices,
+    getDeviceLabels,
+    onError,
+    onPeerLeft,
+  }) {
     this.sendSignal = sendSignal;
     this.onState = onState;
     this.getIceServers = getIceServers || (() => []);
@@ -98,7 +109,11 @@ export class CallManager {
     const videoBase = { width: { ideal: 1280 }, height: { ideal: 720 } };
     const preferred = {
       audio: audioInputId ? { deviceId: { exact: audioInputId } } : true,
-      video: withVideo ? (videoInputId ? { ...videoBase, deviceId: { exact: videoInputId } } : videoBase) : false,
+      video: withVideo
+        ? videoInputId
+          ? { ...videoBase, deviceId: { exact: videoInputId } }
+          : videoBase
+        : false,
     };
     try {
       return await navigator.mediaDevices.getUserMedia(preferred);
@@ -120,7 +135,12 @@ export class CallManager {
         if (r.type === 'inbound-rtp') bytesReceived += r.bytesReceived || 0;
         if (r.type === 'outbound-rtp') bytesSent += r.bytesSent || 0;
       });
-      return { bytesReceived, bytesSent, connection: this.pc.connectionState, ice: this.pc.iceConnectionState };
+      return {
+        bytesReceived,
+        bytesSent,
+        connection: this.pc.connectionState,
+        ice: this.pc.iceConnectionState,
+      };
     } catch {
       return null;
     }

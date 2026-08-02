@@ -11,7 +11,9 @@ Module._resolveFilename = function (r, ...a) {
   return orig.call(this, r, ...a);
 };
 require.cache['estub'] = {
-  id: 'estub', filename: 'estub', loaded: true,
+  id: 'estub',
+  filename: 'estub',
+  loaded: true,
   exports: { ipcMain: { handle: () => {} }, dialog: {}, shell: {} },
 };
 

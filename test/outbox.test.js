@@ -60,7 +60,11 @@ test('the queue drains when the peer comes back', () => {
   hub.online.add('bob');
   assert.equal(outbox.flush('bob'), 2);
   assert.equal(outbox.pendingCount('bob'), 0);
-  assert.deepEqual(hub.sent.map((s) => s.obj.text), ['one', 'two'], 'in the order they were typed');
+  assert.deepEqual(
+    hub.sent.map((s) => s.obj.text),
+    ['one', 'two'],
+    'in the order they were typed'
+  );
 });
 
 test('presence is what triggers the drain, with no explicit flush call', () => {
@@ -96,7 +100,11 @@ test('a mid-queue send failure stops the drain and preserves order', () => {
 
   hub.send = realSend;
   assert.equal(outbox.flush('bob'), 2);
-  assert.deepEqual(hub.sent.map((s) => s.obj.text), ['one', 'two', 'three'], 'order survives the interruption');
+  assert.deepEqual(
+    hub.sent.map((s) => s.obj.text),
+    ['one', 'two', 'three'],
+    'order survives the interruption'
+  );
 });
 
 test('the queue survives a restart', () => {

@@ -184,7 +184,22 @@ function makeNode(name, port) {
   const own = new Map(handlers);
   const call = (channel, arg) => own.get(channel)(null, arg);
 
-  return { dir, config, bus, getIdentity, hub, server, store, agentHub, log, events, call, port, deviceKey, pins };
+  return {
+    dir,
+    config,
+    bus,
+    getIdentity,
+    hub,
+    server,
+    store,
+    agentHub,
+    log,
+    events,
+    call,
+    port,
+    deviceKey,
+    pins,
+  };
 }
 
 function waitFor(fn, timeout = 5000, what = 'condition') {
@@ -769,7 +784,10 @@ test('a run that finishes with nothing leaves no bubble on either machine', asyn
     'no bubble is stored for an answer that does not exist'
   );
   const delegate = `${agent.id}#${idB}`;
-  assert.deepEqual(A.store.read(delegate).map((m) => `${m.direction}:${m.text}`), ['in:quiet:now']);
+  assert.deepEqual(
+    A.store.read(delegate).map((m) => `${m.direction}:${m.text}`),
+    ['in:quiet:now']
+  );
 
   // Nobody is left waiting on a reply that is never coming: the signal is what
   // clears the "thinking" indicator, since no chat message arrives to do it.
@@ -867,22 +885,14 @@ test('two peers take turns, and each is told where they stand', async (t) => {
 
   // B is out of quota with C waiting, so the next attempt hands over.
   B.call('lanchat:sendChat', { peerId: bRemote, text: 'one more' });
-  await waitFor(
-    () => C.hub.identities.get(cRemote)?.queueState === 'active',
-    8000,
-    'the turn to pass to C'
-  );
+  await waitFor(() => C.hub.identities.get(cRemote)?.queueState === 'active', 8000, 'the turn to pass to C');
   assert.ok(!A.log.includes('one more'), "B's over-quota request was refused, not served");
   assert.equal(B.hub.identities.get(bRemote).queueState, 'waiting', 'and B is now queued');
 
   // The question C asked while it was in line is read the moment the turn lands,
   // rather than C having to notice and ask it again.
   await waitFor(() => A.log.includes('my turn?'), 8000, "C's held question to be read");
-  await waitFor(
-    () => C.hub.identities.get(cRemote)?.queueHeld === false,
-    5000,
-    'the held marker to clear'
-  );
+  await waitFor(() => C.hub.identities.get(cRemote)?.queueHeld === false, 5000, 'the held marker to clear');
 
   // And reading it cost nothing: C gets its own full quota, not the remainder of
   // B's, and not one less for the question it asked while waiting.
@@ -986,11 +996,7 @@ test('a pending handover counts down on both machines at once', async (t) => {
   assert.equal(holder.queueState, 'active');
   assert.equal(next.queueState, 'waiting');
   assert.equal(next.queuePosition, 1);
-  assert.equal(
-    next.queueExpiresInSec,
-    holder.queueExpiresInSec,
-    'the same number of seconds on both sides'
-  );
+  assert.equal(next.queueExpiresInSec, holder.queueExpiresInSec, 'the same number of seconds on both sides');
   assert.ok(holder.queueExpiresInSec > 0 && holder.queueExpiresInSec <= 20);
 
   // And the panel reads those same cards as the two states it colours: the one
@@ -1074,7 +1080,8 @@ test('a turn taken over after a silence is corrected on the machine that lost it
   const told = await waitFor(
     () =>
       B.events.find(
-        (e) => e.type === 'chat' && e.payload?.peerId === bRemote && /passed to them/.test(e.payload?.text || '')
+        (e) =>
+          e.type === 'chat' && e.payload?.peerId === bRemote && /passed to them/.test(e.payload?.text || '')
       ),
     5000,
     'B to be told the turn moved'
@@ -1272,7 +1279,14 @@ test('notices already on disk from an older version are cleared out at startup',
   write('agent_aaa_bbb.json', [
     { id: 'q', direction: 'in', kind: 'text', text: 'what profile are you using?', ts: 1, askedBy: 'bbb' },
     ...notices,
-    { id: 'q2', direction: 'in', kind: 'text', text: 'Your turn — you have 5 queries.', ts: 1500, askedBy: 'bbb' },
+    {
+      id: 'q2',
+      direction: 'in',
+      kind: 'text',
+      text: 'Your turn — you have 5 queries.',
+      ts: 1500,
+      askedBy: 'bbb',
+    },
     { id: 'a', direction: 'in', kind: 'text', text: 'I’m using the Hermes profile “lanchat”.', ts: 2000 },
     // An old error stays too: a running version keeps these, so the cleanup does.
     { id: 'e', direction: 'in', kind: 'text', text: '⚠️ connect ECONNREFUSED 127.0.0.1:8081', ts: 2100 },
@@ -1433,7 +1447,10 @@ test('withdrawing a shared agent removes it from the peer roster', async (t) => 
   await A.agentHub.setSharing(agent.id, { networkWide: false });
   await waitFor(() => !B.hub.identities.has(remoteId), 5000, 'the contact to disappear');
 
-  assert.equal(B.hub.presenceList().find((p) => p.id === remoteId), undefined);
+  assert.equal(
+    B.hub.presenceList().find((p) => p.id === remoteId),
+    undefined
+  );
   B.call('lanchat:sendChat', { peerId: idA, text: '@Hermes still there?' });
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(A.log.length, 0, 'and it can no longer be reached');
@@ -1467,7 +1484,10 @@ test('switching direct chat off takes the contact off the peer roster, even afte
 
   await A.agentHub.setSharing(agent.id, { directChat: false });
   await waitFor(() => !B.hub.identities.has(remoteId), 5000, 'the contact to go away');
-  assert.equal(B.hub.presenceList().find((p) => p.id === remoteId), undefined);
+  assert.equal(
+    B.hub.presenceList().find((p) => p.id === remoteId),
+    undefined
+  );
 
   // Off means "not in their list", not "revoked": it is still reachable by name,
   // and using it brings the contact back — with the transcript intact.
@@ -1601,7 +1621,10 @@ test('a document attached to a local agent reaches it, without landing in the tr
   // and belongs in the thread like any other.
   const stored = A.store.read(agent.id).filter((m) => m.direction === 'out');
   assert.equal(stored[0].text, 'when is this due?');
-  assert.ok(!/Ship the thing by Friday/.test(JSON.stringify(stored)), 'the body is not written into what we asked');
+  assert.ok(
+    !/Ship the thing by Friday/.test(JSON.stringify(stored)),
+    'the body is not written into what we asked'
+  );
 });
 
 test("a document reaches somebody else's shared agent over the wire", async (t) => {
@@ -1700,7 +1723,9 @@ test('documents cannot be smuggled into a chat with a person', async (t) => {
   assert.equal(message.docs, undefined);
   await waitFor(() => B.store.read(A.getIdentity().id).length === 1, 5000, 'the message to arrive');
   assert.equal(B.store.read(A.getIdentity().id)[0].text, 'hello', 'and it is only the message');
-  assert.ok(A.events.some((e) => e.type === 'toast' && /only be attached to an agent/i.test(e.payload?.text || '')));
+  assert.ok(
+    A.events.some((e) => e.type === 'toast' && /only be attached to an agent/i.test(e.payload?.text || ''))
+  );
 });
 
 test('a failing agent tells the peer what happened without telling them about this machine', async (t) => {
@@ -1750,7 +1775,10 @@ test('a failing agent tells the peer what happened without telling them about th
     .join('\n');
   assert.match(told, /Command not found: \/home\/owner\/\.local\/bin\/hermes/, 'A is told the detail');
   assert.doesNotMatch(
-    A.store.read(delegate).map((m) => m.text).join('\n'),
+    A.store
+      .read(delegate)
+      .map((m) => m.text)
+      .join('\n'),
     /Command not found/,
     'and the detail is not written to disk either'
   );
@@ -1798,7 +1826,11 @@ test('an owner going offline takes their agents with them, without a runaway pre
     "A's agents to leave B's roster"
   );
 
-  assert.deepEqual(blewUp.map((e) => e.message), [], 'and nothing blew the stack on the way');
+  assert.deepEqual(
+    blewUp.map((e) => e.message),
+    [],
+    'and nothing blew the stack on the way'
+  );
   const ids = B.hub.presenceList().map((p) => p.id);
   assert.equal(ids.includes(remoteOne), false);
   assert.equal(ids.includes(remoteTwo), false);

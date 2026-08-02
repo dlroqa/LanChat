@@ -24,7 +24,10 @@ test('the link in a real message is found whole, and the text around it is kept'
 
   assert.equal(runs.length, 2);
   assert.equal(runs[0].type, 'text');
-  assert.deepEqual({ type: runs[1].type, text: runs[1].text, href: runs[1].href }, { type: 'link', text: url, href: url });
+  assert.deepEqual(
+    { type: runs[1].type, text: runs[1].text, href: runs[1].href },
+    { type: 'link', text: url, href: url }
+  );
   // Nothing may be dropped: what is rendered is exactly what was said.
   assert.equal(joined(runs), text);
 });

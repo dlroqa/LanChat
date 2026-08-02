@@ -33,7 +33,8 @@ export default function SoundSettings({ value, onChange, soundUrl }) {
   }
 
   const ringCustomLabel = customNames.ringtone || baseName(value.customRingtonePath) || 'Choose a file…';
-  const noteCustomLabel = customNames.notification || baseName(value.customNotificationPath) || 'Choose a file…';
+  const noteCustomLabel =
+    customNames.notification || baseName(value.customNotificationPath) || 'Choose a file…';
   const musicCustomLabel = customNames.agentMusic || baseName(value.customAgentMusicPath) || 'Choose a file…';
 
   // Saved as null until the user picks, so an install that gains its first

@@ -52,7 +52,11 @@ function normaliseChoices(raw) {
   const list = (raw || []).map((c) =>
     typeof c === 'string'
       ? { id: c, label: LABELS[c] || c, deny: c === 'deny' || c === 'cancelled' }
-      : { id: c.id, label: c.label || LABELS[c.id] || c.id, deny: c.kind === 'reject_once' || c.id === 'deny' }
+      : {
+          id: c.id,
+          label: c.label || LABELS[c.id] || c.id,
+          deny: c.kind === 'reject_once' || c.id === 'deny',
+        }
   );
   if (!list.some((c) => c.deny)) list.push({ id: 'deny', label: 'Deny', deny: true });
   return list;

@@ -41,6 +41,17 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # Formatting, on one runner only: prettier reads the same files and the
+      # same .prettierrc.json wherever it runs, so checking it three times is
+      # three times the minute for one answer. It runs at all because it had
+      # stopped being true — the tree drifted 69 files out of format under a
+      # prettier that `npm ci` had been installing for months, and nothing here
+      # ever said so. `npm ci` installs the locked version, so this asks about
+      # the tree rather than about whose machine ran it.
+      - name: Check formatting
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run format:check
+
       # `npm test` discovers its own files rather than relying on the shell to
       # expand a glob, so this is the same command, running the same tests, on
       # all three runners including PowerShell.

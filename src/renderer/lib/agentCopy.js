@@ -45,7 +45,8 @@ export const PROFILE_COPY = {
     defaultOption: 'Default profile',
     placeholder: 'Leave blank for the default profile',
     unasked: 'Hermes can hold several profiles. Leave blank to use its default.',
-    found: 'Read from the Hermes install on this machine. A name it does not know will stop the agent starting.',
+    found:
+      'Read from the Hermes install on this machine. A name it does not know will stop the agent starting.',
     none: 'None found here — type a name, or leave blank for the default.',
   },
 };

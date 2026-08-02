@@ -63,7 +63,17 @@ function makeNode(name, port, windows = true, netScope = null) {
   const pins = createPins({ userDataDir: dir });
   const getPublicCard = () => buildPublicCard(config, deviceKey);
   const server = createServer({
-    config, getIdentity, getPublicCard, deviceKey, pins, hub, bus, downloadsDir, store, windows, netScope,
+    config,
+    getIdentity,
+    getPublicCard,
+    deviceKey,
+    pins,
+    hub,
+    bus,
+    downloadsDir,
+    store,
+    windows,
+    netScope,
   });
   return { dir, config, bus, store, hub, server, downloadsDir, port, deviceKey, pins };
 }

@@ -253,8 +253,8 @@ export default function ChatPane({
           <Logo size={84} />
           <h2>Welcome to LanChat</h2>
           <p>
-            Select someone on the left to start chatting. People on your Tailscale mesh or local network who run
-            LanChat appear automatically — no servers, no accounts, everything stays on your own devices.
+            Select someone on the left to start chatting. People on your Tailscale mesh or local network who
+            run LanChat appear automatically — no servers, no accounts, everything stays on your own devices.
           </p>
         </div>
       </div>
@@ -323,24 +323,24 @@ export default function ChatPane({
               />
             </div>
           ) : (
-          <div className="sub">
-            {peer.kind === 'agent'
-              ? // A delegate thread is a transcript of somebody else's
-                // conversation with your agent, so it says whose it is rather
-                // than claiming to be off.
-                peer.delegate
-                ? `${peer.viaName}'s conversation with this agent`
-                : peer.remote
-                  ? `Agent · shared by ${peer.viaName}`
-                  : peer.online
-                    ? `Agent · ${peer.agentKind}`
-                    : 'Agent · off'
-              : peer.online
-                ? `Online · ${platformLabel(peer.platform)}`
-                : 'Offline'}
-            {queueLabel}
-            {showAddresses && peer.address ? ` · ${peer.address}` : ''}
-          </div>
+            <div className="sub">
+              {peer.kind === 'agent'
+                ? // A delegate thread is a transcript of somebody else's
+                  // conversation with your agent, so it says whose it is rather
+                  // than claiming to be off.
+                  peer.delegate
+                  ? `${peer.viaName}'s conversation with this agent`
+                  : peer.remote
+                    ? `Agent · shared by ${peer.viaName}`
+                    : peer.online
+                      ? `Agent · ${peer.agentKind}`
+                      : 'Agent · off'
+                : peer.online
+                  ? `Online · ${platformLabel(peer.platform)}`
+                  : 'Offline'}
+              {queueLabel}
+              {showAddresses && peer.address ? ` · ${peer.address}` : ''}
+            </div>
           )}
         </div>
         <div className="chat-actions">
@@ -402,9 +402,9 @@ export default function ChatPane({
             <Alert size={15} />
           </span>
           <span>
-            Errors were removed from this conversation, and the questions they belonged to could not
-            be recovered. Reconnect the context before forking from it — ask {thinkerName} something
-            to pick the thread back up.
+            Errors were removed from this conversation, and the questions they belonged to could not be
+            recovered. Reconnect the context before forking from it — ask {thinkerName} something to pick the
+            thread back up.
           </span>
         </div>
       )}

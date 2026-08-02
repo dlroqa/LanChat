@@ -94,174 +94,184 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
       desc="Audio, video, and discovery preferences. Changes apply immediately."
       onClose={onClose}
     >
-        <div className="section-head">Call devices</div>
-        <DevicePicker
-          audioInputId={devices.audioInputId}
-          videoInputId={devices.videoInputId}
-          onChange={(key, value) => setDevices((d) => ({ ...d, [key]: value }))}
-        />
+      <div className="section-head">Call devices</div>
+      <DevicePicker
+        audioInputId={devices.audioInputId}
+        videoInputId={devices.videoInputId}
+        onChange={(key, value) => setDevices((d) => ({ ...d, [key]: value }))}
+      />
 
-        <div className="section-head">Push to talk</div>
-        <Toggle
-          label="Enable push to talk"
-          desc="Hold a key to transmit instantly — no ringing."
-          on={ptt.pttEnabled}
-          set={(v) => setPtt((p) => ({ ...p, pttEnabled: v }))}
-        />
-        <div className="field" style={{ marginTop: 12 }}>
-          <label htmlFor="pttkey">Push-to-talk key</label>
-          <select
-            id="pttkey"
-            value={ptt.pttKey}
+      <div className="section-head">Push to talk</div>
+      <Toggle
+        label="Enable push to talk"
+        desc="Hold a key to transmit instantly — no ringing."
+        on={ptt.pttEnabled}
+        set={(v) => setPtt((p) => ({ ...p, pttEnabled: v }))}
+      />
+      <div className="field" style={{ marginTop: 12 }}>
+        <label htmlFor="pttkey">Push-to-talk key</label>
+        <select
+          id="pttkey"
+          value={ptt.pttKey}
+          disabled={!ptt.pttEnabled}
+          onChange={(e) => setPtt((p) => ({ ...p, pttKey: e.target.value }))}
+        >
+          {Object.entries(PTT_KEYS).map(([key, def]) => (
+            <option key={key} value={key}>
+              {def.label}
+            </option>
+          ))}
+          <option value="custom">Custom key…</option>
+        </select>
+        {ptt.pttKey === 'custom' && (
+          <KeyRecorder
+            code={ptt.pttCustomCode}
             disabled={!ptt.pttEnabled}
-            onChange={(e) => setPtt((p) => ({ ...p, pttKey: e.target.value }))}
-          >
-            {Object.entries(PTT_KEYS).map(([key, def]) => (
-              <option key={key} value={key}>
-                {def.label}
-              </option>
-            ))}
-            <option value="custom">Custom key…</option>
-          </select>
-          {ptt.pttKey === 'custom' && (
-            <KeyRecorder
-              code={ptt.pttCustomCode}
-              disabled={!ptt.pttEnabled}
-              onRecord={(code) => setPtt((p) => ({ ...p, pttCustomCode: code }))}
-            />
-          )}
-          <div className="hint">
-            Hold to talk while LanChat is focused. It is ignored while you are typing a message, and
-            releasing the key stops transmitting.
-          </div>
+            onRecord={(code) => setPtt((p) => ({ ...p, pttCustomCode: code }))}
+          />
+        )}
+        <div className="hint">
+          Hold to talk while LanChat is focused. It is ignored while you are typing a message, and releasing
+          the key stops transmitting.
         </div>
-        <Toggle
-          label="Allow others to reach you by push to talk"
-          desc="Incoming audio plays without ringing. Your microphone is never opened by an incoming transmission."
-          on={ptt.pttAllowIncoming}
-          set={(v) => setPtt((p) => ({ ...p, pttAllowIncoming: v }))}
-        />
-        <Dictation value={ptt} set={setPtt} />
+      </div>
+      <Toggle
+        label="Allow others to reach you by push to talk"
+        desc="Incoming audio plays without ringing. Your microphone is never opened by an incoming transmission."
+        on={ptt.pttAllowIncoming}
+        set={(v) => setPtt((p) => ({ ...p, pttAllowIncoming: v }))}
+      />
+      <Dictation value={ptt} set={setPtt} />
 
-        <div className="section-head">Sounds</div>
-        <SoundSettings
-          value={sounds}
-          soundUrl={soundUrl}
-          onChange={(patch) => setSounds((v) => ({ ...v, ...patch }))}
-        />
+      <div className="section-head">Sounds</div>
+      <SoundSettings
+        value={sounds}
+        soundUrl={soundUrl}
+        onChange={(patch) => setSounds((v) => ({ ...v, ...patch }))}
+      />
 
-        <div className="section-head">Agents</div>
-        <AgentSection peers={peers} />
+      <div className="section-head">Agents</div>
+      <AgentSection peers={peers} />
 
-        <div className="section-head">Security</div>
-        {security && security.reachability && security.reachability.unreachable && (
-          <div className="field-warning" role="status">
-            Nobody can reach this device. LanChat only accepts connections over Tailscale, and no
-            tailnet was found — turn on the setting below to accept them over your local network
-            instead.
-          </div>
-        )}
-        <Toggle
-          label="Accept connections from the local network"
-          desc={
-            acceptLan
-              ? 'Anyone on the networks you join can open a connection. They still have to prove who they are, ' +
-                'but messages over a plain network are not encrypted in transit the way Tailscale encrypts them. ' +
-                'Prefer Tailscale on networks you do not control.'
-              : 'Only devices reaching you over Tailscale can connect, where traffic is already encrypted.'
-          }
-          on={acceptLan}
-          set={(v) => {
-            setAcceptLan(v);
-            window.lanchat.setAcceptLan(v);
-          }}
-        />
-        {security && security.fingerprint && (
-          <div className="field">
-            <label>This device's key</label>
-            <div className="fingerprint" title={security.publicKey || ''}>
-              {security.fingerprint}
-            </div>
-            <div className="hint">
-              Read this out to somebody adding you for the first time — if it matches what they see,
-              nobody is standing in between. {security.keyMode === 'sealed'
-                ? 'The key is held in your system keychain.'
-                : 'The key is stored in a file only you can read.'}
-            </div>
-          </div>
-        )}
-
-        <div className="section-head">Conversations</div>
-        <Toggle
-          label="Find only in sessions"
-          desc="The search button beside a conversation's name. Off, every conversation has one; on, only sessions do."
-          on={findSessionsOnly}
-          set={setFindSessionsOnly}
-        />
-
-        <div className="section-head">Discovery</div>
-        <Toggle label="Discover peers over Tailscale" desc="Find people across your tailnet." on={enableTailscale} set={setTs} />
-        <Toggle label="Discover peers on local network" desc="UDP broadcast on your subnet." on={enableLan} set={setLan} />
-        <Toggle
-          label="Use STUN fallback for calls"
-          desc="Only needed on awkward networks; calls are direct on a tailnet."
-          on={useStun}
-          set={setUseStun}
-        />
-
-        <div className="section-head">Privacy</div>
-        <Toggle
-          label="Show IP addresses"
-          desc="Off by default. Peers are identified by name; addresses stay hidden."
-          on={showAddresses}
-          set={setShowAddresses}
-        />
-        <Toggle
-          label="Preview links in messages"
-          desc="Links stay clickable either way. With this on, LanChat fetches the page itself to show its title and picture — the site sees your IP, the way it would if you opened it."
-          on={linkPreviews}
-          set={setLinkPreviews}
-        />
-
-        {self?.platform === 'win32' && (
-          <>
-            <div className="section-head">Windows</div>
-            <Toggle
-              label="Start LanChat when Windows starts"
-              desc="Launches to the tray at login, so you're reachable without opening it each time."
-              on={openAtLogin}
-              set={(v) => {
-                setOpenAtLogin(v);
-                window.lanchat.setOpenAtLogin(v);
-              }}
-            />
-          </>
-        )}
-
-        <div className="section-head">Updates</div>
-        <UpdateSection />
-
-        <div className="section-head">This device</div>
+      <div className="section-head">Security</div>
+      {security && security.reachability && security.reachability.unreachable && (
+        <div className="field-warning" role="status">
+          Nobody can reach this device. LanChat only accepts connections over Tailscale, and no tailnet was
+          found — turn on the setting below to accept them over your local network instead.
+        </div>
+      )}
+      <Toggle
+        label="Accept connections from the local network"
+        desc={
+          acceptLan
+            ? 'Anyone on the networks you join can open a connection. They still have to prove who they are, ' +
+              'but messages over a plain network are not encrypted in transit the way Tailscale encrypts them. ' +
+              'Prefer Tailscale on networks you do not control.'
+            : 'Only devices reaching you over Tailscale can connect, where traffic is already encrypted.'
+        }
+        on={acceptLan}
+        set={(v) => {
+          setAcceptLan(v);
+          window.lanchat.setAcceptLan(v);
+        }}
+      />
+      {security && security.fingerprint && (
         <div className="field">
-          <div className="hint" style={{ fontSize: 12.5, lineHeight: 1.7 }}>
-            Service port: <b>{self?.servicePort}</b>
-            <br />
-            Identity: <b>{self?.hostname}</b>
-            <br />
-            Share your Tailscale IP (from <code>tailscale ip</code>) with a peer, then they can add you via + →
-            <b> IP:{self?.servicePort}</b>.
+          <label>This device's key</label>
+          <div className="fingerprint" title={security.publicKey || ''}>
+            {security.fingerprint}
+          </div>
+          <div className="hint">
+            Read this out to somebody adding you for the first time — if it matches what they see, nobody is
+            standing in between.{' '}
+            {security.keyMode === 'sealed'
+              ? 'The key is held in your system keychain.'
+              : 'The key is stored in a file only you can read.'}
           </div>
         </div>
-        <StorageInfo />
+      )}
 
-        <div className="modal-actions">
-          <button className="btn ghost" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="btn primary" onClick={save}>
-            Save
-          </button>
+      <div className="section-head">Conversations</div>
+      <Toggle
+        label="Find only in sessions"
+        desc="The search button beside a conversation's name. Off, every conversation has one; on, only sessions do."
+        on={findSessionsOnly}
+        set={setFindSessionsOnly}
+      />
+
+      <div className="section-head">Discovery</div>
+      <Toggle
+        label="Discover peers over Tailscale"
+        desc="Find people across your tailnet."
+        on={enableTailscale}
+        set={setTs}
+      />
+      <Toggle
+        label="Discover peers on local network"
+        desc="UDP broadcast on your subnet."
+        on={enableLan}
+        set={setLan}
+      />
+      <Toggle
+        label="Use STUN fallback for calls"
+        desc="Only needed on awkward networks; calls are direct on a tailnet."
+        on={useStun}
+        set={setUseStun}
+      />
+
+      <div className="section-head">Privacy</div>
+      <Toggle
+        label="Show IP addresses"
+        desc="Off by default. Peers are identified by name; addresses stay hidden."
+        on={showAddresses}
+        set={setShowAddresses}
+      />
+      <Toggle
+        label="Preview links in messages"
+        desc="Links stay clickable either way. With this on, LanChat fetches the page itself to show its title and picture — the site sees your IP, the way it would if you opened it."
+        on={linkPreviews}
+        set={setLinkPreviews}
+      />
+
+      {self?.platform === 'win32' && (
+        <>
+          <div className="section-head">Windows</div>
+          <Toggle
+            label="Start LanChat when Windows starts"
+            desc="Launches to the tray at login, so you're reachable without opening it each time."
+            on={openAtLogin}
+            set={(v) => {
+              setOpenAtLogin(v);
+              window.lanchat.setOpenAtLogin(v);
+            }}
+          />
+        </>
+      )}
+
+      <div className="section-head">Updates</div>
+      <UpdateSection />
+
+      <div className="section-head">This device</div>
+      <div className="field">
+        <div className="hint" style={{ fontSize: 12.5, lineHeight: 1.7 }}>
+          Service port: <b>{self?.servicePort}</b>
+          <br />
+          Identity: <b>{self?.hostname}</b>
+          <br />
+          Share your Tailscale IP (from <code>tailscale ip</code>) with a peer, then they can add you via + →
+          <b> IP:{self?.servicePort}</b>.
         </div>
+      </div>
+      <StorageInfo />
+
+      <div className="modal-actions">
+        <button className="btn ghost" onClick={onClose}>
+          Cancel
+        </button>
+        <button className="btn primary" onClick={save}>
+          Save
+        </button>
+      </div>
     </ModalShell>
   );
 }

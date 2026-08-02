@@ -9,7 +9,11 @@ export default function IncomingCall({ call, onAccept, onDecline }) {
   const [cameraOff, setCameraOff] = useState(false);
 
   return (
-    <div className={`incoming ${call.support ? 'support' : ''}`} role="alertdialog" aria-label="Incoming call">
+    <div
+      className={`incoming ${call.support ? 'support' : ''}`}
+      role="alertdialog"
+      aria-label="Incoming call"
+    >
       <Avatar name={call.peerName} id={call.peerId} />
       <div className="meta">
         <div className="name">
@@ -48,7 +52,11 @@ export default function IncomingCall({ call, onAccept, onDecline }) {
         <button className="round-btn decline" onClick={onDecline} title="Decline">
           <PhoneOff size={20} />
         </button>
-        <button className="round-btn accept pulse" onClick={() => onAccept({ muted, cameraOff })} title="Accept">
+        <button
+          className="round-btn accept pulse"
+          onClick={() => onAccept({ muted, cameraOff })}
+          title="Accept"
+        >
           {call.withVideo ? <Video size={20} /> : <Phone size={20} />}
         </button>
       </div>

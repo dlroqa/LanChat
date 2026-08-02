@@ -32,14 +32,16 @@ export default function NewGroupCallModal({ peers, onStart, onClose }) {
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>New group call</h3>
         <p className="desc">
-          Choose who to invite. Everyone connects directly to everyone else, so keep groups small —
-          up to {MAX_PARTICIPANTS} others works well on a LAN or tailnet.
+          Choose who to invite. Everyone connects directly to everyone else, so keep groups small — up to{' '}
+          {MAX_PARTICIPANTS} others works well on a LAN or tailnet.
         </p>
 
         <div className="switch">
           <div>
             <div style={{ fontWeight: 500 }}>Video</div>
-            <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>Off makes it an audio-only group call.</div>
+            <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>
+              Off makes it an audio-only group call.
+            </div>
           </div>
           <button
             className={`toggle ${withVideo ? 'on' : ''}`}

@@ -211,7 +211,12 @@ function createRemoteAgents({ hub, store, bus = null }) {
   // so the session appends it once and every member of that round is sent with
   // `record: false`. Left true for every other caller, where this function is
   // the only thing that knows a question was asked at all.
-  function send(ownerPeerId, entry, text, { prompt, docs = [], thread = null, context = null, record = true } = {}) {
+  function send(
+    ownerPeerId,
+    entry,
+    text,
+    { prompt, docs = [], thread = null, context = null, record = true } = {}
+  ) {
     const into = thread || entry.id;
     // Asking again while the question we already sent is still waiting to be
     // read. It would not be answered any sooner, so it is refused here rather

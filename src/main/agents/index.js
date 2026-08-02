@@ -3,7 +3,14 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 
-const { AgentRegistry, isAgentId, delegateIdFor, isDelegateId, parseDelegateId, KINDS } = require('./registry');
+const {
+  AgentRegistry,
+  isAgentId,
+  delegateIdFor,
+  isDelegateId,
+  parseDelegateId,
+  KINDS,
+} = require('./registry');
 const { createVirtualSocket } = require('./virtualSocket');
 const { createHttpTransport } = require('./transports/http');
 const { discoverProfiles, hermesLaunchArgs } = require('./profiles');
@@ -524,7 +531,9 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     const threadId = thread || (origin ? delegateIdFor(agentId, origin) : agentId);
 
     if (entry.busy) {
-      reply(agentId, 'I am still working on the previous message — one at a time, please.', origin, { threadId });
+      reply(agentId, 'I am still working on the previous message — one at a time, please.', origin, {
+        threadId,
+      });
       return;
     }
     entry.busy = true;
@@ -668,7 +677,13 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     // `detail` is local-only, so it is folded into the copy kept here and left
     // out of the frame below. The two must never be built from one string.
     const localText = detail ? `${said} ${detail}` : said;
-    const message = { from: threadId, type: 'chat', id: crypto.randomUUID(), text: localText, ts: Date.now() };
+    const message = {
+      from: threadId,
+      type: 'chat',
+      id: crypto.randomUUID(),
+      text: localText,
+      ts: Date.now(),
+    };
     // The paths stay here. They name files on this machine, so there is nothing
     // for the peer's copy below to do with them but 404.
     if (media.length) message.media = media;
@@ -971,7 +986,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   function profilesFor(agentId, draft) {
     const record = registry.get(agentId);
     const kind = record ? record.kind : draft && draft.kind;
-    const config = (record ? record.config : (draft && draft.config)) || {};
+    const config = (record ? record.config : draft && draft.config) || {};
     // ACP picks its profile by command rather than by URL, so both are offered
     // and discoverProfiles decides which one applies.
     return discoverProfiles({ kind, baseUrl: config.baseUrl, command: config.command });

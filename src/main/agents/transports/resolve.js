@@ -105,7 +105,10 @@ function shellPath() {
     });
     // rc files print things — banners, version notices, motd. The PATH is what
     // our own `echo` wrote, so it is the last non-empty line, not the first.
-    const lines = out.split('\n').map((l) => l.trim()).filter(Boolean);
+    const lines = out
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
     const last = lines[lines.length - 1];
     if (last && last.includes(path.delimiter)) shellPathCache = splitPath(last);
   } catch {

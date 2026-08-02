@@ -30,10 +30,14 @@ function createSshTransport({ id, name, config, timeoutMs }) {
 
   function sshArgs(remoteFile, remoteArgv) {
     const args = [
-      '-o', 'StrictHostKeyChecking=yes',
-      '-o', 'BatchMode=yes',
-      '-o', 'PasswordAuthentication=no',
-      '-o', 'ConnectTimeout=10',
+      '-o',
+      'StrictHostKeyChecking=yes',
+      '-o',
+      'BatchMode=yes',
+      '-o',
+      'PasswordAuthentication=no',
+      '-o',
+      'ConnectTimeout=10',
     ];
     if (identity) args.push('-i', identity);
     if (port) args.push('-p', port);

@@ -52,7 +52,11 @@ function runProcess({ file, args, cwd, env, timeoutMs, onDelta, onChild }) {
       try {
         child.kill('SIGKILL');
       } catch {}
-      reject(new Error(`The agent did not respond within ${Math.round((timeoutMs || DEFAULT_TIMEOUT_MS) / 1000)}s.`));
+      reject(
+        new Error(
+          `The agent did not respond within ${Math.round((timeoutMs || DEFAULT_TIMEOUT_MS) / 1000)}s.`
+        )
+      );
     }, timeoutMs || DEFAULT_TIMEOUT_MS);
 
     child.stdout.setEncoding('utf8');
@@ -70,9 +74,7 @@ function runProcess({ file, args, cwd, env, timeoutMs, onDelta, onChild }) {
       settled = true;
       clearTimeout(timer);
       reject(
-        err.code === 'ENOENT'
-          ? localError('The agent could not be started.', notFoundMessage(resolved))
-          : err
+        err.code === 'ENOENT' ? localError('The agent could not be started.', notFoundMessage(resolved)) : err
       );
     });
 
@@ -86,9 +88,7 @@ function runProcess({ file, args, cwd, env, timeoutMs, onDelta, onChild }) {
         // safe thing to forward: it is written by a program running on this
         // machine and routinely names paths, hosts and configuration. It goes
         // to the owner as detail; whoever asked gets only the exit code.
-        reject(
-          localError(`The agent exited with code ${code}.`, errOut.trim().slice(-2000) || null)
-        );
+        reject(localError(`The agent exited with code ${code}.`, errOut.trim().slice(-2000) || null));
         return;
       }
       resolve({ text: text.slice(-MAX_OUTPUT_CHARS), code });

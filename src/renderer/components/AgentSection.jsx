@@ -10,10 +10,26 @@ import { agentTag } from '../lib/agentBadge';
 // configuration so it can be turned back on without re-entering a key.
 
 const KINDS = [
-  { id: 'http', label: 'HTTP API', hint: 'Recommended. The only transport that can ask you to approve a tool call.' },
-  { id: 'command', label: 'Local command', hint: 'Runs a CLI on this machine. No approval prompts — the command must be non-interactive.' },
-  { id: 'acp', label: 'ACP', hint: 'Agent Client Protocol over stdio. Keeps conversation context and supports approvals.' },
-  { id: 'ssh', label: 'SSH command', hint: 'Runs the agent on another host. The host must already be in your known_hosts.' },
+  {
+    id: 'http',
+    label: 'HTTP API',
+    hint: 'Recommended. The only transport that can ask you to approve a tool call.',
+  },
+  {
+    id: 'command',
+    label: 'Local command',
+    hint: 'Runs a CLI on this machine. No approval prompts — the command must be non-interactive.',
+  },
+  {
+    id: 'acp',
+    label: 'ACP',
+    hint: 'Agent Client Protocol over stdio. Keeps conversation context and supports approvals.',
+  },
+  {
+    id: 'ssh',
+    label: 'SSH command',
+    hint: 'Runs the agent on another host. The host must already be in your known_hosts.',
+  },
 ];
 
 const BLANK = {
@@ -22,7 +38,19 @@ const BLANK = {
   hasSecret: false,
   name: '',
   kind: 'http',
-  config: { baseUrl: 'http://127.0.0.1:8642', model: '', profile: '', command: 'hermes', args: '', cwd: '', host: '', user: '', identityFile: '', port: '', remoteCommand: 'hermes' },
+  config: {
+    baseUrl: 'http://127.0.0.1:8642',
+    model: '',
+    profile: '',
+    command: 'hermes',
+    args: '',
+    cwd: '',
+    host: '',
+    user: '',
+    identityFile: '',
+    port: '',
+    remoteCommand: 'hermes',
+  },
   secretMode: 'sealed',
   secretValue: '',
   secretEnv: '',
@@ -76,7 +104,14 @@ export default function AgentSection({ peers = [] }) {
           ? { command: c.command, args, cwd: c.cwd || undefined }
           : d.kind === 'acp'
             ? { command: c.command, args, cwd: c.cwd || undefined }
-            : { host: c.host, user: c.user, identityFile: c.identityFile || undefined, port: c.port || undefined, remoteCommand: c.remoteCommand, args };
+            : {
+                host: c.host,
+                user: c.user,
+                identityFile: c.identityFile || undefined,
+                port: c.port || undefined,
+                remoteCommand: c.remoteCommand,
+                args,
+              };
     const secret =
       d.kind !== 'http'
         ? { mode: 'none' }
@@ -135,7 +170,9 @@ export default function AgentSection({ peers = [] }) {
   }
 
   async function toggle(agent) {
-    setAgents((list) => list.map((a) => (a.id === agent.id ? { ...a, enabled: !a.enabled, status: 'pending' } : a)));
+    setAgents((list) =>
+      list.map((a) => (a.id === agent.id ? { ...a, enabled: !a.enabled, status: 'pending' } : a))
+    );
     await window.lanchat.setAgentEnabled(agent.id, !agent.enabled);
     setAgents(await window.lanchat.listAgents());
   }
@@ -168,8 +205,8 @@ export default function AgentSection({ peers = [] }) {
     <div className="agents">
       {agents.length === 0 && !draft && (
         <div className="hint" style={{ marginBottom: 10 }}>
-          No agents connected. An agent appears in your roster like any other contact — you can remove
-          it at any time.
+          No agents connected. An agent appears in your roster like any other contact — you can remove it at
+          any time.
         </div>
       )}
 
@@ -207,7 +244,13 @@ export default function AgentSection({ peers = [] }) {
             <button className="btn" onClick={() => test(agent)}>
               Test
             </button>
-            <button className="btn" onClick={() => { setResult(null); setDraft(draftFrom(agent)); }}>
+            <button
+              className="btn"
+              onClick={() => {
+                setResult(null);
+                setDraft(draftFrom(agent));
+              }}
+            >
               Edit
             </button>
             <button className="btn" onClick={() => setEditingPeers(agent)}>
@@ -271,7 +314,11 @@ export default function AgentSection({ peers = [] }) {
             <>
               <Field label="Base URL" value={draft.config.baseUrl} onChange={(v) => setCfg({ baseUrl: v })} />
               <ProfileField draft={draft} setCfg={setCfg} />
-              <Field label="Model (optional)" value={draft.config.model} onChange={(v) => setCfg({ model: v })} />
+              <Field
+                label="Model (optional)"
+                value={draft.config.model}
+                onChange={(v) => setCfg({ model: v })}
+              />
               <div className="field">
                 <label htmlFor="agent-secret-mode">API key</label>
                 <select
@@ -304,7 +351,9 @@ export default function AgentSection({ peers = [] }) {
                       placeholder="HERMES_API_KEY"
                       onChange={(e) => setDraft((d) => ({ ...d, secretEnv: e.target.value }))}
                     />
-                    <div className="hint">Only the variable name is stored; the key itself is never written to disk.</div>
+                    <div className="hint">
+                      Only the variable name is stored; the key itself is never written to disk.
+                    </div>
                   </>
                 )}
               </div>
@@ -321,7 +370,11 @@ export default function AgentSection({ peers = [] }) {
                 hint={argumentHint(draft.kind)}
                 onChange={(v) => setCfg({ args: v })}
               />
-              <Field label="Working directory (optional)" value={draft.config.cwd} onChange={(v) => setCfg({ cwd: v })} />
+              <Field
+                label="Working directory (optional)"
+                value={draft.config.cwd}
+                onChange={(v) => setCfg({ cwd: v })}
+              />
               {/* Only Hermes understands --profile; the picker offers nothing
                   for any other ACP agent rather than suggesting a flag that
                   would stop it starting. */}
@@ -331,16 +384,29 @@ export default function AgentSection({ peers = [] }) {
 
           {draft.kind === 'ssh' && (
             <>
-              <Field label="Host" value={draft.config.host} placeholder="agent-box" onChange={(v) => setCfg({ host: v })} />
+              <Field
+                label="Host"
+                value={draft.config.host}
+                placeholder="agent-box"
+                onChange={(v) => setCfg({ host: v })}
+              />
               <Field label="User" value={draft.config.user} onChange={(v) => setCfg({ user: v })} />
-              <Field label="Port (optional)" value={draft.config.port} onChange={(v) => setCfg({ port: v })} />
+              <Field
+                label="Port (optional)"
+                value={draft.config.port}
+                onChange={(v) => setCfg({ port: v })}
+              />
               <Field
                 label="Identity file (optional)"
                 value={draft.config.identityFile}
                 placeholder="~/.ssh/id_ed25519"
                 onChange={(v) => setCfg({ identityFile: v })}
               />
-              <Field label="Remote command" value={draft.config.remoteCommand} onChange={(v) => setCfg({ remoteCommand: v })} />
+              <Field
+                label="Remote command"
+                value={draft.config.remoteCommand}
+                onChange={(v) => setCfg({ remoteCommand: v })}
+              />
               <Field
                 label="Arguments"
                 value={draft.config.args}
@@ -351,7 +417,9 @@ export default function AgentSection({ peers = [] }) {
             </>
           )}
 
-          {result && result.ok === false && !result.id && <div className="agent-result bad">{result.text}</div>}
+          {result && result.ok === false && !result.id && (
+            <div className="agent-result bad">{result.text}</div>
+          )}
 
           <div className="row" style={{ gap: 8, marginTop: 12 }}>
             <button className="btn primary" disabled={!draft.name || busy} onClick={save}>
@@ -362,7 +430,13 @@ export default function AgentSection({ peers = [] }) {
                 Discard
               </button>
             ) : (
-              <button className="btn ghost" onClick={() => { setDraft(null); setResult(null); }}>
+              <button
+                className="btn ghost"
+                onClick={() => {
+                  setDraft(null);
+                  setResult(null);
+                }}
+              >
                 {draft.id ? 'Close' : 'Cancel'}
               </button>
             )}
@@ -487,9 +561,9 @@ function PeerPicker({ agent, peers, onSave, onCancel }) {
       <div className="field">
         <label>Who may message {agent.name}?</label>
         <div className="hint">
-          Anyone with access can ask this agent to do things. Only you can approve a tool call it wants
-          to run — that is never delegated to a peer. Their conversation with it stays in its own thread,
-          so your chat with them stays clean.
+          Anyone with access can ask this agent to do things. Only you can approve a tool call it wants to run
+          — that is never delegated to a peer. Their conversation with it stays in its own thread, so your
+          chat with them stays clean.
         </div>
       </div>
 

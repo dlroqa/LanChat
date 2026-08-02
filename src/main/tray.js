@@ -20,7 +20,9 @@ function iconPath(name) {
 function loadTrayImage(unread = false) {
   if (unread) {
     // Coloured (non-template) so the green dot survives macOS menu-bar tinting.
-    return nativeImage.createFromPath(iconPath(process.platform === 'linux' ? 'trayUnread@2x.png' : 'trayUnread.png'));
+    return nativeImage.createFromPath(
+      iconPath(process.platform === 'linux' ? 'trayUnread@2x.png' : 'trayUnread.png')
+    );
   }
   return loadBaseImage();
 }
@@ -34,9 +36,7 @@ function loadBaseImage() {
   }
   const img = nativeImage.createFromPath(iconPath('tray.png'));
   // Linux indicators render better from a slightly larger source.
-  return process.platform === 'linux'
-    ? nativeImage.createFromPath(iconPath('tray@2x.png'))
-    : img;
+  return process.platform === 'linux' ? nativeImage.createFromPath(iconPath('tray@2x.png')) : img;
 }
 
 // Small menu glyphs. Action icons are template images so macOS tints them for

@@ -7,7 +7,14 @@ import { Mic, MicOff, Video, VideoOff, PhoneOff } from '../lib/icons.jsx';
 // GroupCallManager state passed as `call`.
 export default function GroupCallView({ call, self, onLeave, onToggleMute, onToggleCamera }) {
   const tiles = [
-    { id: 'self', name: `${self?.name || 'You'} (you)`, stream: call.localStream, self: true, connected: true, cameraOff: call.cameraOff },
+    {
+      id: 'self',
+      name: `${self?.name || 'You'} (you)`,
+      stream: call.localStream,
+      self: true,
+      connected: true,
+      cameraOff: call.cameraOff,
+    },
     ...call.participants.map((p) => ({ ...p, self: false })),
   ];
   const cols = gridColumns(tiles.length);
@@ -26,7 +33,11 @@ export default function GroupCallView({ call, self, onLeave, onToggleMute, onTog
       </div>
 
       <div className="call-bar">
-        <button className={`call-btn ${call.muted ? 'off' : ''}`} onClick={onToggleMute} title={call.muted ? 'Unmute' : 'Mute'}>
+        <button
+          className={`call-btn ${call.muted ? 'off' : ''}`}
+          onClick={onToggleMute}
+          title={call.muted ? 'Unmute' : 'Mute'}
+        >
           {call.muted ? <MicOff size={24} /> : <Mic size={24} />}
         </button>
         {call.withVideo && (
@@ -48,7 +59,9 @@ export default function GroupCallView({ call, self, onLeave, onToggleMute, onTog
 
 function Tile({ tile, withVideo, muted }) {
   const ref = useRef(null);
-  const hasVideo = Boolean(tile.stream && tile.stream.getVideoTracks && tile.stream.getVideoTracks().length > 0);
+  const hasVideo = Boolean(
+    tile.stream && tile.stream.getVideoTracks && tile.stream.getVideoTracks().length > 0
+  );
   const showVideo = withVideo && hasVideo && !tile.cameraOff;
 
   useEffect(() => {

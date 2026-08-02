@@ -37,21 +37,21 @@ export default function AddPeerModal({ defaultPort, tailnet, peers, onAdd, onClo
       <DiscoveredPeers tailnet={tailnet} knownPeers={peers} defaultPort={defaultPort} onPick={pick} />
 
       <div className="field">
-          <label htmlFor="ip">IP address</label>
-          <input
-            id="ip"
-            value={ip}
-            onChange={(e) => setIp(e.target.value)}
-            placeholder="100.x.y.z or 192.168.x.x"
-            autoFocus
-            onKeyDown={(e) => e.key === 'Enter' && add()}
-          />
-        </div>
-        <div className="field">
-          <label htmlFor="port">Port</label>
-          <input id="port" value={port} onChange={(e) => setPort(e.target.value)} placeholder="47100" />
-          <div className="hint">Default is 47100 unless the peer changed it.</div>
-        </div>
+        <label htmlFor="ip">IP address</label>
+        <input
+          id="ip"
+          value={ip}
+          onChange={(e) => setIp(e.target.value)}
+          placeholder="100.x.y.z or 192.168.x.x"
+          autoFocus
+          onKeyDown={(e) => e.key === 'Enter' && add()}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor="port">Port</label>
+        <input id="port" value={port} onChange={(e) => setPort(e.target.value)} placeholder="47100" />
+        <div className="hint">Default is 47100 unless the peer changed it.</div>
+      </div>
 
       <div className="modal-actions">
         <button className="btn ghost" onClick={onClose}>

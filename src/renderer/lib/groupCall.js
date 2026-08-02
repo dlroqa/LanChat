@@ -91,7 +91,8 @@ export class GroupCallManager {
     if (!peerId) return;
     try {
       const r = this.sendSignal(peerId, { ...msg, channel: 'group', roomId: this.roomId });
-      if (r && typeof r.catch === 'function') r.catch((err) => this.onError(`group signalling failed: ${err.message}`));
+      if (r && typeof r.catch === 'function')
+        r.catch((err) => this.onError(`group signalling failed: ${err.message}`));
     } catch (err) {
       this.onError(`group signalling failed: ${err.message}`);
     }
@@ -100,7 +101,11 @@ export class GroupCallManager {
   async getMedia(withVideo) {
     const { audioInputId, videoInputId } = this.getDevices();
     const video = withVideo
-      ? { width: { ideal: 1280 }, height: { ideal: 720 }, ...(videoInputId ? { deviceId: { exact: videoInputId } } : {}) }
+      ? {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          ...(videoInputId ? { deviceId: { exact: videoInputId } } : {}),
+        }
       : false;
     const audio = audioInputId ? { deviceId: { exact: audioInputId } } : true;
     try {
@@ -202,7 +207,8 @@ export class GroupCallManager {
   }
 
   decline() {
-    if (this.invite) this.sendSignal(this.invite.from, { channel: 'group', roomId: this.invite.roomId, kind: 'decline' });
+    if (this.invite)
+      this.sendSignal(this.invite.from, { channel: 'group', roomId: this.invite.roomId, kind: 'decline' });
     this.invite = null;
     if (this.status === 'invited') this.status = 'idle';
     this.emit();
@@ -225,14 +231,17 @@ export class GroupCallManager {
       this.emit();
     };
     pc.onconnectionstatechange = () => {
-      if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) this.dropPeer(peerId, { notify: true });
+      if (['failed', 'closed', 'disconnected'].includes(pc.connectionState))
+        this.dropPeer(peerId, { notify: true });
       this.emit();
     };
 
     if (initiate) {
       pc.createOffer()
         .then((offer) => pc.setLocalDescription(offer).then(() => offer))
-        .then((offer) => this.signal(peerId, { kind: 'offer', sdp: serializeDescription(pc.localDescription || offer) }))
+        .then((offer) =>
+          this.signal(peerId, { kind: 'offer', sdp: serializeDescription(pc.localDescription || offer) })
+        )
         .catch((err) => this.onError(`group offer failed: ${err.message}`));
     }
     this.emit();
@@ -272,7 +281,10 @@ export class GroupCallManager {
           entry.pending = [];
           const answer = await entry.pc.createAnswer();
           await entry.pc.setLocalDescription(answer);
-          this.signal(fromId, { kind: 'answer', sdp: serializeDescription(entry.pc.localDescription || answer) });
+          this.signal(fromId, {
+            kind: 'answer',
+            sdp: serializeDescription(entry.pc.localDescription || answer),
+          });
         } catch (err) {
           this.onError(`group answer failed: ${err.message}`);
         }

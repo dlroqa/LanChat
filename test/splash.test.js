@@ -20,7 +20,11 @@ require.cache['estub'] = {
   id: 'estub',
   filename: 'estub',
   loaded: true,
-  exports: { app: { getVersion: () => '0.0.0' }, BrowserWindow: class {}, ipcMain: { on: () => {}, removeAllListeners: () => {} } },
+  exports: {
+    app: { getVersion: () => '0.0.0' },
+    BrowserWindow: class {},
+    ipcMain: { on: () => {}, removeAllListeners: () => {} },
+  },
 };
 
 const { createGate } = require('../src/main/splash.js');
@@ -69,7 +73,10 @@ test('a repeated signal does not reveal twice', () => {
 
 // ------------------------------------------------------------------- timings
 
-const TIMING = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'lib', 'splashTiming.js'), 'utf8');
+const TIMING = fs.readFileSync(
+  path.join(__dirname, '..', 'src', 'renderer', 'lib', 'splashTiming.js'),
+  'utf8'
+);
 const { SPLASH_MS, REDUCED_SPLASH_MS, splashDuration } = new Function(
   `${TIMING.replace(/^export\s+/gm, '')}
    return { SPLASH_MS, REDUCED_SPLASH_MS, splashDuration };`

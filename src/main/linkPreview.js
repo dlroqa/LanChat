@@ -264,7 +264,13 @@ function parseMetadata(html, baseUrl) {
     }
   }
 
-  const rawImage = pick('og:image:secure_url', 'og:image:url', 'og:image', 'twitter:image', 'twitter:image:src');
+  const rawImage = pick(
+    'og:image:secure_url',
+    'og:image:url',
+    'og:image',
+    'twitter:image',
+    'twitter:image:src'
+  );
   let imageUrl = null;
   if (rawImage && baseUrl) {
     try {
@@ -388,7 +394,14 @@ function createLinkPreview({ version = '0', allowPrivate = false, now = () => Da
         image = null;
       }
     }
-    return { ok: true, url, title: meta.title, description: meta.description, siteName: meta.siteName, image };
+    return {
+      ok: true,
+      url,
+      title: meta.title,
+      description: meta.description,
+      siteName: meta.siteName,
+      image,
+    };
   }
 
   return {

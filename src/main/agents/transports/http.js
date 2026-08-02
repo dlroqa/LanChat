@@ -62,7 +62,9 @@ function describeSocketError(err, url) {
 // `/p/<profile>/` prefix on every route. No prefix means the server's default
 // profile, which is what an agent configured before this existed keeps using.
 function profilePrefix(profile) {
-  const name = String(profile || '').trim().replace(/^\/+|\/+$/g, '');
+  const name = String(profile || '')
+    .trim()
+    .replace(/^\/+|\/+$/g, '');
   return name ? `/p/${encodeURIComponent(name)}` : '';
 }
 
@@ -89,7 +91,14 @@ function createHttpTransport({ id, name, config, getSecret, timeoutMs }) {
     }
     return new Promise((resolve, reject) => {
       const req = mod.request(
-        { protocol: url.protocol, hostname: url.hostname, port: url.port, path: url.pathname + url.search, method, headers },
+        {
+          protocol: url.protocol,
+          hostname: url.hostname,
+          port: url.port,
+          path: url.pathname + url.search,
+          method,
+          headers,
+        },
         (res) => resolve({ res, req })
       );
       req.setTimeout(signalTimeout || budget, () => req.destroy(new Error('Request timed out.')));
@@ -190,7 +199,11 @@ function createHttpTransport({ id, name, config, getSecret, timeoutMs }) {
               break;
             case 'approval.request':
               // Surfaced to the local user only — never auto-answered.
-              onApproval?.({ runId, command: evt.command, choices: evt.choices || ['once', 'session', 'deny'] });
+              onApproval?.({
+                runId,
+                command: evt.command,
+                choices: evt.choices || ['once', 'session', 'deny'],
+              });
               break;
             case 'run.completed':
               // `output` is authoritative; deltas are only for live typing.
@@ -231,7 +244,10 @@ function createHttpTransport({ id, name, config, getSecret, timeoutMs }) {
       current.req.destroy();
     } catch {}
     try {
-      const { res } = await request('POST', `/v1/runs/${current.runId}/stop`, { body: {}, signalTimeout: 10000 });
+      const { res } = await request('POST', `/v1/runs/${current.runId}/stop`, {
+        body: {},
+        signalTimeout: 10000,
+      });
       res.resume();
     } catch {
       // The run may already have finished; nothing to clean up.

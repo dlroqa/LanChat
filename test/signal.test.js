@@ -61,7 +61,11 @@ test('serializeCandidate preserves every field ICE needs', () => {
 });
 
 test('serializeCandidate handles a plain object with no toJSON', () => {
-  const out = serializeCandidate({ candidate: 'candidate:2 1 udp 1 10.0.0.2 4 typ host', sdpMid: '1', sdpMLineIndex: 1 });
+  const out = serializeCandidate({
+    candidate: 'candidate:2 1 udp 1 10.0.0.2 4 typ host',
+    sdpMid: '1',
+    sdpMLineIndex: 1,
+  });
   assert.ok(isCloneable(out));
   assert.equal(out.sdpMid, '1');
   assert.equal(out.usernameFragment, null);

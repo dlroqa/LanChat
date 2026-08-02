@@ -20,7 +20,12 @@ export default function ModalShell({ title, desc, onClose, children, className =
 
   return (
     <div className="scrim" onClick={onClose || undefined}>
-      <div className={`modal ${className}`} role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+      <div
+        className={`modal ${className}`}
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-head">
           <h3>{title}</h3>
           {onClose && (

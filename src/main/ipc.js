@@ -117,7 +117,30 @@ function imageFilename(url, type) {
 //   - bus events -> webContents 'lanchat:event' : main -> renderer notifications
 // The renderer only ever sees the small, explicit surface exposed in preload.js.
 
-function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery, updater, linkStats, pip, agentHub, outbox, devGate, deviceKey, pins, netScope, userDataDir, downloadsDir, getWindow, revealWindow, applyLoginItem, onUnread }) {
+function createIpc({
+  config,
+  getIdentity,
+  hub,
+  bus,
+  store,
+  fileSender,
+  discovery,
+  updater,
+  linkStats,
+  pip,
+  agentHub,
+  outbox,
+  devGate,
+  deviceKey,
+  pins,
+  netScope,
+  userDataDir,
+  downloadsDir,
+  getWindow,
+  revealWindow,
+  applyLoginItem,
+  onUnread,
+}) {
   function emit(type, payload) {
     const win = getWindow();
     if (win && !win.isDestroyed()) win.webContents.send('lanchat:event', { type, payload });
@@ -194,7 +217,9 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
   bus.on('agent-approval', (a) => emit('agent-approval', a));
   // Addressed to the thread that is waiting on the run rather than to the agent,
   // which are the same id unless a session asked. See deliver() in agents/index.js.
-  bus.on('agent-typing', ({ agentId, threadId, isTyping }) => emit('typing', { peerId: threadId || agentId, isTyping }));
+  bus.on('agent-typing', ({ agentId, threadId, isTyping }) =>
+    emit('typing', { peerId: threadId || agentId, isTyping })
+  );
   // A run that finished with nothing in it. Carries a thread id rather than an
   // agent id because a peer's conversation with a local agent lives in its own
   // delegate thread, and that is the thread the window has to answer in.
@@ -602,7 +627,10 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     const messages = store.read(peerId);
     if (!messages.length) return { ok: false, error: 'There is nothing in this conversation yet.' };
 
-    const who = String(name || peerId).replace(/[^\w.\- ]+/g, '_').trim() || 'chat';
+    const who =
+      String(name || peerId)
+        .replace(/[^\w.\- ]+/g, '_')
+        .trim() || 'chat';
     const stamp = new Date().toISOString().slice(0, 10);
     const result = await dialog.showSaveDialog(getWindow(), {
       title: 'Save chat history',
@@ -628,9 +656,9 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
       const time = when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       // `askedBy` marks a request a peer made to one of our agents, which would
       // otherwise be indistinguishable from something we asked ourselves.
-      const speaker = m.direction === 'out' ? me : m.askedBy ? `${name || peerId} (via peer)` : name || peerId;
-      const body =
-        m.kind === 'text' || !m.kind ? m.text : `[${m.kind}]${m.fileName ? ` ${m.fileName}` : ''}`;
+      const speaker =
+        m.direction === 'out' ? me : m.askedBy ? `${name || peerId} (via peer)` : name || peerId;
+      const body = m.kind === 'text' || !m.kind ? m.text : `[${m.kind}]${m.fileName ? ` ${m.fileName}` : ''}`;
       lines.push(`[${time}] ${speaker}: ${body ?? ''}`);
     }
     lines.push('');
@@ -1188,7 +1216,24 @@ function createIpc({ config, getIdentity, hub, bus, store, fileSender, discovery
     const result = await dialog.showOpenDialog(win, {
       title: 'Choose a document for the agent to read',
       filters: [
-        { name: 'Documents', extensions: ['txt', 'md', 'pdf', 'markdown', 'rst', 'json', 'csv', 'tsv', 'log', 'yml', 'yaml', 'xml', 'html'] },
+        {
+          name: 'Documents',
+          extensions: [
+            'txt',
+            'md',
+            'pdf',
+            'markdown',
+            'rst',
+            'json',
+            'csv',
+            'tsv',
+            'log',
+            'yml',
+            'yaml',
+            'xml',
+            'html',
+          ],
+        },
         { name: 'All files', extensions: ['*'] },
       ],
       properties: ['openFile', 'multiSelections'],

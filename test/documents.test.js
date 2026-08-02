@@ -41,7 +41,10 @@ function makePdf(parts, { trailer = '<< /Root 1 0 R >>' } = {}) {
 
 const CATALOG = { num: 1, dict: '/Type /Catalog /Pages 2 0 R' };
 const PAGES = { num: 2, dict: '/Type /Pages /Kids [3 0 R] /Count 1' };
-const PAGE = { num: 3, dict: '/Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R' };
+const PAGE = {
+  num: 3,
+  dict: '/Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R',
+};
 const FONT = { num: 5, dict: '/Type /Font /Subtype /Type1 /BaseFont /Helvetica' };
 
 const onePage = (content, extra = []) =>
@@ -58,7 +61,10 @@ test('text is read from a FlateDecode content stream', () => {
   const raw = 'BT /F1 12 Tf 72 720 Td (Compressed content.) Tj ET';
   const pdf = onePage(zlib.deflateSync(Buffer.from(raw, 'latin1')), []);
   // The dict has to declare the filter, or the bytes are taken at face value.
-  const withFilter = Buffer.from(pdf.toString('latin1').replace('<<  /Length', '<< /Filter /FlateDecode /Length'), 'latin1');
+  const withFilter = Buffer.from(
+    pdf.toString('latin1').replace('<<  /Length', '<< /Filter /FlateDecode /Length'),
+    'latin1'
+  );
   assert.equal(extractPdfText(withFilter), 'Compressed content.');
 });
 
@@ -213,7 +219,10 @@ test('a UTF-8 byte-order mark is not left at the front of the prompt', () => {
 // Notepad still writes this when you pick "Unicode", and it is full of NUL
 // bytes — so the binary sniff has to check the byte-order mark first.
 test('a UTF-16 text file is read rather than mistaken for binary', () => {
-  const le = write('utf16le.txt', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('Wide text.', 'utf16le')]));
+  const le = write(
+    'utf16le.txt',
+    Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('Wide text.', 'utf16le')])
+  );
   assert.equal(readDocument(le).text, 'Wide text.');
   const beBody = Buffer.from('Wide text.', 'utf16le');
   const be = write('utf16be.txt', Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(beBody).swap16()]));

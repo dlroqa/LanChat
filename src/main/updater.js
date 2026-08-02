@@ -26,8 +26,14 @@ const API = `https://api.github.com/repos/${REPO}/releases/latest`;
 
 // Compares dotted versions. Returns >0 if a is newer than b.
 function compareVersions(a, b) {
-  const pa = String(a).replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
-  const pb = String(b).replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pa = String(a)
+    .replace(/^v/, '')
+    .split('.')
+    .map((n) => parseInt(n, 10) || 0);
+  const pb = String(b)
+    .replace(/^v/, '')
+    .split('.')
+    .map((n) => parseInt(n, 10) || 0);
   for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
     const d = (pa[i] || 0) - (pb[i] || 0);
     if (d !== 0) return d;
@@ -67,17 +73,21 @@ function pickAsset(assets, { platform, arch, isAppImage }) {
 function httpsGet(url, headers = {}, redirects = 0) {
   return new Promise((resolve, reject) => {
     if (redirects > 5) return reject(new Error('too many redirects'));
-    const req = https.get(url, { headers: { 'User-Agent': `LanChat/${app.getVersion()}`, ...headers } }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume();
-        return resolve(httpsGet(res.headers.location, headers, redirects + 1));
+    const req = https.get(
+      url,
+      { headers: { 'User-Agent': `LanChat/${app.getVersion()}`, ...headers } },
+      (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume();
+          return resolve(httpsGet(res.headers.location, headers, redirects + 1));
+        }
+        if (res.statusCode !== 200) {
+          res.resume();
+          return reject(new Error(`HTTP ${res.statusCode}`));
+        }
+        resolve(res);
       }
-      if (res.statusCode !== 200) {
-        res.resume();
-        return reject(new Error(`HTTP ${res.statusCode}`));
-      }
-      resolve(res);
-    });
+    );
     req.on('error', reject);
     req.setTimeout(20000, () => req.destroy(new Error('request timed out')));
   });

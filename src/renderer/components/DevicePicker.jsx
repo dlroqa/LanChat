@@ -3,7 +3,13 @@ import { listDevices, ensureLabels, labelFor, onDeviceChange } from '../lib/devi
 
 // Microphone + camera source selectors. Used both in Settings (persisted
 // preference) and mid-call (live switching via replaceTrack).
-export default function DevicePicker({ audioInputId, videoInputId, onChange, showVideo = true, compact = false }) {
+export default function DevicePicker({
+  audioInputId,
+  videoInputId,
+  onChange,
+  showVideo = true,
+  compact = false,
+}) {
   const [devices, setDevices] = useState({ audioInputs: [], videoInputs: [] });
   const [needsPermission, setNeedsPermission] = useState(false);
 
@@ -29,7 +35,11 @@ export default function DevicePicker({ audioInputId, videoInputId, onChange, sho
     <div>
       <div className="field" style={compact ? { marginBottom: 10 } : undefined}>
         <label htmlFor="mic">Microphone</label>
-        <select id="mic" value={audioInputId || ''} onChange={(e) => onChange('audioInputId', e.target.value || null)}>
+        <select
+          id="mic"
+          value={audioInputId || ''}
+          onChange={(e) => onChange('audioInputId', e.target.value || null)}
+        >
           <option value="">System default</option>
           {devices.audioInputs.map((d, i) => (
             <option key={d.deviceId} value={d.deviceId}>
@@ -42,7 +52,11 @@ export default function DevicePicker({ audioInputId, videoInputId, onChange, sho
       {showVideo && (
         <div className="field" style={compact ? { marginBottom: 10 } : undefined}>
           <label htmlFor="cam">Camera</label>
-          <select id="cam" value={videoInputId || ''} onChange={(e) => onChange('videoInputId', e.target.value || null)}>
+          <select
+            id="cam"
+            value={videoInputId || ''}
+            onChange={(e) => onChange('videoInputId', e.target.value || null)}
+          >
             <option value="">System default</option>
             {devices.videoInputs.map((d, i) => (
               <option key={d.deviceId} value={d.deviceId}>

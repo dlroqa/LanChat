@@ -106,7 +106,9 @@ export default function CallOverlay({
           <div className="t">{statusText}</div>
           {call.support && (
             <span className="support-badge">
-              {call.role === 'caller' ? `Assisting ${call.peerName || 'peer'}` : `Being assisted by ${call.peerName || 'peer'}`}
+              {call.role === 'caller'
+                ? `Assisting ${call.peerName || 'peer'}`
+                : `Being assisted by ${call.peerName || 'peer'}`}
             </span>
           )}
         </div>
@@ -140,17 +142,19 @@ export default function CallOverlay({
         </div>
       )}
 
-      {!pip && <AudioDiagnostics
-        levels={levels}
-        stats={audioStats}
-        muted={call.muted}
-        playError={playError}
-        connected={call.status === 'in-call'}
-        onRetryPlay={() => {
-          setPlayError(null);
-          attachStream(remoteAudioRef.current, call.remoteStream, (err) => setPlayError(err.message));
-        }}
-      />}
+      {!pip && (
+        <AudioDiagnostics
+          levels={levels}
+          stats={audioStats}
+          muted={call.muted}
+          playError={playError}
+          connected={call.status === 'in-call'}
+          onRetryPlay={() => {
+            setPlayError(null);
+            attachStream(remoteAudioRef.current, call.remoteStream, (err) => setPlayError(err.message));
+          }}
+        />
+      )}
 
       {!pip && showDevices && (
         <div className="device-panel" role="dialog" aria-label="Audio and video sources">
@@ -165,40 +169,46 @@ export default function CallOverlay({
         </div>
       )}
 
-      {!pip && <div className="call-bar">
-        <button
-          className={`call-btn ${showDevices ? 'active' : ''}`}
-          onClick={() => setShowDevices((v) => !v)}
-          title="Change microphone or camera"
-          aria-expanded={showDevices}
-        >
-          <Settings size={22} />
-        </button>
-        <button className={`call-btn ${call.muted ? 'off' : ''}`} onClick={onToggleMute} title={call.muted ? 'Unmute' : 'Mute'}>
-          {call.muted ? <MicOff size={24} /> : <Mic size={24} />}
-        </button>
-        {call.withVideo && (
+      {!pip && (
+        <div className="call-bar">
           <button
-            className={`call-btn ${call.cameraOff ? 'off' : ''}`}
-            onClick={onToggleCamera}
-            title={call.cameraOff ? 'Turn camera on' : 'Turn camera off'}
+            className={`call-btn ${showDevices ? 'active' : ''}`}
+            onClick={() => setShowDevices((v) => !v)}
+            title="Change microphone or camera"
+            aria-expanded={showDevices}
           >
-            {call.cameraOff ? <VideoOff size={24} /> : <Video size={24} />}
+            <Settings size={22} />
           </button>
-        )}
-        {onToggleFullscreen && (
           <button
-            className="call-btn"
-            onClick={onToggleFullscreen}
-            title={fullscreen ? 'Exit full screen' : 'Full screen'}
+            className={`call-btn ${call.muted ? 'off' : ''}`}
+            onClick={onToggleMute}
+            title={call.muted ? 'Unmute' : 'Mute'}
           >
-            {fullscreen ? <Minimize size={22} /> : <Maximize size={22} />}
+            {call.muted ? <MicOff size={24} /> : <Mic size={24} />}
           </button>
-        )}
-        <button className="call-btn hang" onClick={onHangup} title="Hang up">
-          <PhoneOff size={24} />
-        </button>
-      </div>}
+          {call.withVideo && (
+            <button
+              className={`call-btn ${call.cameraOff ? 'off' : ''}`}
+              onClick={onToggleCamera}
+              title={call.cameraOff ? 'Turn camera on' : 'Turn camera off'}
+            >
+              {call.cameraOff ? <VideoOff size={24} /> : <Video size={24} />}
+            </button>
+          )}
+          {onToggleFullscreen && (
+            <button
+              className="call-btn"
+              onClick={onToggleFullscreen}
+              title={fullscreen ? 'Exit full screen' : 'Full screen'}
+            >
+              {fullscreen ? <Minimize size={22} /> : <Maximize size={22} />}
+            </button>
+          )}
+          <button className="call-btn hang" onClick={onHangup} title="Hang up">
+            <PhoneOff size={24} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

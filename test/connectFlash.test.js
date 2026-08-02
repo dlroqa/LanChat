@@ -24,7 +24,8 @@ const timing = new Function(
    return { CONNECT_MIN_MS, CONNECT_MAX_MS, EMPTY_MS, REDUCED_CONNECT_MS, connectDuration, flashDuration };`
 )();
 
-const { CONNECT_MIN_MS, CONNECT_MAX_MS, EMPTY_MS, REDUCED_CONNECT_MS, connectDuration, flashDuration } = timing;
+const { CONNECT_MIN_MS, CONNECT_MAX_MS, EMPTY_MS, REDUCED_CONNECT_MS, connectDuration, flashDuration } =
+  timing;
 
 const css = fs.readFileSync(path.join(SRC, 'styles.css'), 'utf8');
 
@@ -34,9 +35,21 @@ test('the light lasts somewhere between four and eight seconds, and varies per p
   assert.equal(CONNECT_MIN_MS, 4000);
   assert.equal(CONNECT_MAX_MS, 8000);
 
-  assert.equal(connectDuration(false, () => 0), 4000, 'the short end');
-  assert.equal(connectDuration(false, () => 1), 8000, 'the long end');
-  assert.equal(connectDuration(false, () => 0.5), 6000, 'and it scales across the range');
+  assert.equal(
+    connectDuration(false, () => 0),
+    4000,
+    'the short end'
+  );
+  assert.equal(
+    connectDuration(false, () => 1),
+    8000,
+    'the long end'
+  );
+  assert.equal(
+    connectDuration(false, () => 0.5),
+    6000,
+    'and it scales across the range'
+  );
 
   // Two plays in a row should not be the same length, or it stops feeling like an
   // event and starts feeling like a cutscene.
@@ -70,7 +83,11 @@ test('reduced motion shortens the wait as well as removing the movement', () => 
   // number is read in JS too.
   assert.equal(connectDuration(true), REDUCED_CONNECT_MS);
   assert.ok(REDUCED_CONNECT_MS < CONNECT_MIN_MS, 'and it is genuinely shorter');
-  assert.equal(connectDuration(true, () => 1), REDUCED_CONNECT_MS, 'the pick is not consulted');
+  assert.equal(
+    connectDuration(true, () => 1),
+    REDUCED_CONNECT_MS,
+    'the pick is not consulted'
+  );
 });
 
 test('an empty run gets one short pass, whatever else is asked for', () => {

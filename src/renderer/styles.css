@@ -279,7 +279,9 @@ textarea {
   height: 34px;
   border-radius: var(--radius-sm);
   color: var(--fg-muted);
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 .icon-btn:hover {
   background: var(--surface-hover);
@@ -1294,7 +1296,9 @@ input:focus-visible {
   height: 26px;
   border-radius: 50%;
   color: var(--fg-faint);
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 .find-btn:hover {
   background: var(--surface-hover);
@@ -1583,7 +1587,11 @@ mark.find-hit.current {
   color: var(--fg-faint);
   opacity: 0;
   transform: scale(0.92);
-  transition: opacity 0.14s ease, transform 0.14s ease, background 0.12s ease, color 0.12s ease;
+  transition:
+    opacity 0.14s ease,
+    transform 0.14s ease,
+    background 0.12s ease,
+    color 0.12s ease;
 }
 .bubble-row:hover .bubble-fork,
 .bubble-fork:focus-visible {
@@ -1994,7 +2002,9 @@ mark.find-hit.current {
   height: 19px;
   border-radius: 50%;
   color: var(--fg-muted);
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 .composer-doc-remove:hover {
   background: var(--border);
@@ -2125,7 +2135,9 @@ mark.find-hit.current {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.12s ease, transform 0.08s ease;
+  transition:
+    background 0.12s ease,
+    transform 0.08s ease;
   flex-shrink: 0;
 }
 .send-btn:hover {
@@ -2579,7 +2591,9 @@ mark.find-hit.current {
   font-weight: 500;
   background: var(--surface-2);
   color: var(--fg);
-  transition: background 0.12s ease, transform 0.08s ease;
+  transition:
+    background 0.12s ease,
+    transform 0.08s ease;
 }
 .btn:hover {
   background: var(--surface-hover);
@@ -2860,7 +2874,9 @@ mark.find-hit.current {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.12s ease, transform 0.08s ease;
+  transition:
+    background 0.12s ease,
+    transform 0.08s ease;
 }
 .call-btn:hover {
   background: var(--surface-hover);
@@ -3121,7 +3137,6 @@ mark.find-hit.current {
   color: var(--warn);
 }
 
-
 /* ---------------- Form control readability ----------------
    macOS renders native <select> option lists with the system (dark) text
    colour, which was unreadable on our dark surfaces. Set both explicitly. */
@@ -3130,10 +3145,15 @@ select {
   background-color: var(--bg-2);
   appearance: none;
   -webkit-appearance: none;
-  background-image: linear-gradient(45deg, transparent 50%, var(--fg-muted) 50%),
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--fg-muted) 50%),
     linear-gradient(135deg, var(--fg-muted) 50%, transparent 50%);
-  background-position: calc(100% - 16px) calc(1em + 2px), calc(100% - 11px) calc(1em + 2px);
-  background-size: 5px 5px, 5px 5px;
+  background-position:
+    calc(100% - 16px) calc(1em + 2px),
+    calc(100% - 11px) calc(1em + 2px);
+  background-size:
+    5px 5px,
+    5px 5px;
   background-repeat: no-repeat;
   padding-right: 34px;
   cursor: pointer;
@@ -3300,8 +3320,15 @@ input[type='range']:disabled::-webkit-slider-thumb {
   animation: livepulse 1.6s ease-in-out infinite;
 }
 @keyframes livepulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.35; transform: scale(0.8); }
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
 }
 
 .conn-stats {
@@ -3685,7 +3712,9 @@ input[type='range']:disabled::-webkit-slider-thumb {
   animation:
     spark-idle 3.2s ease-in-out infinite,
     ready-drift 2.6s linear infinite;
-  animation-delay: 0s, -2.6s;
+  animation-delay:
+    0s,
+    -2.6s;
 }
 .agent-tone-busy {
   color: var(--neon-busy);
@@ -4164,11 +4193,21 @@ input[type='range']:disabled::-webkit-slider-thumb {
   opacity: 0;
   animation: ripple 2.4s ease-out infinite;
 }
-.pulse-ring span:nth-child(2) { animation-delay: 0.8s; }
-.pulse-ring span:nth-child(3) { animation-delay: 1.6s; }
+.pulse-ring span:nth-child(2) {
+  animation-delay: 0.8s;
+}
+.pulse-ring span:nth-child(3) {
+  animation-delay: 1.6s;
+}
 @keyframes ripple {
-  0% { transform: scale(0.4); opacity: 0.7; }
-  100% { transform: scale(1); opacity: 0; }
+  0% {
+    transform: scale(0.4);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0;
+  }
 }
 
 /* profile picture */
@@ -4203,7 +4242,9 @@ input[type='range']:disabled::-webkit-slider-thumb {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
 }
 .ptt-bar.live {
   border-color: var(--danger);
@@ -4233,7 +4274,9 @@ input[type='range']:disabled::-webkit-slider-thumb {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: background 0.12s ease, transform 0.08s ease;
+  transition:
+    background 0.12s ease,
+    transform 0.08s ease;
   user-select: none;
 }
 .ptt-btn:hover:not(:disabled) {
@@ -4289,12 +4332,23 @@ kbd {
 .ptt-wave.in > span {
   background: var(--online);
 }
-.ptt-wave > span:nth-child(2) { animation-delay: 0.15s; }
-.ptt-wave > span:nth-child(3) { animation-delay: 0.3s; }
-.ptt-wave > span:nth-child(4) { animation-delay: 0.45s; }
+.ptt-wave > span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.ptt-wave > span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+.ptt-wave > span:nth-child(4) {
+  animation-delay: 0.45s;
+}
 @keyframes ptt-bounce {
-  0%, 100% { height: 6px; }
-  50% { height: 20px; }
+  0%,
+  100% {
+    height: 6px;
+  }
+  50% {
+    height: 20px;
+  }
 }
 
 /* ---- agents ---------------------------------------------------------------
@@ -4743,7 +4797,9 @@ kbd {
   text-align: left;
   color: var(--fg-muted);
   border-bottom: 1px solid var(--border-soft);
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .discovered-row:last-child {
@@ -4913,9 +4969,16 @@ code.path {
 }
 
 @keyframes bubble-reject-shake {
-  0%, 100% { transform: translateX(0); }
-  25% { transform: translateX(5px); }
-  75% { transform: translateX(-5px); }
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(5px);
+  }
+  75% {
+    transform: translateX(-5px);
+  }
 }
 
 @keyframes bubble-reject-out {
@@ -5372,7 +5435,12 @@ code.path {
   width: 340px;
   height: 340px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(59, 130, 246, 0.4) 0%, rgba(37, 99, 235, 0.14) 45%, transparent 70%);
+  background: radial-gradient(
+    circle,
+    rgba(59, 130, 246, 0.4) 0%,
+    rgba(37, 99, 235, 0.14) 45%,
+    transparent 70%
+  );
   filter: blur(14px);
   animation: splash-bloom 1.2s ease-out both;
 }

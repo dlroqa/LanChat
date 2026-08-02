@@ -435,7 +435,9 @@ export default function Sidebar({
         <Avatar name={self?.name} id={self?.id} avatar={self?.avatar} online />
         <div className="meta">
           <div className="name">{self?.name || 'You'}</div>
-          <div className="sub">{self?.hostname} · {platformLabel(self?.platform)}</div>
+          <div className="sub">
+            {self?.hostname} · {platformLabel(self?.platform)}
+          </div>
         </div>
       </div>
 
