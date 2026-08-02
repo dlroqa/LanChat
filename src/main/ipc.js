@@ -73,6 +73,9 @@ const SETTABLE_KEYS = Object.freeze([
   'pttAllowIncoming',
   'dictationEnabled',
   'dictationPort',
+  'dictationKey',
+  'dictationCustomCode',
+  'dictationEverywhere',
   'openAtLogin',
 ]);
 

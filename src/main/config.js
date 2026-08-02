@@ -64,6 +64,15 @@ const DEFAULTS = Object.freeze({
   // macOS only in practice, and the renderer decides.
   dictationEnabled: true,
   dictationPort: 47733, // FluidVoice's LocalAPI.defaultPort
+  // The key that dictates. null means "whichever key push-to-talk uses", which is
+  // how dictation shipped and what an upgrading machine keeps. Set to a key of its
+  // own and push-to-talk goes back to being only the radio, everywhere.
+  dictationKey: null,
+  dictationCustomCode: null, // KeyboardEvent.code when dictationKey === 'custom'
+  // Whether dictation is offered in a person's thread as well as an agent's. Only
+  // has an effect once dictation has a key of its own: sharing the push-to-talk
+  // key would mean one key doing two jobs in a thread where both are possible.
+  dictationEverywhere: false,
   audioInputId: null, // preferred microphone (null = system default)
   videoInputId: null, // preferred camera (null = system default)
   enableTailscale: true,

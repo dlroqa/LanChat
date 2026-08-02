@@ -204,8 +204,7 @@ export class PttManager {
     }
 
     if (signal.kind === 'candidate') {
-      const target =
-        this.out && this.out.peerId === fromId ? this.out : this.inbound.get(fromId) || null;
+      const target = this.out && this.out.peerId === fromId ? this.out : this.inbound.get(fromId) || null;
       if (!target) return;
       if (target.pc.remoteDescription) await target.pc.addIceCandidate(signal.candidate).catch(() => {});
       else target.pending.push(signal.candidate);
@@ -312,6 +311,22 @@ export function describeKeyCode(code) {
 export function resolvePttKey(keyName, customCode) {
   if (keyName === 'custom' && customCode) return customKeyDef(customCode);
   return PTT_KEYS[keyName] || PTT_KEYS[defaultPttKey()];
+}
+
+// Whether dictation has been given a key of its own, rather than sharing the
+// push-to-talk key as it did when the feature shipped.
+//
+// Compared by resolved code, not by the configured name: picking Command in both
+// dropdowns, or recording the same physical key twice, has to read as one key.
+// Two bindings on one key would fire both jobs on the same press — the radio and
+// the recorder at once — which is the one outcome neither mode survives. `null`
+// is the explicit "same as push to talk" choice and short-circuits before any of
+// that, because it is also what every upgrading machine has stored.
+export function hasOwnDictationKey({ dictationKey, dictationCustomCode, pttKey, pttCustomCode }) {
+  if (!dictationKey) return false;
+  const dictate = resolvePttKey(dictationKey, dictationCustomCode);
+  const talk = resolvePttKey(pttKey, pttCustomCode);
+  return Boolean(dictate.code) && dictate.code !== talk.code;
 }
 
 // Attaches hold-to-talk listeners. Returns an unsubscribe function.

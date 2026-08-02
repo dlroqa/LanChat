@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Sidebar from './components/Sidebar.jsx';
 import ChatPane from './components/ChatPane.jsx';
 import SearchResults from './components/SearchResults.jsx';
@@ -17,8 +17,8 @@ import { CallManager } from './lib/rtc.js';
 import { Ringer, playNotification, playCallEvent, playPttCue, playRejectCue } from './lib/sounds.js';
 import ConnectionPanel from './components/ConnectionPanel.jsx';
 import PttBar from './components/PttBar.jsx';
-import { PttManager, attachPttKey, defaultPttKey } from './lib/ptt.js';
-import { DictationManager, shouldDictate, holdMode } from './lib/dictation.js';
+import { PttManager, attachPttKey, defaultPttKey, hasOwnDictationKey } from './lib/ptt.js';
+import { DictationManager, shouldDictate, holdMode, dictateKeyMode, tapAction } from './lib/dictation.js';
 import { toWavBytes } from './lib/wav.js';
 import { startRecording } from './lib/voice.js';
 import GroupCallView from './components/GroupCallView.jsx';
@@ -193,6 +193,9 @@ export default function App() {
   // progress. Release routes on this rather than on the current thread, so
   // switching conversation mid-hold cannot end a recording as a transmission.
   const holdModeRef = useRef(null);
+  // What the dedicated dictation key started, so its release ends the same thing
+  // it began even if the thread changed underneath the hold.
+  const dictateKeyRef = useRef(null);
   // Read from the keydown handler, which is attached once and would otherwise
   // close over whatever the answer was when the listeners went on.
   const dictationReadyRef = useRef(null);
@@ -330,72 +333,158 @@ export default function App() {
         call.status === 'idle' &&
         Boolean(selectedPeerRef.current && selectedPeerRef.current.online),
       // Dictation writes into the composer, so it is the one mode that must
-      // still fire while the composer has focus.
-      allowWhileTyping: () => dictates(),
+      // still fire while the composer has focus. Asked of this key specifically:
+      // once dictation moves to a key of its own, this one is back to being the
+      // radio and has no business claiming presses out of a half-typed message.
+      allowWhileTyping: () =>
+        holdMode({ ...dictationInputs(), ready: dictationReadyRef.current }) === 'dictate',
       onDown: holdStart,
       onUp: holdEnd,
     });
     // Everything the handlers need is read from a ref when the key is pressed,
     // so the selected thread is deliberately not a dependency here — re-running
-    // this on every conversation change would drop the listeners mid-hold.
+    // this on every conversation change would drop the listeners mid-hold. That
+    // is also why the handlers themselves are left out: a stale closure over them
+    // still reads current values, and depending on them would rebind on every
+    // render instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.pttKey, config.pttCustomCode, config.pttEnabled, call.status]);
+
+  // Hold-to-dictate on a key of its own, when one is set.
+  //
+  // A second, independent binding rather than more branching inside the first:
+  // attachPttKey keeps its `held` state per instance and ignores every event that
+  // does not match its own key, so the two cannot see each other's presses. That
+  // is also what makes the shared-key case safe to rule out here instead of
+  // inside the handler — with no dedicated key this effect binds nothing at all,
+  // and the push-to-talk binding above is the only listener, exactly as before.
+  //
+  // Unlike push-to-talk it is not disabled during a call: dictating a message
+  // while on a call writes into the composer and never opens a second capture of
+  // the microphone the call is already using.
+  useEffect(() => {
+    if (!IS_MAC_HOST) return undefined;
+    const dedicated = hasOwnDictationKey({
+      dictationKey: config.dictationKey,
+      dictationCustomCode: config.dictationCustomCode,
+      pttKey: config.pttKey || defaultPttKey(),
+      pttCustomCode: config.pttCustomCode,
+    });
+    if (!dedicated) return undefined;
+    return attachPttKey({
+      keyName: config.dictationKey,
+      customCode: config.dictationCustomCode,
+      isEnabled: () => configRef.current.dictationEnabled !== false,
+      // Dictation writes into the composer, so it is the one mode that must still
+      // fire while the composer has focus.
+      allowWhileTyping: () => true,
+      onDown: dictateKeyDown,
+      onUp: dictateKeyUp,
+    });
+    // Same reasoning as the binding above: the handlers read the thread and the
+    // settings from refs at press time, so rebinding when they change would only
+    // risk dropping the listeners mid-hold.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    config.dictationKey,
+    config.dictationCustomCode,
+    config.pttKey,
+    config.pttCustomCode,
+    config.dictationEnabled,
+  ]);
 
   useEffect(() => () => pttRef.current?.closeAll(), []);
   useEffect(() => () => dictationRef.current?.cancel(), []);
 
-  // Whether FluidVoice is actually reachable, asked once rather than found out
-  // by speaking a sentence and getting nothing back. Re-asked when the configured
-  // port changes, which is the only thing here that can change the answer.
-  useEffect(() => {
-    if (!IS_MAC_HOST || config.dictationEnabled === false) return undefined;
-    let live = true;
+  // Whether FluidVoice is actually reachable, asked rather than found out by
+  // speaking a sentence and getting nothing back.
+  //
+  // The answer is owned by another application, so unlike a setting it can change
+  // while nothing here does: FluidVoice gets started after LanChat, or its local
+  // API is switched on in a terminal. Asking once at launch left the card saying
+  // "isn't reachable" with a disabled button, next to a Settings panel that had
+  // just said "Connected" — and no way back short of a restart. So this is a
+  // function that can be re-asked, and the callers below are every moment the
+  // answer could have changed without us.
+  const refreshDictationReady = useCallback(() => {
+    if (!IS_MAC_HOST || configRef.current.dictationEnabled === false) return;
     api
-      .probeDictation(config.dictationPort || null)
-      .then((r) => live && setDictationReady(Boolean(r && r.ok)))
-      .catch(() => live && setDictationReady(false));
-    return () => {
-      live = false;
-    };
-  }, [config.dictationEnabled, config.dictationPort]);
+      .probeDictation(configRef.current.dictationPort || null)
+      .then((r) => setDictationReady(Boolean(r && r.ok)))
+      .catch(() => setDictationReady(false));
+  }, []);
 
-  // Which thing the key does here. An agent or a session has nothing to listen
-  // with, so holding the key at one dictates; holding it at a person still opens
-  // the voice channel it always did.
-  function dictates() {
-    return shouldDictate({
+  useEffect(() => {
+    refreshDictationReady();
+  }, [config.dictationEnabled, config.dictationPort, refreshDictationReady]);
+
+  // Coming back to the window is the moment after "go and start FluidVoice", so
+  // the common recovery costs the user nothing. It is one loopback request
+  // against a server that answers in single digit milliseconds.
+  useEffect(() => {
+    if (!IS_MAC_HOST) return undefined;
+    window.addEventListener('focus', refreshDictationReady);
+    return () => window.removeEventListener('focus', refreshDictationReady);
+  }, [refreshDictationReady]);
+
+  // The four inputs every dictation decision needs, read from refs so a key
+  // pressed now is answered with the settings and thread that are current now.
+  // Gathered in one place because a decision made from a stale subset is exactly
+  // how the push-to-talk key and the dictation key would disagree about which of
+  // them owns a press.
+  function dictationInputs() {
+    const c = configRef.current;
+    return {
       isMac: IS_MAC_HOST,
-      enabled: configRef.current.dictationEnabled,
+      enabled: c.dictationEnabled,
       thinkingThread: isThinkingThread(selectedRef.current),
-    });
+      everywhere: c.dictationEverywhere === true,
+      dedicated: hasOwnDictationKey({
+        dictationKey: c.dictationKey,
+        dictationCustomCode: c.dictationCustomCode,
+        pttKey: c.pttKey || defaultPttKey(),
+        pttCustomCode: c.pttCustomCode,
+      }),
+    };
+  }
+
+  // Which thing the push-to-talk key does here. An agent or a session has nothing
+  // to listen with, so holding it at one dictates; holding it at a person still
+  // opens the voice channel it always did — and once dictation has a key of its
+  // own, this key is the radio again everywhere.
+  function dictates() {
+    return shouldDictate(dictationInputs());
   }
 
   function holdStart() {
-    const mode = holdMode({
-      isMac: IS_MAC_HOST,
-      enabled: configRef.current.dictationEnabled,
-      thinkingThread: isThinkingThread(selectedRef.current),
-      ready: dictationReadyRef.current,
-    });
+    const mode = holdMode({ ...dictationInputs(), ready: dictationReadyRef.current });
     holdModeRef.current = mode;
     if (mode === 'dictate') dictationRef.current.start(selectedRef.current);
     else if (mode === 'radio') pttRef.current.setTransmitting(true, selectedPeerRef.current);
+  }
+
+  // The dedicated dictation key, when one is set. It never transmits, so unlike
+  // holdStart there is no radio branch to fall through to.
+  function dictateKeyDown() {
+    const mode = dictateKeyMode({ ...dictationInputs(), ready: dictationReadyRef.current });
+    dictateKeyRef.current = mode;
+    if (mode === 'dictate') dictationRef.current.start(selectedRef.current);
+    else if (mode === 'none') refreshDictationReady();
+  }
+
+  function dictateKeyUp() {
+    const mode = dictateKeyRef.current;
+    dictateKeyRef.current = null;
+    if (mode === 'dictate') dictationRef.current.stop();
   }
 
   // The microphone button on the dictate card. Tapped rather than held, so it
   // has its own entry point — but it lands in the same manager, and it refuses
   // for the same reason a hold does when there is nothing to transcribe with.
   function dictateToggle() {
-    if (
-      holdMode({
-        isMac: IS_MAC_HOST,
-        enabled: configRef.current.dictationEnabled,
-        thinkingThread: isThinkingThread(selectedRef.current),
-        ready: dictationReadyRef.current,
-      }) !== 'dictate'
-    ) {
-      return;
-    }
-    dictationRef.current.toggle(selectedRef.current);
+    const action = tapAction({ ...dictationInputs(), ready: dictationReadyRef.current });
+    if (action === 'recheck') refreshDictationReady();
+    else if (action === 'toggle') dictationRef.current.toggle(selectedRef.current);
   }
 
   function holdEnd() {
@@ -1749,7 +1838,15 @@ export default function App() {
                 state={ptt}
                 keyName={config.pttKey || defaultPttKey()}
                 customCode={config.pttCustomCode}
-                dictation={dictates() ? dictation : null}
+                dictateKeyName={config.dictationKey}
+                dictateCustomCode={config.dictationCustomCode}
+                // The dictate card replaces the radio card wherever dictation is
+                // what the gesture does — and also, in a person's thread where it
+                // is not, for as long as a dictation is actually running. Holding
+                // the dictation key at somebody would otherwise record with the
+                // panel still showing "Hold ⌘ to talk", which is the one moment
+                // the user most needs to be told which of the two is happening.
+                dictation={dictates() || dictation.phase !== 'idle' ? dictation : null}
                 cliReady={dictationReady}
                 onHoldStart={holdStart}
                 onHoldEnd={holdEnd}
@@ -1789,7 +1886,14 @@ export default function App() {
           peers={peers}
           soundUrl={soundUrl}
           onSave={saveSettings}
-          onClose={() => setModal(null)}
+          // Settings is where the user goes to fix an unreachable FluidVoice, and
+          // its Check button asks the very same question. Re-asking on the way out
+          // is what stops the card contradicting a panel that just said
+          // "Connected" — including when the port itself did not change.
+          onClose={() => {
+            setModal(null);
+            refreshDictationReady();
+          }}
         />
       )}
       {/* Only while that session is the one on screen. A history scan finishes

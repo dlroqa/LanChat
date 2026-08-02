@@ -22,6 +22,8 @@ export default function PttBar({
   state,
   keyName,
   customCode,
+  dictateKeyName,
+  dictateCustomCode,
   dictation,
   cliReady,
   onHoldStart,
@@ -32,8 +34,10 @@ export default function PttBar({
   if (dictation) {
     return (
       <DictateBar
-        keyName={keyName}
-        customCode={customCode}
+        // The key the card names is the one that dictates: its own, once it has
+        // one, and otherwise the push-to-talk key it borrows.
+        keyName={dictateKeyName || keyName}
+        customCode={dictateKeyName ? dictateCustomCode : customCode}
         dictation={dictation}
         cliReady={cliReady}
         onToggle={onDictateToggle}
@@ -139,16 +143,19 @@ function DictateBar({ keyName, customCode, dictation, cliReady, onToggle }) {
       className={`ptt-bar ${recording ? 'live' : ''} ${working ? 'working' : ''} ${failed ? 'error' : ''}`}
     >
       <button
+        // Not disabled when unreachable: tapping it checks again. FluidVoice is
+        // another application, so "not reachable" is usually a thing the user is
+        // in the middle of fixing, and a dead control is how that reads as broken.
         className={`ptt-btn ${recording ? 'live' : ''}`}
-        disabled={missing || working}
+        disabled={working}
         title={
           missing
-            ? 'Set up dictation in Settings → Push to talk'
+            ? 'Tap to check again — set it up in Settings → Push to talk'
             : recording
               ? 'Tap to stop'
               : `Tap to dictate, or hold ${keyLabel}`
         }
-        aria-label={recording ? 'Stop dictating' : 'Dictate'}
+        aria-label={missing ? 'Check for FluidVoice again' : recording ? 'Stop dictating' : 'Dictate'}
         aria-pressed={recording}
         onClick={onToggle}
       >
@@ -158,7 +165,7 @@ function DictateBar({ keyName, customCode, dictation, cliReady, onToggle }) {
         <div className={`ptt-status ${failed ? 'error' : ''}`}>{status}</div>
         <div className="ptt-hint">
           {missing ? (
-            'Settings → Push to talk'
+            'Tap to retry · Settings → Push to talk'
           ) : recording ? (
             'Tap to stop'
           ) : (

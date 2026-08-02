@@ -4,7 +4,7 @@ import DevicePicker from './DevicePicker.jsx';
 import UpdateSection from './UpdateSection.jsx';
 import SoundSettings from './SoundSettings.jsx';
 import AgentSection from './AgentSection.jsx';
-import { PTT_KEYS, defaultPttKey, describeKeyCode } from '../lib/ptt.js';
+import { PTT_KEYS, defaultPttKey, describeKeyCode, hasOwnDictationKey } from '../lib/ptt.js';
 
 const DEFAULT_STUN = 'stun:stun.l.google.com:19302';
 // FluidVoice's LocalAPI.defaultPort. Duplicated from main/dictation.js because
@@ -49,6 +49,11 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
     pttAllowIncoming: config.pttAllowIncoming !== false,
     dictationEnabled: config.dictationEnabled !== false,
     dictationPort: config.dictationPort ?? '',
+    // null is "same as push-to-talk", which is what every machine that had
+    // dictation before this setting existed carries.
+    dictationKey: config.dictationKey || null,
+    dictationCustomCode: config.dictationCustomCode || null,
+    dictationEverywhere: config.dictationEverywhere === true,
   });
   const [devices, setDevices] = useState({
     audioInputId: config.audioInputId || null,
@@ -305,6 +310,17 @@ function Dictation({ value, set }) {
 
   if (!navigator.platform.toLowerCase().includes('mac')) return null;
 
+  // Whether dictation is still riding the push-to-talk key — either because it
+  // was never given one, or because both dropdowns landed on the same key. The
+  // same answer the renderer acts on, so the panel cannot promise a scope the
+  // key bindings will not honour.
+  const sameAsPtt = !hasOwnDictationKey({
+    dictationKey: value.dictationKey,
+    dictationCustomCode: value.dictationCustomCode,
+    pttKey: value.pttKey || defaultPttKey(),
+    pttCustomCode: value.pttCustomCode,
+  });
+
   async function check() {
     setChecking(true);
     try {
@@ -323,6 +339,49 @@ function Dictation({ value, set }) {
         desc="In agent and session threads, tap the microphone — or hold the push-to-talk key — to speak. FluidVoice transcribes it on this Mac and the text lands in the message box for you to read before sending."
         on={value.dictationEnabled}
         set={(v) => set((p) => ({ ...p, dictationEnabled: v }))}
+      />
+      <div className="field" style={{ marginTop: 12 }}>
+        <label htmlFor="dictkey">Dictation key</label>
+        <select
+          id="dictkey"
+          value={value.dictationKey || ''}
+          disabled={!value.dictationEnabled}
+          onChange={(e) => set((p) => ({ ...p, dictationKey: e.target.value || null }))}
+        >
+          <option value="">Same as push-to-talk</option>
+          {Object.entries(PTT_KEYS).map(([key, def]) => (
+            <option key={key} value={key}>
+              {def.label}
+            </option>
+          ))}
+          <option value="custom">Custom key…</option>
+        </select>
+        {value.dictationKey === 'custom' && (
+          <KeyRecorder
+            code={value.dictationCustomCode}
+            disabled={!value.dictationEnabled}
+            onRecord={(code) => set((p) => ({ ...p, dictationCustomCode: code }))}
+          />
+        )}
+        {sameAsPtt ? (
+          <div className="hint">
+            Sharing the push-to-talk key means dictation can only take threads where that key has nothing else
+            to do — an agent or a session. Give it a key of its own to dictate at people too, and to drop the
+            short delay the shared key needs to let ⌘C and ⌘V through.
+          </div>
+        ) : (
+          <div className="hint">
+            Hold it to dictate; the push-to-talk key goes back to being only the radio. A letter or digit is a
+            poor choice — holding one types into the message box while you speak.
+          </div>
+        )}
+      </div>
+      <Toggle
+        label="Dictate to people as well as agents"
+        desc="With a key of its own, dictation can write into any conversation. Off, it stays in agent and session threads, where nobody is listening live."
+        on={value.dictationEverywhere === true}
+        disabled={!value.dictationEnabled || sameAsPtt}
+        set={(v) => set((p) => ({ ...p, dictationEverywhere: v }))}
       />
       <div className="field" style={{ marginTop: 12 }}>
         <label htmlFor="dictport">FluidVoice port</label>
@@ -353,8 +412,8 @@ function Dictation({ value, set }) {
         )}
         {(!probe || !probe.ok) && (
           <div className="hint">
-            LanChat speaks to FluidVoice over its local API, which ships switched off. To turn it
-            on, quit FluidVoice and run:
+            LanChat speaks to FluidVoice over its local API, which ships switched off. To turn it on, quit
+            FluidVoice and run:
             <br />
             <code>defaults write com.FluidApp.app LocalAPIEnabled -bool true</code>
             <br />
@@ -362,12 +421,12 @@ function Dictation({ value, set }) {
           </div>
         )}
         <div className="hint">
-          That API has no password: once it is on, any program on this Mac can reach it, including
-          your FluidVoice dictation history. It refuses connections from other machines.
+          That API has no password: once it is on, any program on this Mac can reach it, including your
+          FluidVoice dictation history. It refuses connections from other machines.
         </div>
         <div className="hint">
-          Dictation also answers the push-to-talk key above. A letter or digit is a poor choice for
-          it — holding one types into the message box while you speak.
+          Dictation also answers the push-to-talk key above. A letter or digit is a poor choice for it —
+          holding one types into the message box while you speak.
         </div>
       </div>
     </>
@@ -405,14 +464,21 @@ function StorageInfo() {
   );
 }
 
-function Toggle({ label, desc, on, set }) {
+function Toggle({ label, desc, on, set, disabled = false }) {
   return (
-    <div className="switch">
+    <div className="switch" style={disabled ? { opacity: 0.5 } : undefined}>
       <div>
         <div style={{ fontWeight: 500 }}>{label}</div>
         <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>{desc}</div>
       </div>
-      <button className={`toggle ${on ? 'on' : ''}`} onClick={() => set(!on)} aria-pressed={on} aria-label={label} />
+      <button
+        className={`toggle ${on ? 'on' : ''}`}
+        onClick={() => set(!on)}
+        disabled={disabled}
+        aria-pressed={on}
+        aria-disabled={disabled}
+        aria-label={label}
+      />
     </div>
   );
 }

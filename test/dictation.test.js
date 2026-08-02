@@ -16,7 +16,7 @@ function loadDictation() {
     'console',
     `'use strict';
      ${body}
-     return { DictationManager, shouldDictate, holdMode, ARM_MS, MAX_DICTATION_MS, ERROR_CLEAR_MS };`
+     return { DictationManager, shouldDictate, holdMode, dictateKeyMode, tapAction, ARM_MS, MAX_DICTATION_MS, ERROR_CLEAR_MS };`
   );
   return fn(console);
 }
@@ -319,4 +319,98 @@ test('a tap released before the microphone opens still releases it', async () =>
 
   assert.equal(rec.calls.cancel, 1, 'the microphone must not be left live');
   assert.equal(manager.phase, 'idle');
+});
+
+test('an unreachable FluidVoice makes the tap re-check rather than do nothing', () => {
+  const { tapAction } = loadDictation();
+  const mac = { isMac: true, enabled: true, thinkingThread: true };
+
+  // The regression this locks: reachability is owned by another application, so
+  // it goes stale on its own — FluidVoice started after LanChat, or its local API
+  // switched on in a terminal. Shipped as 'ignore', the card sat disabled saying
+  // "isn't reachable" beside a Settings panel that had just said "Connected", with
+  // no way back short of restarting. The tap has to be able to ask again.
+  assert.equal(tapAction({ ...mac, ready: false }), 'recheck');
+
+  assert.equal(tapAction({ ...mac, ready: true }), 'toggle');
+  // Not answered yet counts as reachable, same as the hold path.
+  assert.equal(tapAction({ ...mac, ready: null }), 'toggle');
+
+  // Nothing to dictate into: a person hears you, and off macOS there is no
+  // FluidVoice to ask. Neither is a failed check, so neither offers a re-check.
+  assert.equal(tapAction({ ...mac, thinkingThread: false, ready: false }), 'ignore');
+  assert.equal(tapAction({ ...mac, isMac: false, ready: false }), 'ignore');
+  assert.equal(tapAction({ ...mac, enabled: false, ready: false }), 'ignore');
+});
+
+// ------------------------------------------- a key of its own, and how far it reaches
+
+test('"everywhere" is only honoured once dictation has a key of its own', () => {
+  const { shouldDictate } = loadDictation();
+  const mac = { isMac: true, enabled: true, thinkingThread: false };
+
+  // A person's thread with a dedicated key: both jobs are possible, and there
+  // are two keys to tell them apart. This is the case the setting exists for.
+  assert.equal(shouldDictate({ ...mac, everywhere: true, dedicated: true }), true);
+
+  // The same request while sharing the push-to-talk key is refused. One key
+  // cannot both open the radio and start the recorder, and silently picking one
+  // would make the other look broken. Settings disables the toggle to match.
+  assert.equal(shouldDictate({ ...mac, everywhere: true, dedicated: false }), false);
+
+  // Scope off: agents and sessions only, dedicated key or not.
+  assert.equal(shouldDictate({ ...mac, everywhere: false, dedicated: true }), false);
+  assert.equal(shouldDictate({ ...mac, thinkingThread: true, everywhere: false, dedicated: true }), true);
+  assert.equal(shouldDictate({ ...mac, thinkingThread: true, everywhere: false, dedicated: false }), true);
+
+  // Off macOS and switched off still win over everything.
+  assert.equal(shouldDictate({ ...mac, isMac: false, everywhere: true, dedicated: true }), false);
+  assert.equal(shouldDictate({ ...mac, enabled: false, everywhere: true, dedicated: true }), false);
+});
+
+test('a dedicated key gives push-to-talk its old behaviour back everywhere', () => {
+  const { holdMode } = loadDictation();
+  const mac = { isMac: true, enabled: true, ready: true };
+
+  // At a person: the radio, as always.
+  assert.equal(holdMode({ ...mac, thinkingThread: false, dedicated: true }), 'radio');
+
+  // At an agent: nothing. Not 'radio' — that would open the microphone and stream
+  // at something with no ear, which is the defect dictation was added to remove
+  // and which a naive "give the key back to the radio" reintroduces exactly here.
+  assert.equal(holdMode({ ...mac, thinkingThread: true, dedicated: true }), 'none');
+
+  // Sharing: unchanged from how dictation shipped.
+  assert.equal(holdMode({ ...mac, thinkingThread: true, dedicated: false }), 'dictate');
+  assert.equal(holdMode({ ...mac, thinkingThread: false, dedicated: false }), 'radio');
+  assert.equal(holdMode({ ...mac, thinkingThread: true, dedicated: false, ready: false }), 'none');
+});
+
+test('the dictation key never transmits, whatever thread it is held in', () => {
+  const { dictateKeyMode } = loadDictation();
+  const mac = { isMac: true, enabled: true, ready: true };
+
+  assert.equal(dictateKeyMode({ ...mac, thinkingThread: true }), 'dictate');
+  assert.equal(dictateKeyMode({ ...mac, thinkingThread: false, everywhere: true }), 'dictate');
+
+  // Out of scope is 'ignore', not 'radio' — this key has no radio to fall back
+  // to, and holding it at a person must not start transmitting to them.
+  assert.equal(dictateKeyMode({ ...mac, thinkingThread: false, everywhere: false }), 'ignore');
+  assert.equal(dictateKeyMode({ ...mac, thinkingThread: true, ready: false }), 'none');
+});
+
+test('the button dictates on a dedicated key, where holdMode answers for the radio', () => {
+  const { tapAction, holdMode } = loadDictation();
+  const agent = { isMac: true, enabled: true, thinkingThread: true, ready: true, dedicated: true };
+
+  // The regression this guards: tapAction used to be derived from holdMode, which
+  // stops saying 'dictate' the moment dictation moves to its own key — so the
+  // microphone button would have gone dead exactly when the user finished setting
+  // it up. The button belongs to dictation, not to whichever key is bound.
+  assert.equal(holdMode(agent), 'none', 'the push-to-talk key has nothing to do here');
+  assert.equal(tapAction(agent), 'toggle', 'the button still dictates');
+
+  assert.equal(tapAction({ ...agent, ready: false }), 'recheck');
+  assert.equal(tapAction({ ...agent, thinkingThread: false, everywhere: true }), 'toggle');
+  assert.equal(tapAction({ ...agent, thinkingThread: false, everywhere: false }), 'ignore');
 });

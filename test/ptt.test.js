@@ -17,7 +17,7 @@ function loadPtt({
 } = {}) {
   const listeners = {};
   const win = {
-    addEventListener: (t, fn) => ((listeners[t] = listeners[t] || []).push(fn)),
+    addEventListener: (t, fn) => (listeners[t] = listeners[t] || []).push(fn),
     removeEventListener: (t, fn) => {
       listeners[t] = (listeners[t] || []).filter((f) => f !== fn);
     },
@@ -37,7 +37,7 @@ function loadPtt({
     'MediaStream',
     `'use strict';
      ${body}
-     return { PTT_KEYS, defaultPttKey, attachPttKey, resolvePttKey, describeKeyCode, PttManager };`
+     return { PTT_KEYS, defaultPttKey, attachPttKey, resolvePttKey, describeKeyCode, hasOwnDictationKey, PttManager };`
   );
   return { api: fn(win, doc, nav, RTCPeerConnection, MediaStream), listeners };
 }
@@ -343,4 +343,113 @@ test('the transmit cue fires before the microphone is unmuted', async () => {
   assert.deepEqual(cueMicStates, [['transmit', false]], 'cue must play with the mic still muted');
   assert.equal(track.enabled, true, 'the mic is live once transmission starts');
   assert.equal(mgr.transmitting, true);
+});
+
+test('dictation only counts as having its own key when it is a different key', () => {
+  const { api } = loadPtt();
+  const { hasOwnDictationKey } = api;
+
+  // Unset is the upgrade path: every machine that had dictation before the
+  // setting existed stores null, and must keep sharing the push-to-talk key.
+  assert.equal(hasOwnDictationKey({ dictationKey: null, pttKey: 'meta' }), false);
+  assert.equal(hasOwnDictationKey({ dictationKey: '', pttKey: 'meta' }), false);
+
+  // The one that would break both modes at once: two bindings on one physical
+  // key, so a single press opens the radio and starts the recorder together.
+  assert.equal(hasOwnDictationKey({ dictationKey: 'meta', pttKey: 'meta' }), false);
+  assert.equal(
+    hasOwnDictationKey({
+      dictationKey: 'custom',
+      dictationCustomCode: 'F13',
+      pttKey: 'custom',
+      pttCustomCode: 'F13',
+    }),
+    false,
+    'the same recorded key twice is still one key'
+  );
+
+  // Genuinely separate keys, named or recorded.
+  assert.equal(hasOwnDictationKey({ dictationKey: 'alt', pttKey: 'meta' }), true);
+  assert.equal(
+    hasOwnDictationKey({ dictationKey: 'custom', dictationCustomCode: 'F13', pttKey: 'meta' }),
+    true
+  );
+  // 'custom' with nothing recorded resolves to the platform default, which on a
+  // Mac is the push-to-talk key — so it is not yet a second key.
+  assert.equal(hasOwnDictationKey({ dictationKey: 'custom', pttKey: 'meta' }), false);
+});
+
+test('a second binding on its own key does not disturb the first', () => {
+  // Dictation on a key of its own means two attachPttKey instances live on the
+  // same window at once. This was reasoned about from the source — each keeps its
+  // own `held` and ignores events its def does not match — and reasoning is not
+  // running it. A press claimed by both, or a release swallowed by the wrong one,
+  // would open the radio and the recorder together on a single key.
+  const { api, listeners } = loadPtt();
+  const talk = [];
+  const dictate = [];
+
+  const offTalk = api.attachPttKey({
+    keyName: 'meta',
+    isEnabled: () => true,
+    onDown: () => talk.push('down'),
+    onUp: () => talk.push('up'),
+  });
+  const offDictate = api.attachPttKey({
+    keyName: 'custom',
+    customCode: 'F13',
+    isEnabled: () => true,
+    allowWhileTyping: () => true,
+    onDown: () => dictate.push('down'),
+    onUp: () => dictate.push('up'),
+  });
+
+  fire(listeners, 'keydown', { key: 'Meta', code: 'MetaLeft', repeat: false });
+  fire(listeners, 'keyup', { key: 'Meta', code: 'MetaLeft' });
+  assert.deepEqual(talk, ['down', 'up'], 'the radio key drives only the radio');
+  assert.deepEqual(dictate, [], 'and never reaches dictation');
+
+  fire(listeners, 'keydown', { key: 'F13', code: 'F13', repeat: false });
+  fire(listeners, 'keyup', { key: 'F13', code: 'F13' });
+  assert.deepEqual(dictate, ['down', 'up'], 'the dictation key drives only dictation');
+  assert.deepEqual(talk, ['down', 'up'], 'and leaves the radio where it was');
+
+  // Unsubscribing one must leave the other attached — they share the window, and
+  // a cleanup that removed the wrong listeners would silently kill the survivor.
+  offTalk();
+  fire(listeners, 'keydown', { key: 'F13', code: 'F13', repeat: false });
+  fire(listeners, 'keyup', { key: 'F13', code: 'F13' });
+  assert.deepEqual(dictate, ['down', 'up', 'down', 'up'], 'dictation still works');
+  offDictate();
+});
+
+test('holding the dictation key while the radio key is down ends the radio hold', () => {
+  // A modifier held with another key is a shortcut, not talking — attachPttKey
+  // already releases on that. Worth pinning with the real second binding present,
+  // since ⌘ + the dictation key is a chord a user will genuinely produce.
+  const { api, listeners } = loadPtt();
+  const talk = [];
+  const dictate = [];
+
+  api.attachPttKey({
+    keyName: 'meta',
+    isEnabled: () => true,
+    onDown: () => talk.push('down'),
+    onUp: () => talk.push('up'),
+  });
+  api.attachPttKey({
+    keyName: 'custom',
+    customCode: 'F13',
+    isEnabled: () => true,
+    allowWhileTyping: () => true,
+    onDown: () => dictate.push('down'),
+    onUp: () => dictate.push('up'),
+  });
+
+  fire(listeners, 'keydown', { key: 'Meta', code: 'MetaLeft', repeat: false });
+  assert.deepEqual(talk, ['down']);
+
+  fire(listeners, 'keydown', { key: 'F13', code: 'F13', repeat: false });
+  assert.deepEqual(talk, ['down', 'up'], 'the radio stops rather than transmitting a chord');
+  assert.deepEqual(dictate, ['down'], 'and dictation starts');
 });

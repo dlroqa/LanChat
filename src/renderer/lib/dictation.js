@@ -17,8 +17,18 @@
 // function of its three inputs so the answer can be asserted directly — the one
 // that matters most is that it is false off macOS, where the key must keep
 // doing exactly what it did before.
-export function shouldDictate({ isMac, enabled, thinkingThread }) {
-  return Boolean(isMac && enabled !== false && thinkingThread);
+// `dedicated` — dictation has a key of its own, not the push-to-talk key.
+// `everywhere` — the user asked for people's threads too, not only agents.
+//
+// The rule worth stating is the last line. Without a key of its own, dictation
+// can only claim a thread where the push-to-talk key has nothing else to do: an
+// agent or a session, where there is no ear at the far end. In a person's thread
+// both jobs are possible at once, and one key cannot choose between them — so
+// "everywhere" is honoured only once there is a second key to honour it with.
+export function shouldDictate({ isMac, enabled, thinkingThread, everywhere, dedicated }) {
+  if (!isMac || enabled === false) return false;
+  if (thinkingThread) return true;
+  return Boolean(everywhere && dedicated);
 }
 
 // What a hold started here actually does.
@@ -33,9 +43,50 @@ export function shouldDictate({ isMac, enabled, thinkingThread }) {
 // is the honest answer, and the card beside it says how to fix it. `ready` is
 // null until the check comes back, which counts as ready — a hold in the first
 // moment after launch should not be silently dropped.
-export function holdMode({ isMac, enabled, thinkingThread, ready }) {
-  if (!shouldDictate({ isMac, enabled, thinkingThread })) return 'radio';
+export function holdMode({ isMac, enabled, thinkingThread, ready, everywhere, dedicated }) {
+  // Once dictation has a key of its own, this one stops dictating — but it does
+  // not become the radio in a thread that cannot listen. An agent or a session
+  // has no ear, so holding it there does nothing at all, rather than opening the
+  // microphone and streaming at something that will never hear it. That is the
+  // same reason 'none' exists below, and forgetting it here would have quietly
+  // reintroduced the exact defect dictation was added to remove.
+  if (dedicated) return thinkingThread ? 'none' : 'radio';
+  if (!shouldDictate({ isMac, enabled, thinkingThread, everywhere, dedicated })) return 'radio';
   return ready === false ? 'none' : 'dictate';
+}
+
+// What holding the dedicated dictation key does. Only consulted when there is
+// one, so there is no 'radio' here — this key never transmits.
+//
+//   'dictate' — record and transcribe
+//   'none'    — this thread dictates, but FluidVoice is not reachable
+//   'ignore'  — dictation does not apply here (a person's thread, scope is agents)
+export function dictateKeyMode({ isMac, enabled, thinkingThread, ready, everywhere }) {
+  if (!shouldDictate({ isMac, enabled, thinkingThread, everywhere, dedicated: true })) {
+    return 'ignore';
+  }
+  return ready === false ? 'none' : 'dictate';
+}
+
+// What tapping the microphone button should do.
+//
+//   'toggle'  — start recording, or stop if already going
+//   'recheck' — FluidVoice is not reachable; ask again
+//   'ignore'  — this thread does not dictate at all
+//
+// 'recheck' is the one worth stating. Reachability is owned by another
+// application, so it goes stale on its own: FluidVoice gets started after
+// LanChat, or its API is switched on in a terminal, and nothing here is told.
+// A button that answers "no" forever after one failed check is how a working
+// setup reads as a broken feature — so the tap that used to do nothing asks
+// again instead, which is exactly the question the user wants answered.
+export function tapAction({ isMac, enabled, thinkingThread, ready, everywhere, dedicated }) {
+  // The button dictates regardless of which key is bound — it is the affordance
+  // for people who would rather not learn one. So it asks shouldDictate directly
+  // rather than going through holdMode, which answers for the push-to-talk key
+  // and would say 'radio' the moment dictation moved to a key of its own.
+  if (!shouldDictate({ isMac, enabled, thinkingThread, everywhere, dedicated })) return 'ignore';
+  return ready === false ? 'recheck' : 'toggle';
 }
 
 export const ARM_MS = 250; // hold at least this long before the mic opens
