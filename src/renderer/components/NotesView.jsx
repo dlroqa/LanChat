@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import EmptyState from './EmptyState.jsx';
 import { Plus, Trash, Restore, X } from '../lib/icons.jsx';
 import { formatShortDate } from '../lib/util.js';
+import { useAutosave } from '../lib/useAutosave.js';
 
 // Notes, in a column about three hundred pixels wide.
 //
@@ -40,49 +41,25 @@ export default function NotesView({
   const [draft, setDraft] = useState(null); // { title, body }
   const [showTrash, setShowTrash] = useState(false);
 
-  // The draft as the timer will find it. A debounced save reads state from the
-  // closure it was created in, which is the state as it was one keystroke ago —
-  // a ref is what makes the save that finally runs carry the last letter typed.
-  const pending = useRef(null);
-  const timer = useRef(null);
   const openRef = useRef(null);
   openRef.current = openId;
 
-  // The one door out. Everything that ends an edit goes through here, so there
-  // is a single place that has to be right about flushing.
-  const flush = useCallback(() => {
-    if (timer.current) {
-      clearTimeout(timer.current);
-      timer.current = null;
-    }
-    const held = pending.current;
-    pending.current = null;
-    if (held) onSave(held.id, { title: held.title, body: held.body, final: true });
-  }, [onSave]);
-
-  // A panel taken away by a call unmounts this. Whatever was in the field at
-  // that moment is on disk before it goes.
-  useEffect(() => flush, [flush]);
+  // `final` is what tells main this is somebody finishing rather than pausing:
+  // it flushes the metadata whatever the coalescing window says. The body
+  // reaches disk either way — see src/main/notes.js.
+  const { queue, flush } = useAutosave(
+    (id, patch, final) => onSave(id, { ...patch, ...(final && { final: true }) }),
+    SAVE_IDLE_MS
+  );
 
   const edit = (patch) => {
     const id = openRef.current;
     if (!id) return;
     setDraft((d) => {
       const next = { ...d, ...patch };
-      pending.current = { id, title: next.title, body: next.body };
+      queue(id, { title: next.title, body: next.body });
       return next;
     });
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
-      timer.current = null;
-      const held = pending.current;
-      pending.current = null;
-      // Not final: this is somebody pausing mid-sentence, not somebody
-      // finishing. The body reaches disk either way — see src/main/notes.js —
-      // and leaving it unforced is what keeps the list from being rewritten
-      // once a second while a paragraph is being typed.
-      if (held) onSave(held.id, { title: held.title, body: held.body });
-    }, SAVE_IDLE_MS);
   };
 
   const open = async (id) => {

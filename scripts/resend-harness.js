@@ -146,6 +146,9 @@ window.lanchat = {
   // call throws before App mounts.
   listNotes: () => Promise.resolve([]),
   listNoteTrash: () => Promise.resolve([]),
+  // Agent tasks, likewise: read on boot, empty because this harness is about
+  // what a question does after it is re-sent.
+  listTasks: () => Promise.resolve([]),
   askableAgents: () => Promise.resolve([{ id: 'agent:tessie', name: 'Tessie' }]),
   getHistory: (id) => { calls.history.push(id); return Promise.resolve(histories[id] || []); },
   sessionRound: nothing,

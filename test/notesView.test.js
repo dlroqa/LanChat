@@ -2,44 +2,25 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const fs = require('node:fs');
 const path = require('node:path');
+const { renderToStaticMarkup } = require('react-dom/server');
+const React = require('react');
+const { load, mount, find, byClass, wait } = require('../scripts/lib/reactDrive.js');
 
 // The notes view, and the one thing it must never do.
 //
 // Saving is debounced, which means that at any moment there is writing in the
 // field that is not yet on disk. Every way out of the editor therefore has to
-// flush before it goes: closing, switching notes, deleting, and the panel being
-// taken away by a call. A missed flush would not fail loudly — it would lose
-// the last sentence somebody typed, and only sometimes.
+// flush before it goes: closing, switching notes, deleting, losing focus, and
+// being unmounted, which is what a call arriving does to this whole panel. A
+// missed flush would not fail loudly — it would lose the last sentence somebody
+// typed, and only sometimes.
 //
-// So this drives the real component with real timers through a hand-rolled
-// renderer, and asks what reached the save callback and when. The list-and-
-// editor arrangement is checked off the static markup beside it.
+// So the driven half below runs the real component with real timers and asks
+// what reached the save callback and when. The arrangement of the list and the
+// editor is checked off the static markup beside it.
 
 const SRC = path.join(__dirname, '..', 'src', 'renderer');
-const React = require('react');
-const { renderToStaticMarkup } = require('react-dom/server');
-
-const cache = new Map();
-function load(file) {
-  if (cache.has(file)) return cache.get(file);
-  const esbuild = require('esbuild');
-  const { code } = esbuild.transformSync(fs.readFileSync(file, 'utf8'), {
-    loader: 'jsx',
-    format: 'cjs',
-  });
-  const mod = { exports: {} };
-  cache.set(file, mod.exports);
-  new Function('module', 'exports', 'require', code)(mod, mod.exports, (id) => {
-    if (id === 'react') return React;
-    if (id.startsWith('.')) return load(path.resolve(path.dirname(file), id));
-    return require(id);
-  });
-  cache.set(file, mod.exports);
-  return mod.exports;
-}
-
 const NotesView = load(path.join(SRC, 'components', 'NotesView.jsx')).default;
 
 const readable = (html) =>
@@ -100,121 +81,6 @@ test('the Trash button is dead while the Trash is empty, and offered when it is 
 });
 
 // ---- driven, with real timers ------------------------------------------------
-//
-// react-dom/server renders once and cannot be typed into. What the flushing
-// needs is a mounted component whose effects and callbacks actually run, so the
-// component is driven through a minimal hook runtime: it is called like the
-// function it is, with useState/useRef/useEffect/useCallback backed by real
-// storage, and re-called when a setter moves something.
-
-function mount(Component, props) {
-  const cells = [];
-  let i = 0;
-  let effects = [];
-  const cleanups = [];
-  let queued = false;
-  let tree = null;
-
-  const React_ = {
-    useState(initial) {
-      const at = i++;
-      if (!(at in cells)) cells[at] = typeof initial === 'function' ? initial() : initial;
-      const set = (next) => {
-        const value = typeof next === 'function' ? next(cells[at]) : next;
-        if (Object.is(value, cells[at])) return;
-        cells[at] = value;
-        render();
-      };
-      return [cells[at], set];
-    },
-    useRef(initial) {
-      const at = i++;
-      if (!(at in cells)) cells[at] = { current: initial };
-      return cells[at];
-    },
-    useCallback(fn) {
-      // Deliberately not memoised: what is being driven here is behaviour, and
-      // a stale closure kept for identity's sake would be the bug rather than
-      // the thing under test.
-      i += 1;
-      return fn;
-    },
-    useEffect(fn, deps) {
-      const at = i++;
-      const prev = cells[at];
-      const changed = !prev || !deps || deps.some((d, k) => !Object.is(d, prev.deps[k]));
-      cells[at] = { deps };
-      if (changed) effects.push({ at, fn });
-    },
-  };
-
-  function render() {
-    if (queued) return;
-    queued = true;
-    queueMicrotask(() => {
-      queued = false;
-      i = 0;
-      effects = [];
-      const original = { ...React };
-      Object.assign(React, React_);
-      try {
-        tree = Component(props);
-      } finally {
-        Object.assign(React, original);
-      }
-      for (const e of effects) {
-        const undo = e.fn();
-        if (typeof undo === 'function') cleanups.push(undo);
-      }
-    });
-  }
-
-  // The first pass is synchronous, so a caller can reach into the tree at once.
-  i = 0;
-  const original = { ...React };
-  Object.assign(React, React_);
-  try {
-    tree = Component(props);
-  } finally {
-    Object.assign(React, original);
-  }
-  for (const e of effects) {
-    const undo = e.fn();
-    if (typeof undo === 'function') cleanups.push(undo);
-  }
-
-  const settle = () => new Promise((r) => setTimeout(r, 0));
-  return {
-    get tree() {
-      return tree;
-    },
-    settle,
-    unmount: () => {
-      for (const undo of cleanups.splice(0)) undo();
-    },
-  };
-}
-
-// Walks the rendered tree for the first element matching a predicate.
-function find(node, pick) {
-  if (!node || typeof node !== 'object') return null;
-  if (Array.isArray(node)) {
-    for (const child of node) {
-      const hit = find(child, pick);
-      if (hit) return hit;
-    }
-    return null;
-  }
-  if (pick(node)) return node;
-  return find(node.props && node.props.children, pick);
-}
-
-const byClass = (name) => (n) =>
-  n.props &&
-  String(n.props.className || '')
-    .split(' ')
-    .includes(name);
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function editing(saves = [], note = { id: 'note:a', title: 'Tap washer', body: 'first line' }) {
   const view = mount(NotesView, {

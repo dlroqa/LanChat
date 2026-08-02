@@ -11,6 +11,7 @@ const { createRemoteAgents } = require('./agents/remote');
 const { createSessions, isSessionId } = require('./sessions');
 const { createDictation } = require('./dictation');
 const { NoteStore } = require('./notes');
+const { createTasks, isTaskId } = require('./tasks');
 const { normalizeWebUrl } = require('./webLinks');
 const { createLinkPreview } = require('./linkPreview');
 const { resolveMedia } = require('./media');
@@ -165,9 +166,26 @@ function createIpc({
   // list.
   const notes = new NoteStore(userDataDir);
 
+  // Agent tasks: one instruction, asked whenever it is wanted. Built here for
+  // the reason sessions is — it needs `askable`, which is the sessions
+  // service's and is the only implementation of agent liveness in this app.
+  const tasks = createTasks({
+    userDataDir,
+    agentHub,
+    remoteAgents,
+    askable: () => sessions.askable(),
+    bus,
+  });
+
   // Threads that exist only on this machine. Nothing off the wire may claim one.
+  //
+  // Three namespaces now, and all three are checked here rather than at their
+  // own call sites, so adding a fourth is one edit in one place. A task is the
+  // newest of them and the one with the most to lose by being left out: its
+  // thread id is what an answer comes back on, so a namespace missing from this
+  // list is a namespace a peer can put a fabricated result into.
   function isLocalThreadId(id) {
-    return Boolean((agentHub && agentHub.isAgent(id)) || isSessionId(id));
+    return Boolean((agentHub && agentHub.isAgent(id)) || isSessionId(id) || isTaskId(id));
   }
 
   // A peer's request to one of our agents. Stored under that agent's own thread
@@ -234,7 +252,13 @@ function createIpc({
   bus.on('agent-empty', ({ threadId, agentId, agentName }) => {
     emit('agent-empty', { peerId: threadId, agentId, agentName });
     if (isSessionId(threadId)) sessions.noteOutcome({ threadId, agentId, kind: 'empty' });
+    // A task's run that finished with nothing in it. Still an ending, so the
+    // record stops saying "working" — the same funnel every other ending goes
+    // through.
+    if (isTaskId(threadId)) tasks.noteOutcome({ threadId, agentId, kind: 'empty' });
   });
+  // The list of tasks changed: one was written, run, or has just answered.
+  bus.on('tasks', (list) => emit('tasks', list));
   // Where a session's question stands: who was asked, who is still thinking, and
   // who was left out. Worked out in main, which is the only place that knows,
   // and pushed rather than reassembled in the window out of four kinds of event.
@@ -303,6 +327,20 @@ function createIpc({
     if (linkStats && linkStats.handleMessage(msg)) return;
     switch (msg.type) {
       case 'chat': {
+        // An answer to a task. It goes onto the task record and nowhere else:
+        // there is no thread for it to be appended to and no bubble for it to
+        // become, which is the whole shape of the feature. Note what is *not*
+        // here — no store.append, and no emit('chat'). That absence is the
+        // mechanical guarantee that running a task cannot write into anybody's
+        // conversation, rather than a promise that it will not.
+        //
+        // First, above the session branch and above every router below, for the
+        // reason that branch is above them: an answer that happened to open
+        // with "@" must not be read as a fresh question and asked again.
+        if (isTaskId(from)) {
+          tasks.noteReply(msg);
+          break;
+        }
         // An answer an agent gave a session. It is already addressed to the
         // thread it belongs in, and it must not be offered to the agent routers
         // below: an answer that happened to open with "@" would otherwise be
@@ -551,6 +589,10 @@ function createIpc({
     // record of what was said — but it stops claiming it can carry on, and the
     // header offers another agent instead of a name that no longer exists.
     if (removed && sessions.unbindAgent(id)) publishSessions();
+    // And a task that asked it keeps its instruction — that is the work, and
+    // the agent is a choice that can be made again — but it stops pointing at a
+    // record that no longer exists. tasks publishes for itself.
+    if (removed) tasks.unbindAgent(id);
     return { ok: removed, agents: agentHub.list() };
   });
 
@@ -857,6 +899,25 @@ function createIpc({
     if (count) publishNotes();
     return { ok: true, count };
   });
+
+  // ---- agent tasks ----
+  //
+  // A standing instruction and the agent it is put to. The answers do not
+  // travel on this surface: `runs` fetches them for one task when one is
+  // opened, for the reason note bodies are fetched one at a time.
+
+  ipcMain.handle('lanchat:listTasks', () => tasks.list());
+  ipcMain.handle('lanchat:taskRuns', (_e, { id, limit }) => tasks.runs(id, limit));
+
+  ipcMain.handle('lanchat:createTask', (_e, draft) => tasks.create(draft || {}));
+  ipcMain.handle('lanchat:updateTask', (_e, { id, patch }) => tasks.update(id, patch || {}));
+  ipcMain.handle('lanchat:deleteTask', (_e, { id }) => ({ ok: tasks.remove(id) }));
+
+  // Running one by hand. A refusal comes back with the sentence to show for it
+  // rather than a bare false — the same bargain a session's composer strikes:
+  // being told why costs nobody their words.
+  ipcMain.handle('lanchat:runTask', (_e, { id }) => tasks.run(id, { by: 'manual' }));
+  ipcMain.handle('lanchat:stopTask', (_e, { id }) => tasks.stop(id));
 
   // Clearing out errors an older version wrote into a session's history.
   //
@@ -1409,7 +1470,7 @@ function createIpc({
     return { sent };
   }
 
-  return { emit, notes };
+  return { emit, notes, tasks };
 }
 
 const MAX_AVATAR_BYTES = 96 * 1024;

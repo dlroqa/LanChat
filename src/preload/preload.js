@@ -77,6 +77,19 @@ contextBridge.exposeInMainWorld('lanchat', {
   purgeNote: (id) => invoke('lanchat:purgeNote', { id }),
   restoreAllNotes: () => invoke('lanchat:restoreAllNotes'),
   purgeAllNotes: () => invoke('lanchat:purgeAllNotes'),
+
+  // Agent tasks: a standing instruction and the agent it is put to. The answers
+  // are fetched for one task at a time, on taskRuns — a list channel carrying
+  // every answer of every task would be the note-body mistake again. Running
+  // one comes back either `{ ok: true, task }` or a refusal with the sentence
+  // to show for it.
+  listTasks: () => invoke('lanchat:listTasks'),
+  taskRuns: (id, limit) => invoke('lanchat:taskRuns', { id, limit }),
+  createTask: (draft) => invoke('lanchat:createTask', draft || {}),
+  updateTask: (id, patch) => invoke('lanchat:updateTask', { id, patch: patch || {} }),
+  deleteTask: (id) => invoke('lanchat:deleteTask', { id }),
+  runTask: (id) => invoke('lanchat:runTask', { id }),
+  stopTask: (id) => invoke('lanchat:stopTask', { id }),
   purgeMessages: (id, ids) => invoke('lanchat:purgeMessages', { id, ids }),
   summonAgent: (threadId) => invoke('lanchat:summonAgent', { threadId }),
   sendTyping: (peerId, isTyping) => invoke('lanchat:sendTyping', { peerId, isTyping }),

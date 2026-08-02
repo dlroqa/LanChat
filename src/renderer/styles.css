@@ -606,6 +606,246 @@ button.note-row-face {
   color: var(--fg-faint);
 }
 
+/* ---- agent tasks -----------------------------------------------------------
+   The same two faces the notes view has, and mostly the same furniture: a list
+   with a head, and an editor that replaces it. What is its own is the status
+   dot, which has to say four things in eight pixels, and the answer panel. */
+.task-list,
+.task-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.task-list-head,
+.task-editor-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 10px 6px 14px;
+}
+.task-editor-head {
+  padding: 6px 8px;
+}
+.task-count {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-list-head .icon-btn,
+.task-editor-head .icon-btn {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+}
+.task-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px 10px;
+}
+.task-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+}
+.task-row:hover {
+  background: var(--surface-hover);
+}
+.task-row-face {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  padding: 8px 10px;
+  border: 0;
+  background: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.task-row-meta {
+  flex: 1;
+  min-width: 0;
+}
+.task-row-title,
+.task-row-sub {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-row-title {
+  font-size: 13px;
+  color: var(--fg);
+}
+.task-row-sub {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--fg-faint);
+}
+/* Four states in eight pixels. Colour alone would say nothing to a reader, so
+   every row carries the word as well — see the sr-only span beside this. */
+.task-dot {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--fg-faint);
+}
+.task-dot.working {
+  color: var(--primary);
+  animation: task-pulse 1.6s ease-in-out infinite;
+}
+.task-dot.done {
+  color: var(--online);
+}
+.task-dot.failed {
+  color: var(--danger);
+}
+@keyframes task-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.task-row-actions {
+  position: absolute;
+  right: 4px;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+.task-row:hover .task-row-actions,
+.task-row:focus-within .task-row-actions {
+  opacity: 1;
+}
+.task-row-actions .icon-btn {
+  width: 28px;
+  height: 28px;
+  background: var(--bg-2);
+}
+/* A row whose task is running keeps its stop button out, because the thing it
+   stops is happening whether or not anybody is pointing at the row. */
+.task-row:has(.task-dot.working) .task-row-actions {
+  opacity: 1;
+}
+
+.task-title {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  outline: none;
+}
+.task-title:focus {
+  background: var(--bg-2);
+}
+.task-editor-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 14px 14px;
+}
+.task-field {
+  display: block;
+  margin-bottom: 12px;
+}
+.task-field > span {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+.task-field select,
+.task-instruction {
+  width: 100%;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 12.5px;
+  color: var(--fg);
+  outline: none;
+  transition: border 0.12s ease;
+}
+.task-field select:focus,
+.task-instruction:focus {
+  border-color: var(--primary);
+}
+.task-instruction {
+  min-height: 96px;
+  resize: vertical;
+  line-height: 1.5;
+}
+.task-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.task-run-count {
+  font-size: 11.5px;
+  color: var(--fg-faint);
+}
+/* Why a run did not start. Main writes this sentence, so a schedule firing at
+   three in the morning records the same words this shows. */
+.task-refusal {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.task-list > .task-refusal {
+  margin: 0 14px 12px;
+}
+.task-answer {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 10px;
+}
+.task-answer-head {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+  margin-bottom: 6px;
+}
+.task-answer.bad .task-answer-head {
+  color: var(--danger);
+}
+/* Pre-wrapped rather than rendered: an answer is whatever the agent wrote, and
+   this column is not the place to start interpreting it. */
+.task-answer pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--fg);
+}
+.task-answer-none {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--fg-faint);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .panel-deck-face,
   .panel-face-tasks,

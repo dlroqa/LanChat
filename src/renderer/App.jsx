@@ -21,6 +21,7 @@ import PttBar from './components/PttBar.jsx';
 import SidePanelDeck from './components/SidePanelDeck.jsx';
 import EmptyState from './components/EmptyState.jsx';
 import NotesView from './components/NotesView.jsx';
+import AgentTaskView from './components/AgentTaskView.jsx';
 import { DEFAULT_TASK_VIEW } from './lib/taskViews.js';
 import { PttManager, attachPttKey, defaultPttKey, hasOwnDictationKey } from './lib/ptt.js';
 import { DictationManager, shouldDictate, holdMode, dictateKeyMode, tapAction } from './lib/dictation.js';
@@ -144,6 +145,9 @@ export default function App() {
   // this list stays cheap enough to republish on every change.
   const [notes, setNotes] = useState([]);
   const [noteTrash, setNoteTrash] = useState([]);
+  // The Task Bar's agent tasks. Records only — the answers are read one task at
+  // a time, when one is opened, for the reason the note bodies are.
+  const [tasks, setTasks] = useState([]);
   const [ptt, setPtt] = useState({ transmitting: false, connecting: false, talkers: [], inboundStreams: [] });
   const [dictation, setDictation] = useState({ phase: 'idle', threadId: null, startedAt: 0, error: null });
   // null = not asked yet, and treated as ready: a check that has not come back
@@ -706,6 +710,7 @@ export default function App() {
       // writing itself is read one note at a time, when one is opened.
       api.listNotes().then((list) => setNotes(list || []));
       api.listNoteTrash().then((list) => setNoteTrash(list || []));
+      api.listTasks().then((list) => setTasks(list || []));
       // Windows only: start from whatever has already been measured, rather than
       // an empty panel until the next round trip lands. A window opened from the
       // tray after hours of uptime should not look like a link that has never
@@ -947,6 +952,12 @@ export default function App() {
           break;
         case 'noteTrash':
           setNoteTrash(payload || []);
+          break;
+        // A task was written, run, or has just answered. Pushed rather than
+        // polled, so a run that finishes while the panel is open puts its
+        // result on the screen without anybody asking.
+        case 'tasks':
+          setTasks(payload || []);
           break;
         // Where a session's question stands. Arrives whenever anything about the
         // round changes and once more as it closes; the closed one is what ends
@@ -1925,7 +1936,23 @@ export default function App() {
         onPurge={(id) => api.purgeNote(id)}
       />
     ),
-    agent: <EmptyState title="No tasks yet">Give an agent a standing job and run it from here.</EmptyState>,
+    agent: (
+      <AgentTaskView
+        tasks={tasks}
+        // The same list the session composer reads, which is main's one answer
+        // to "who can be asked" rather than a second guess at it.
+        agents={askableAgents}
+        // What is being written this moment, keyed by thread — and a task's
+        // thread is its own id. Nothing plumbs this specially.
+        streams={streams}
+        onCreate={() => api.createTask({})}
+        onUpdate={(id, patch) => api.updateTask(id, patch)}
+        onRun={(id) => api.runTask(id)}
+        onStop={(id) => api.stopTask(id)}
+        onDelete={(id) => api.deleteTask(id)}
+        onRuns={(id) => api.taskRuns(id)}
+      />
+    ),
     schedule: (
       <EmptyState title="Nothing scheduled">Tasks set to run on their own will be listed here.</EmptyState>
     ),

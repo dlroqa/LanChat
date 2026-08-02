@@ -141,6 +141,8 @@ window.lanchat = {
   // Answered so App can mount; empty so nothing of it is in the way.
   listNotes: () => Promise.resolve([]),
   listNoteTrash: () => Promise.resolve([]),
+  // Agent tasks, read on boot and empty: not what is under test here.
+  listTasks: () => Promise.resolve([]),
   deleteSession: (id) => {
     calls.deleted.push(id);
     const r = find(id);
