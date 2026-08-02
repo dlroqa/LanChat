@@ -121,7 +121,10 @@ export default function MessageBubble({
   // Only text can be quoted into a question: a file is a thing on disk, and
   // "here is a photo I once sent" is not a context an agent can read.
   const forkable = Boolean(onFork) && msg.kind !== 'file' && Boolean(msg.text) && !msg.notice && !rejected;
-  const resendable = failed && Boolean(onResend) && Boolean(msg.text);
+  // Not while it is going. A question being retired is one whose replacement has
+  // already been answered, and a button offering to put it back in the composer
+  // is offering to ask it a third time on the way out the door.
+  const resendable = failed && !dissolving && Boolean(onResend) && Boolean(msg.text);
 
   // Counted here rather than passed in, so the sentence and the bubble it sits
   // under read the same clock. Stops at the moment the bubble starts to go —

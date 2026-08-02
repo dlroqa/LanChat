@@ -779,6 +779,15 @@ function createIpc({
   // greetings older builds left in *agent* threads, where there is no Commit box
   // and subtracting from one would be adjusting a number nothing displays.
   //
+  // It now also reaches sessions, where there *is* a Commit box: a question that
+  // failed is retired once the question sent to replace it has been answered
+  // (retireSuperseded in App.jsx). Still nothing to correct, and for a better
+  // reason than "nobody is looking" — commitCount already skips a message marked
+  // `failed`, so a failed question was never in the total and removing it cannot
+  // take it out twice. `unlinkedFailures` is untouched by design: it counts the
+  // failures that could not be pinned to a question, which is the opposite of
+  // this one.
+  //
   // The ids are decided in the window, which is the only place that knows what is
   // on screen and has just counted it down in front of somebody.
   ipcMain.handle('lanchat:purgeMessages', (_e, { id, ids }) => {

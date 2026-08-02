@@ -5069,8 +5069,16 @@ code.path {
 
 /* Coming apart rather than blinking out, so it is clear the app removed it on
    purpose and did not simply lose it. Transform, opacity and filter only —
-   nothing here can force the conversation above it to lay out again. */
-.bubble-row.erasing.dissolving {
+   nothing here can force the conversation above it to lay out again.
+
+   On `dissolving` alone, not on `erasing.dissolving`. The two say different
+   things: `erasing` is "counted down in the open", which is why it also turns on
+   the caption's wrapping above, and `dissolving` is "going now". A question
+   retired because the re-send of it was answered gets the second without the
+   first — there is no countdown on it, since the answer underneath is the
+   explanation — and scoping the animation to both would have left it blinking
+   out, which is the one thing this rule exists to prevent. */
+.bubble-row.dissolving {
   animation: bubble-disintegrate 620ms ease-in forwards;
   will-change: transform, opacity, filter;
 }
@@ -5162,7 +5170,7 @@ code.path {
      a timer in App.jsx rather than by animationend precisely because of that —
      an event that never fires would leave the error on screen forever. Stated
      here as well so the rule is readable where the animation is. */
-  .bubble-row.erasing.dissolving {
+  .bubble-row.dissolving {
     animation: none;
     opacity: 0;
   }

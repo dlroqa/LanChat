@@ -31,7 +31,7 @@ A simple, peer-to-peer **LAN & Tailscale chat** app — text, voice, video, and 
 | 📶 **Live connection graphs** | When not in a call, the panel charts real round-trip latency and link quality. |
 | 🤖 **Agents** | Add an AI agent in **Settings → Agents** and it becomes just another thread. Four ways to connect one — **HTTP API** (recommended), **ACP** over stdio, a **local command**, or an **SSH command** on another host. Share yours with people on your network and they reach it *through* you: approvals stay on your machine and are never handed to a peer, and everyone sharing it takes turns. A new agent is local-only until you grant reach, peer by peer. |
 | ✨ **Living agent status** | An agent has no latency worth charting, so it gets the graph's slot to say what it is *doing* — and the row moves while it does. The phrase types itself in under a block cursor, which then sweeps back across the finished word; the pip beside it throws a small firework in a fresh neon colour every burst; and light trails race the width of the row, timed so they fall back into step each time the phrase changes. The moment it finishes, a firework goes off from the middle of the row — neon rays spreading outward to fill it corner to corner, then fading away over a couple of seconds — and then it settles to a slow green-to-cyan wave running from the pip through the word. Behind the text the trails are damped down, so the word stays easily readable while they pass, and **reduce motion** removes the animation entirely rather than freezing it — the words still say everything. |
-| 🗂️ **Sessions** | A workspace on your machine that puts questions to your agents and keeps the answers filed with it, rather than in those agents' own threads. A session can ask several at once: tick the agents you want, or tick **All agents** and it stands as an instruction — one you add next week, or one a peer starts sharing, joins on its own. Ask **all at once** for opinions that have not influenced each other, or **in turn** to let them build on what has already been said. Every answer carries the name of the agent that gave it. Each session's row shows the day it was started, so two untitled ones are still told apart. |
+| 🗂️ **Sessions** | A workspace on your machine that puts questions to your agents and keeps the answers filed with it, rather than in those agents' own threads. A session can ask several at once: tick the agents you want, or tick **All agents** and it stands as an instruction — one you add next week, or one a peer starts sharing, joins on its own. Ask **all at once** for opinions that have not influenced each other, or **in turn** to let them build on what has already been said. Every answer carries the name of the agent that gave it. Each session's row shows the day it was started, so two untitled ones are still told apart. A question a run failed to answer says so, and takes itself away once you have asked it again and something came back. |
 | 🗃️ **Sidebar categories** | The left panel is four headings — Sessions, Agents, People, On your tailnet — each keeping its list shut until you point at it, so the panel opens as four words instead of one long scroll. Pin any of them open, drag them into the order you want, and both come back next launch. A shut category with something unread lights its own title until the message is actually read. |
 | 🔎 **Search everything** | One box at the top of the panel searches all four categories at once, matching more than names — hostnames, the system a machine runs, its address, the connector an agent speaks — and saying which part matched when it isn't the one on show. Aim it at a single category with the chip on its left. Results open in the middle panel where there is room to read them, laid over your conversation rather than replacing it, so closing the search puts you back mid-sentence. |
 | 🔦 **Find in a conversation** | ⌘F on a Mac, Ctrl+F elsewhere — or the button beside the thread's name — opens a bar that counts every occurrence and walks them with arrows that wrap at both ends. Every hit is marked, not just the current one, so you can see a word's density in a long thread at a glance; file names and pinned excerpts are searched too. Escape puts it away and leaves the cursor in the composer. **Settings → Conversations** chooses whether every conversation gets the button or only sessions do. |
@@ -403,6 +403,19 @@ chooses who it asks.
 Every session shows the day it was started beside its name — in the sidebar and in search results
 alike — with the exact moment if you rest on it. Sessions are listed by when they were last used, so
 the date is what tells two of them apart while they are both still called **New Session**.
+
+### When nothing comes back
+
+A run can fail — an agent times out, a command dies, a whole counsel comes back with nothing. The
+question it was answering is marked **not answered** and stops counting toward what the session has
+asked, and it stays where it is with a button beside it that puts the words back in the composer.
+That is a restore rather than a re-send: the same question failing twice is likely enough that the
+useful next move is often to change it before it goes again.
+
+Send it, and once that second run answers — or fails in its turn, which moves the mark onto the
+newer question — the older copy comes apart and leaves, so the same question is never left sitting
+above the answer to it. A run that comes back with nothing at all leaves it exactly where it is:
+nothing replaced it, and that is still worth knowing.
 
 ### Asking several at once
 

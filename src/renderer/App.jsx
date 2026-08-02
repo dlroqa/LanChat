@@ -29,6 +29,7 @@ import { listDevices, labelFor } from './lib/devices.js';
 import { isSessionThread, isThinkingThread } from './lib/sessionIds.js';
 import { isAgentThread } from './lib/agentPhrase.js';
 import { commitCount } from './lib/sessionStanding.js';
+import { linkResend, markSent, clearLink, chatOutcome, roundOutcome, retire } from './lib/resendLink.js';
 import { flashDuration, prefersReducedMotion } from './lib/connectFlash.js';
 import { useAgentMusic } from './lib/agentMusic.js';
 import { trackUrl, DEFAULT_TRACK } from './lib/agentMusicTrack.js';
@@ -185,6 +186,12 @@ export default function App() {
   const peersRef = useRef([]);
   const typingTimers = useRef({});
   const noticeTimers = useRef({}); // message id -> removal timer for a transient notice
+  // The failed question each thread's next send is a replacement for, put there
+  // by the re-send button and taken away when the run that answers it ends. A
+  // ref rather than state: nothing on screen is drawn from it, and a re-render
+  // between pressing Send and hearing back would be the wrong moment to lose it.
+  // See lib/resendLink.js for what counts as an ending.
+  const resendLinks = useRef({}); // threadId -> { id, sent }
   const callRef = useRef(null);
   const ringerRef = useRef(null);
   const pttRef = useRef(null);
@@ -540,6 +547,35 @@ export default function App() {
     });
   }
 
+  // A question that failed, once the question sent to replace it has been
+  // answered — or failed in its turn, which puts the mark on the newer one and
+  // leaves the older a duplicate of it.
+  //
+  // No countdown, unlike everything else that leaves a thread: the answer landing
+  // underneath it is what explains this one, and a caption promising a removal in
+  // nine seconds would be reading out a clock nobody is watching. It still comes
+  // apart rather than blinking out, so the removal is something you see happen.
+  //
+  // Off the disk as well as out of the window. `failed` was written down by main
+  // — that is why the mark survives a restart — so a window-only removal would
+  // bring the bubble back the next time the thread was read.
+  function retireSuperseded(threadId, outcome) {
+    const { links, id } = retire(resendLinks.current, threadId, outcome);
+    resendLinks.current = links;
+    if (!id) return;
+    patchMessage(threadId, id, { dissolving: true });
+    const key = `retire:${threadId}`;
+    clearTimeout(noticeTimers.current[key]);
+    noticeTimers.current[key] = setTimeout(
+      () => {
+        delete noticeTimers.current[key];
+        api.purgeMessages(threadId, [id]);
+        removeMessage(threadId, id);
+      },
+      prefersReducedMotion() ? 0 : DISSOLVE_MS
+    );
+  }
+
   // Play the light on a thread. Every call plays it — there is no dedupe, because
   // summoning an agent twice is asking twice and both times deserve an answer.
   function showFlash(threadId, mode) {
@@ -746,6 +782,10 @@ export default function App() {
             !isSessionThread(payload.peerId)
           ) {
             setAwaiting((a) => (a[payload.peerId] ? { ...a, [payload.peerId]: false } : a));
+            // The same event ends the question this one was sent to replace, if
+            // it was sent to replace one. A session is left out for the same
+            // reason the wait is: there the round decides, below.
+            retireSuperseded(payload.peerId, chatOutcome(payload));
           }
           if (payload.direction === 'in') {
             const cfg = configRef.current;
@@ -878,6 +918,10 @@ export default function App() {
             // about; the window is told rather than working it out from an error
             // that only ever knew about one agent.
             if (payload.failedRef) patchMessage(payload.sessionId, payload.failedRef, { failed: true });
+            // And a question this one was sent to replace stops being here at
+            // all. The round is what decides, for the same reason the mark above
+            // is: the first of three agents answering has not finished anything.
+            retireSuperseded(payload.sessionId, roundOutcome(payload));
           }
           break;
         // A run came back with nothing in it. There is no message, so the light is
@@ -893,6 +937,11 @@ export default function App() {
           if (!isSessionThread(payload.peerId)) {
             setAwaiting((a) => (a[payload.peerId] ? { ...a, [payload.peerId]: false } : a));
             showFlash(payload.peerId, 'empty');
+            // A run that finished with nothing retires nothing: the old bubble is
+            // the only remaining word that this question has now gone unanswered
+            // twice. The link goes all the same, so a later answer to something
+            // else cannot come back for it.
+            retireSuperseded(payload.peerId, 'empty');
           }
           break;
         case 'update-available':
@@ -1073,6 +1122,9 @@ export default function App() {
     }
     loadedPeers.current.delete(selectedId);
     setMessages((prev) => ({ ...prev, [selectedId]: [] }));
+    // The question a re-send was replacing has just gone with everything else, so
+    // the link pointing at it is dropped rather than left to spend itself.
+    resendLinks.current = clearLink(resendLinks.current, selectedId);
     toast('Chat history deleted.');
   }
 
@@ -1295,6 +1347,11 @@ export default function App() {
     // same way if the send is refused.
     const quoted = contexts[selectedId] || null;
     if (quoted) setContexts((c) => ({ ...c, [selectedId]: null }));
+    // Armed before the send rather than after it. What comes back from an agent
+    // arrives on its own channel and owes nothing to this promise resolving, so
+    // arming afterwards would leave a gap — small, but the gap is exactly a fast
+    // answer, which is the case this feature is for.
+    resendLinks.current = markSent(resendLinks.current, selectedId, true);
     const msg = await api.sendChat(
       selectedId,
       text,
@@ -1308,6 +1365,9 @@ export default function App() {
     // what you wrote.
     if (msg.rejected) {
       setAwaiting((a) => ({ ...a, [selectedId]: false }));
+      // Nothing was asked, so nothing may be retired on its behalf. The words are
+      // going back to the composer below and the link waits there with them.
+      resendLinks.current = markSent(resendLinks.current, selectedId, false);
       const ghost = {
         id: nextLocalId(),
         peerId: selectedId,
@@ -1333,6 +1393,12 @@ export default function App() {
       // pinned by a gesture on a bubble that may now be a long way up the page.
       if (quoted) setContexts((c) => ({ ...c, [selectedId]: quoted }));
       return;
+    }
+    // A summon asked nothing, so it replaced nothing — reached or not. Said
+    // before both branches below because both of them return, and a link left
+    // armed by one would spend itself on whatever the agent said next.
+    if (msg.summoned !== undefined) {
+      resendLinks.current = markSent(resendLinks.current, selectedId, false);
     }
     // A bare `@name` was a summon rather than a question. There is no message:
     // nothing was said, and nothing is written down on either machine — so this
@@ -1479,6 +1545,12 @@ export default function App() {
     // Keyed on a fresh nonce, so pressing it twice restores twice — the composer
     // effect deliberately ignores an unchanged draft.
     setDraft({ threadId: from, text: msg.text, nonce: Date.now() });
+    // Remembered as the question the next send here replaces, so that when the
+    // second run comes back this one is not left underneath the answer to its own
+    // words, still saying nothing came back. Edited words still count: whatever
+    // is sent next was asked instead of this, which is what makes it the same
+    // question asked again.
+    resendLinks.current = linkResend(resendLinks.current, from, msg.id);
     // What the question was asking about comes back with it. Nothing to re-pin
     // by hand: the excerpt may be a long way up a thread that has since moved on.
     if (msg.context) setContexts((c) => ({ ...c, [from]: msg.context }));
