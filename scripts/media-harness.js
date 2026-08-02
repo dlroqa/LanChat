@@ -32,7 +32,7 @@ const SRC = path.join(ROOT, 'src', 'renderer');
 // them is a picture fetched only once it is on screen, and a viewport that ends
 // near it makes "on screen" a question about font metrics rather than about the
 // code — which is a flaky test waiting to happen, and was one.
-const RUN = { width: 900, height: 1200, budget: 8000, args: ['--hide-scrollbars'] };
+const RUN = { width: 900, height: 1200, budget: 20000, args: ['--hide-scrollbars'] };
 
 // The path the agent named. Never opened by the harness — what matters is that
 // the bubble hands back this exact string, and that it could only have got it

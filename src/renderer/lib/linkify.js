@@ -98,24 +98,45 @@ export function safeHref(raw) {
 // for itself would be a path a peer could choose, and opening one goes straight
 // to the OS — so the only paths that can ever reach that call are the ones main
 // already checked and wrote down. A message with no such list can name nothing.
+// One spelling for a path, so two spellings of the same one compare equal.
+//
+// Windows writes the same file several ways: separators either way round, a drive
+// letter that a file URL puts behind a leading slash (`file:///D:/x` for `D:\x`),
+// and case the filesystem does not care about. Comparing the raw strings meant a
+// markdown link an agent on that machine wrote could never match the picture it
+// was pointing at, even with both sitting on the same message.
+//
+// Loosening the comparison cannot widen what is openable: this only ever chooses
+// between paths main already checked and attached, so the worst a mistake here
+// could do is pick the wrong one of the reader's own pictures. main/server.js
+// normalises the same way for the same reason — see previewKey().
+function pathKey(value) {
+  const s = String(value || '').replace(/\\/g, '/');
+  // `/D:/x` and `D:/x` are one path; a leading slash before a drive is the file
+  // URL's, not the filesystem's.
+  const bare = /^\/[a-z]:\//i.test(s) ? s.slice(1) : s;
+  // Only a drive path folds case. A POSIX filesystem tells `Graph.png` and
+  // `graph.png` apart, and so must this.
+  return /^[a-z]:\//i.test(bare) ? bare.toLowerCase() : bare;
+}
+
 function mediaPath(target, media) {
   const list = Array.isArray(media) ? media : [];
   const t = String(target || '').trim();
   if (!t) return null;
-  const bare = t.replace(/^sandbox:/i, '');
-  let decoded = null;
-  if (/^file:\/\//i.test(t)) {
-    decoded = t.slice('file://'.length);
+  let named = t.replace(/^sandbox:/i, '');
+  if (/^file:\/\//i.test(named)) {
+    named = named.slice('file://'.length);
     try {
-      decoded = decodeURIComponent(decoded);
+      named = decodeURIComponent(named);
     } catch {
       // A target that will not decode is simply not a match for anything.
     }
   }
+  const wanted = pathKey(named);
   for (const item of list) {
     const p = item && item.path;
-    if (!p) continue;
-    if (bare === p || decoded === p) return p;
+    if (p && pathKey(p) === wanted) return p;
   }
   return null;
 }

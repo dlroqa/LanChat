@@ -5,6 +5,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 const { resolveMedia, MAX_MEDIA } = require('../src/main/media.js');
 
@@ -51,9 +52,14 @@ test('a markdown link to the same file is the same picture, named twice', (t) =>
 
 test('file:// targets are decoded, including the escapes a space arrives wearing', (t) => {
   const png = write(tmpdir(t), 'my graph.png');
-  const url = `file://${encodeURI(png).replace(/#/g, '%23')}`;
-  const { media } = resolveMedia(`[see](${url})`);
+  // Built the way the platform builds one, rather than by gluing a prefix onto a
+  // path: on Windows a file URL is `file:///D:/…`, with the drive behind a third
+  // slash and the separators turned round, and a hand-made `file://D:\…` is not
+  // a URL at all. This is the spelling an agent on that machine would emit.
+  const url = pathToFileURL(png).href;
+  assert.ok(url.includes('%20'), 'the space really is escaped, or this proves nothing');
 
+  const { media } = resolveMedia(`[see](${url})`);
   assert.equal(media.length, 1);
   assert.equal(media[0].path, png);
   assert.equal(media[0].name, 'my graph.png');

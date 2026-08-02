@@ -228,3 +228,34 @@ test('a link is a picture when its path says so, and not because of a query stri
     assert.equal(isImageUrl(url), false, url);
   }
 });
+
+test('a Windows file URL finds the picture it is pointing at', () => {
+  // `D:\shots\graph.png` is what main writes onto the message; `file:///D:/shots/
+  // graph.png` is what an agent on that machine writes in a markdown link. They
+  // are one file, and comparing the two strings as they stand says they are not.
+  const media = [{ name: 'graph.png', path: 'D:\\shots\\graph.png' }];
+  for (const target of [
+    'file:///D:/shots/graph.png',
+    'file:///d:/Shots/Graph.png',
+    'sandbox:D:\\shots\\graph.png',
+    'D:\\shots\\graph.png',
+  ]) {
+    const run = linkify(`[open](${target})`, media).find((r) => r.type === 'file');
+    assert.ok(run, target);
+    assert.equal(run.path, 'D:\\shots\\graph.png', target);
+  }
+
+  // A different file on the same drive is still a different file.
+  assert.deepEqual(types(linkify('[open](file:///D:/shots/other.png)', media)), ['text']);
+});
+
+test('case still matters where the filesystem says it does', () => {
+  // The drive-letter fold must not leak onto POSIX paths: two files whose names
+  // differ only in case are two files there, and picking either would be wrong.
+  const media = [{ name: 'Graph.png', path: '/home/agent/Graph.png' }];
+  assert.deepEqual(types(linkify('[open](sandbox:/home/agent/graph.png)', media)), ['text']);
+  assert.equal(
+    linkify('[open](sandbox:/home/agent/Graph.png)', media).find((r) => r.type === 'file').path,
+    '/home/agent/Graph.png'
+  );
+});
