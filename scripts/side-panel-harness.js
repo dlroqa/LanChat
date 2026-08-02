@@ -36,7 +36,8 @@ import { createRoot } from 'react-dom/client';
 import SidePanelDeck from ${JSON.stringify(path.join(SRC, 'components', 'SidePanelDeck.jsx'))};
 import ConnectionPanel from ${JSON.stringify(path.join(SRC, 'components', 'ConnectionPanel.jsx'))};
 import PttBar from ${JSON.stringify(path.join(SRC, 'components', 'PttBar.jsx'))};
-window.__lanchat = { React, createRoot, SidePanelDeck, ConnectionPanel, PttBar };
+import EmptyState from ${JSON.stringify(path.join(SRC, 'components', 'EmptyState.jsx'))};
+window.__lanchat = { React, createRoot, SidePanelDeck, ConnectionPanel, PttBar, EmptyState };
 `;
 }
 
@@ -73,9 +74,15 @@ function buildPage(dir, bundle, leaveUp) {
 </div></div>
 <script>${bundle}</script>
 <script>
-const { React, createRoot, SidePanelDeck, ConnectionPanel, PttBar } = window.__lanchat;
+const { React, createRoot, SidePanelDeck, ConnectionPanel, PttBar, EmptyState } = window.__lanchat;
 const h = React.createElement;
 const LEAVE_UP = ${leaveUp ? 'true' : 'false'};
+// What App hands the floor: one body per view, resolved outside the deck.
+const BODIES = {
+  notes: h(EmptyState, { title: 'No notes yet' }, 'Anything you write here stays on this machine.'),
+  agent: h(EmptyState, { title: 'No tasks yet' }, 'Give an agent a standing job and run it from here.'),
+  schedule: h(EmptyState, { title: 'Nothing scheduled' }, 'Tasks set to run on their own will be listed here.'),
+};
 
 // Two conversations to pick between, as the left panel would. The session is the
 // one in the report; the person is the one whose card is the radio rather than
@@ -86,11 +93,15 @@ const idle = { transmitting: false, connecting: false, talkers: [], inboundStrea
 
 let peer = SESSION;
 let up = false;
+let view = 'notes';
 const root = createRoot(document.getElementById('panel'));
 const draw = () => new Promise((r) => {
   root.render(h(SidePanelDeck, {
     up,
     onUp: (next) => { up = next; draw(); },
+    view,
+    onView: (next) => { view = next; draw(); },
+    tasks: BODIES[view],
     dictation: h(PttBar, {
       peer, state: idle, keyName: 'meta', customCode: null,
       // What App passes: the dictate card where dictation is what the gesture
@@ -148,6 +159,11 @@ const state = () => ({
 });
 
 const key = (init) => window.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }));
+// A key press aimed at whatever holds focus, which is what a real one is. The
+// window-level handler listens in capture, so it sees this on the way down with
+// the focused element as the target — and the sideways keys are decided on
+// exactly that: an arrow inside a text field belongs to the caret.
+const keyOn = (el, init) => el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }));
 const point = (type, y) => grip().dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1, button: 0, clientX: 40, clientY: y }));
 const drag = async (dy, midway) => {
   const from = box(grip()).top + 20;
@@ -222,6 +238,52 @@ const contrast = (fg, bg) => {
   await wait(200);
   out.steps.plainArrowIgnored = $('.panel-title').textContent === 'Activity Panel';
 
+  // ---- the three views, and the bare keys that step between them
+  //
+  // Bare left and right, so everything that decides whether they are ours has to
+  // be checked here: the floor showing, what holds focus, and the window width
+  // (that one in the narrow run below).
+  const viewTitle = () => $('.task-view-title').textContent;
+  const step = async (el, k) => { keyOn(el, { key: k }); await wait(120); };
+
+  // Down, the sideways keys have nothing to answer: there is one view on the
+  // other floor, and the Task Bar's three are not on screen at all.
+  out.steps.acrossWhileDown = { floor: $('.panel-title').textContent, before: viewTitle() };
+  await step(document.body, 'ArrowRight');
+  out.steps.acrossWhileDown.after = viewTitle();
+
+  // Up, but with the cursor in the composer. This is the one place the two
+  // halves of the shortcut differ on purpose: ⌘↑ has always reached the deck
+  // from inside a draft and still must, while a bare arrow there is the caret.
+  draft.focus();
+  keyOn(draft, { key: 'ArrowUp', ctrlKey: true });
+  await wait(400);
+  out.steps.acrossWhileTyping = { floor: $('.panel-title').textContent, before: viewTitle() };
+  await step(draft, 'ArrowRight');
+  out.steps.acrossWhileTyping.after = viewTitle();
+  out.steps.acrossWhileTyping.draft = draft.value;
+  draft.blur();
+
+  // And now, with nothing else claiming the key, all the way round and back.
+  const right = [];
+  for (let i = 0; i < 4; i += 1) { await step(document.body, 'ArrowRight'); right.push(viewTitle()); }
+  out.steps.cycleRight = right;
+  const left = [];
+  for (let i = 0; i < 4; i += 1) { await step(document.body, 'ArrowLeft'); left.push(viewTitle()); }
+  out.steps.cycleLeft = left;
+  // The body under the name is the one that name belongs to, so a title that
+  // moved without its view would be caught here rather than looking right.
+  out.steps.bodyWithTitle = { title: viewTitle(), body: face('tasks').textContent };
+
+  // The floor's own chrome must not have pushed the pinned card above it. Where
+  // the floor itself comes to rest is measured further down, with the motion
+  // taken out — a face mid-slide reports the position it set off from.
+  out.steps.cardWithTaskChrome = box($('.ptt-bar'));
+
+  keyOn(document.body, { key: 'ArrowDown', ctrlKey: true });
+  await wait(400);
+  out.steps.backDown = $('.panel-title').textContent;
+
   // ---- the grip: a nudge below the threshold, then a real pull
   await drag(-10);
   out.steps.afterNudge = $('.panel-title').textContent;
@@ -292,6 +354,32 @@ const contrast = (fg, bg) => {
   grip().click();
   await wait(150);
   out.resting = { up: state(), cardUp: box($('.ptt-bar')) };
+  // The task floor, in view, with its heading and its row of buttons in it. It
+  // is a deck face, pinned to every edge of the deck, so it must still be
+  // exactly the deck — anything else and the travel below is measuring a box
+  // other than the one the eye is looking at.
+  out.resting.taskFace = box(face('tasks'));
+  out.resting.deckBox = box(deck());
+  // Read off the raw rects rather than the rounded boxes: a 1px border and a
+  // fractional height would show up as a gap that is not there once each edge
+  // has been rounded on its own.
+  const edges = (el) => el.getBoundingClientRect();
+  const gap = (a, b) => Math.round(edges(b).top - edges(a).bottom);
+  out.resting.chrome = {
+    title: box($('.task-view-title')),
+    menu: box($('.task-view-menu')),
+    body: box($('.task-view-body')),
+    // The three parts, stacked with nothing between them and nothing left over
+    // at either end: the floor is exactly its heading, its body and its buttons.
+    gaps: {
+      aboveTitle: Math.round(edges($('.task-view-title')).top - edges(face('tasks')).top),
+      titleToBody: gap($('.task-view-title'), $('.task-view-body')),
+      bodyToMenu: gap($('.task-view-body'), $('.task-view-menu')),
+      belowMenu: Math.round(edges(face('tasks')).bottom - edges($('.task-view-menu')).bottom),
+    },
+    bodyOverflow: getComputedStyle($('.task-view-body')).overflowY,
+    faceOverflow: getComputedStyle(face('tasks')).overflowY,
+  };
   grip().click();
   await wait(150);
   out.resting.down = state();
@@ -311,7 +399,11 @@ const contrast = (fg, bg) => {
   out.contrast = {
     title: contrast(getComputedStyle($('.panel-title')).color, panelBg),
     hint: contrast(getComputedStyle(hint).color, panelBg),
+    // The floor's own heading is the same size on the same background, so it
+    // has the same 4.5:1 to clear.
+    view: contrast(getComputedStyle($('.task-view-title')).color, panelBg),
     fontSize: getComputedStyle($('.panel-title')).fontSize,
+    viewFontSize: getComputedStyle($('.task-view-title')).fontSize,
   };
 
   // ---- the bar is a target, not a hairline
@@ -342,13 +434,16 @@ function buildNarrowPage(bundle) {
 </div></div>
 <script>${bundle}</script>
 <script>
-const { React, createRoot, SidePanelDeck, ConnectionPanel } = window.__lanchat;
+const { React, createRoot, SidePanelDeck, ConnectionPanel, EmptyState } = window.__lanchat;
 const h = React.createElement;
 let up = false;
+let view = 'notes';
 const root = createRoot(document.getElementById('panel'));
 const draw = () => new Promise((r) => {
   root.render(h(SidePanelDeck, {
     up, onUp: (n) => { up = n; draw(); }, dictation: null,
+    view, onView: (n) => { view = n; draw(); },
+    tasks: h(EmptyState, { title: 'No notes yet' }, 'Anything you write here stays on this machine.'),
     activity: h(ConnectionPanel, { peer: null }),
   }));
   setTimeout(r, 60);
@@ -357,9 +452,16 @@ const draw = () => new Promise((r) => {
   await draw();
   await new Promise((r) => setTimeout(r, 150));
   const out = { panelDisplay: getComputedStyle(document.getElementById('panel')).display };
-  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', ctrlKey: true, bubbles: true, cancelable: true }));
+  const press = (init) => document.body.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }));
+  press({ key: 'ArrowUp', ctrlKey: true });
   await new Promise((r) => setTimeout(r, 250));
   out.stateAfterShortcut = up;
+  // And the sideways pair is gone with the rest of the column. It is gated on
+  // the same offsetParent, but on its own line of the handler, so it is asked
+  // its own question here rather than being assumed to follow.
+  press({ key: 'ArrowRight' });
+  await new Promise((r) => setTimeout(r, 250));
+  out.viewAfterShortcut = view;
   const pre = document.createElement('pre');
   pre.id = 'result';
   pre.textContent = JSON.stringify(out);

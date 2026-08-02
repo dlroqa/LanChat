@@ -53,8 +53,11 @@ function deck(props = {}) {
       React.createElement(SidePanelDeck, {
         up: false,
         onUp: () => {},
+        view: 'notes',
+        onView: () => {},
         dictation: React.createElement('div', { className: 'ptt-bar' }, 'Tap to dictate'),
         activity: React.createElement('div', { className: 'conn-panel' }, 'the activity panel'),
+        tasks: React.createElement('div', { className: 'task-body' }, 'the task bar view'),
         ...props,
       })
     )
@@ -79,6 +82,28 @@ test('the title names the floor showing', () => {
   assert.ok(deck({ up: true }).includes('>Task Bar<'), 'up, it is the task bar');
 });
 
+test('the task floor carries a second name, for the view rather than the floor', () => {
+  // Two headings, not one that changes its mind: h2 names the floor you are
+  // standing on, h3 names what is on it. The column's own title must go on
+  // saying Task Bar whichever of the three views is up.
+  for (const [view, name] of [
+    ['notes', 'Notes'],
+    ['agent', 'Agent Task'],
+    ['schedule', 'Scheduled Task'],
+  ]) {
+    const html = deck({ up: true, view });
+    assert.ok(html.includes('>Task Bar<'), `${view}: the column is still the Task Bar`);
+    assert.match(
+      html,
+      new RegExp(`class="task-view-title"[^>]*>${name}<`),
+      `${view}: and the floor is ${name}`
+    );
+    // The heading and the selected button are one answer given twice, so they
+    // cannot disagree about which view is showing.
+    assert.equal((html.match(/aria-selected="true"/g) || []).length, 1, `${view}: one view selected`);
+  }
+});
+
 test('both floors are always mounted, and only one of them is showing', () => {
   const down = deck();
   assert.ok(down.includes('panel-face-activity'), 'the activity face');
@@ -86,7 +111,7 @@ test('both floors are always mounted, and only one of them is showing', () => {
   // The parked floor keeps rendering: pulling it into view must not be the moment
   // its contents are built, or the panel would arrive empty and fill in after.
   assert.ok(down.includes('the activity panel'), 'the activity face holds what it was given');
-  assert.ok(down.includes('Nothing running'), 'and the task face its empty state');
+  assert.ok(down.includes('the task bar view'), 'and the task face what it was given too');
 
   // Which one is showing is a class on the deck, not a swap of the tree.
   assert.ok(down.includes('class="panel-deck"'), 'down is the deck on its own');
@@ -182,6 +207,26 @@ test('the shortcut stays modifier-gated', () => {
   assert.ok(guard.includes('offsetParent'), 'and it does nothing while the panel is not on screen');
 });
 
+test('the sideways keys are bare, and gated instead', () => {
+  // Left and right step the Task Bar's three views with no modifier held. That
+  // is affordable only because every other arrow handler in this app — the
+  // composer's mention menu, the search results, the sidebar grips — takes up
+  // and down, so the one thing left and right can be taken from is a caret.
+  // Both gates therefore have to be here, in the same handler as everything
+  // else: the slice below runs from the first `const onKey` to the first
+  // listener, and a second handler bolted on underneath would satisfy every
+  // assertion above while leaving these keys ungated.
+  const guard = deckSrc.slice(deckSrc.indexOf('const onKey'), deckSrc.indexOf('window.addEventListener'));
+  assert.ok(guard.includes('ArrowLeft') && guard.includes('ArrowRight'), 'sideways, in the same guard');
+  assert.ok(guard.includes('editing(e.target)'), 'and never taken from a caret');
+  assert.ok(guard.includes('if (!up) return'), 'nor answered while the other floor is the one showing');
+  // A held modifier is somebody else's shortcut, not a slower version of this
+  // one — ⌘← is the start of the line, ⌥← the previous word.
+  assert.match(guard, /if \(e\.metaKey \|\| e\.ctrlKey \|\| e\.altKey \|\| e\.shiftKey\) return;/);
+  assert.match(deckSrc, /const editing = \(el\) =>/);
+  assert.match(deckSrc, /input, textarea, select, \[contenteditable="true"\]/);
+});
+
 test("the view is App state, not the deck's own", () => {
   // A call unmounts this panel. State held inside it would be lost across one,
   // and could be reset by a re-render on selection — the two things the feature
@@ -190,10 +235,28 @@ test("the view is App state, not the deck's own", () => {
   assert.match(appSrc, /const \[taskBar, setTaskBar\] = useState\(false\)/);
   assert.match(appSrc, /up=\{taskBar\}/);
   assert.match(appSrc, /onUp=\{setTaskBar\}/);
+
+  // Which of the three views is showing is the same kind of thing one floor
+  // down, and is held in the same place for the same reasons.
+  assert.match(appSrc, /const \[taskView, setTaskView\] = useState\(DEFAULT_TASK_VIEW\)/);
+  assert.match(appSrc, /view=\{taskView\}/);
+  assert.match(appSrc, /onView=\{setTaskView\}/);
+  // And not saved: the floor is not, and a view remembered under a floor nobody
+  // is standing on is half a position restored.
+  assert.ok(!/taskView/.test(source('..', 'main', 'config.js')), 'no such setting in the config defaults');
 });
 
 test('the floors move on transform, and say so under reduced motion', () => {
-  for (const sel of ['.panel-deck ', '.panel-deck-face ', '.panel-grip ', '.panel-grip-keys ']) {
+  for (const sel of [
+    '.panel-deck ',
+    '.panel-deck-face ',
+    '.panel-grip ',
+    '.panel-grip-keys ',
+    '.task-view ',
+    '.task-view-title ',
+    '.task-view-body ',
+    '.task-view-menu ',
+  ]) {
     assert.ok(css.includes(`\n${sel}{`), `${sel.trim()} is styled`);
   }
   const face = css.slice(css.indexOf('.panel-deck-face {'), css.indexOf('.panel-grip {'));
@@ -209,6 +272,19 @@ test('the floors move on transform, and say so under reduced motion', () => {
   // The name arrives with the floor it names rather than swapping in place.
   assert.match(css, /@keyframes panel-title-in/);
   assert.match(css.slice(css.indexOf('.panel-title {')), /^[^}]*animation: panel-title-in/);
+  // And the floor's own name arrives with the view it names, the same way.
+  assert.match(css.slice(css.indexOf('.task-view-title {')), /^[^}]*animation: panel-title-in/);
+  const rmAt = css.indexOf('@media (prefers-reduced-motion: reduce) {\n  .panel-deck-face');
+  const reduced = css.slice(rmAt, css.indexOf('\n}\n', rmAt));
+  assert.ok(reduced.includes('.task-view-title'), 'and holds still where the other one does');
+
+  // Only the body of the floor scrolls. Overflow on the floor itself would let
+  // a long list carry the heading and the three buttons off the ends of it.
+  const floor = css.slice(css.indexOf('.task-view {'), css.indexOf('.task-view-menu {'));
+  assert.ok(!/^\s*overflow/m.test(css.slice(css.indexOf('.task-view {'), css.indexOf('.task-view-title {'))));
+  assert.match(floor.slice(floor.indexOf('.task-view-body {')), /^[^}]*overflow-y: auto/);
+  // Nothing new animates layout either, for the reason the faces do not.
+  assert.ok(!/transition:[^;]*\b(height|top|width)\b/.test(floor));
 });
 
 test('the narrow-window block is still the last thing in the sheet', () => {
@@ -216,6 +292,7 @@ test('the narrow-window block is still the last thing in the sheet', () => {
   const narrow = css.lastIndexOf('@media (max-width: 980px)');
   assert.ok(narrow !== -1, 'the block is there');
   assert.ok(css.indexOf('.panel-deck {') < narrow, 'and the new block is above it');
+  assert.ok(css.indexOf('.task-view-menu {') < narrow, 'the task floor too');
   assert.ok(!css.slice(narrow).includes('\n@media'), 'nothing follows it');
 });
 
@@ -280,6 +357,61 @@ test('driven in a browser: the shortcut reaches it, a plain arrow does not', asy
   // And it does nothing at a width where the column is not on screen at all.
   assert.equal(r.narrow.panelDisplay, 'none');
   assert.equal(r.narrow.stateAfterShortcut, false, 'no floor moved behind the media query');
+  assert.equal(r.narrow.viewAfterShortcut, 'notes', 'and no view either');
+});
+
+test('driven in a browser: bare left and right step the three views, and wrap', async () => {
+  const r = await driven();
+  if (skipped(r)) return;
+
+  // Round one way and round the other, from Notes and back to it. Four presses
+  // for three views, so the wrap is inside the reading rather than at its edge.
+  assert.deepEqual(r.steps.cycleRight, ['Agent Task', 'Scheduled Task', 'Notes', 'Agent Task']);
+  assert.deepEqual(r.steps.cycleLeft, ['Notes', 'Scheduled Task', 'Agent Task', 'Notes']);
+  // The name and the body under it move together — a heading that stepped on
+  // its own would look right and be a lie.
+  assert.equal(r.steps.bodyWithTitle.title, 'Notes');
+  assert.ok(r.steps.bodyWithTitle.body.includes('No notes yet'), 'the body is the one named');
+});
+
+test('driven in a browser: the sideways keys are not taken from a caret, or from the other floor', async () => {
+  const r = await driven();
+  if (skipped(r)) return;
+
+  // Standing on the Activity Panel there is nothing sideways to reach.
+  assert.equal(r.steps.acrossWhileDown.floor, 'Activity Panel');
+  assert.equal(r.steps.acrossWhileDown.after, r.steps.acrossWhileDown.before, 'no view moved');
+
+  // With the cursor in the composer the modifier pair still reaches the deck —
+  // it always has — while the bare arrow beside it stays with the text.
+  assert.equal(r.steps.acrossWhileTyping.floor, 'Task Bar', 'the modified pair still gets through');
+  assert.equal(r.steps.acrossWhileTyping.after, r.steps.acrossWhileTyping.before, 'the bare one does not');
+  assert.equal(r.steps.acrossWhileTyping.draft, 'half a sentence', 'and the draft is untouched');
+
+  assert.equal(r.steps.backDown, 'Activity Panel', 'and the floor came back for the rest of the run');
+});
+
+test('driven in a browser: the floor keeps its chrome without taking the deck apart', async () => {
+  const r = await driven();
+  if (skipped(r)) return;
+
+  // A heading and a row of buttons inside a face that is `inset: 0`: the face
+  // is still exactly the deck, so the slide is still exactly one deck height.
+  assert.deepEqual(r.resting.taskFace, r.resting.deckBox, 'the floor fills the deck');
+  assert.equal(r.resting.travel.tasks, r.deckHeight, 'and travels the whole of it');
+  // And nothing it adds reaches up past the deck into the pinned card.
+  assert.deepEqual(r.steps.cardWithTaskChrome, r.steps.cardAtRest, 'the card is where it was');
+
+  // The three parts of the floor stack with nothing between them and nothing
+  // left over at either end: the floor is its heading, its body and its
+  // buttons, and the body is whatever is left after the other two.
+  assert.deepEqual(r.resting.chrome.gaps, { aboveTitle: 0, titleToBody: 0, bodyToMenu: 0, belowMenu: 0 });
+  assert.ok(r.resting.chrome.body.height > 0, 'and there is a body to put a view in');
+
+  // Only the body scrolls. On the floor itself, a long list would carry the
+  // heading and the buttons off the ends of the one thing that has to stay put.
+  assert.equal(r.resting.chrome.bodyOverflow, 'auto');
+  assert.equal(r.resting.chrome.faceOverflow, 'visible', 'the floor itself never scrolls');
 });
 
 test('driven in a browser: a nudge is not a pull', async () => {
@@ -353,4 +485,8 @@ test('driven in a browser: the small text it adds is readable on the panel', asy
   // 11.5px is small text, which needs 4.5:1.
   assert.ok(r.contrast.title >= 4.5, `title contrast ${r.contrast.title}:1`);
   assert.ok(r.contrast.hint >= 4.5, `hint contrast ${r.contrast.hint}:1`);
+  // The floor's heading is the same size on the same background, so it answers
+  // the same question rather than inheriting the answer.
+  assert.equal(r.contrast.viewFontSize, r.contrast.fontSize, 'same size as the column title');
+  assert.ok(r.contrast.view >= 4.5, `view title contrast ${r.contrast.view}:1`);
 });

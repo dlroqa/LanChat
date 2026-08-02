@@ -1,5 +1,6 @@
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Avatar from './Avatar.jsx';
+import EmptyState from './EmptyState.jsx';
 import { Sessions } from '../lib/icons.jsx';
 import { useCountdown } from '../lib/useCountdown.js';
 import { useAgentPhrase } from '../lib/agentPhrase.js';
@@ -46,15 +47,9 @@ const QUALITY = {
 export default function ConnectionPanel({ peer, stats, agentStatus, awaiting, typing, streaming, commits }) {
   if (!peer) {
     return (
-      <div className="panel-empty">
-        <div className="pulse-ring" aria-hidden="true">
-          <span />
-          <span />
-          <span />
-        </div>
-        <h4>No conversation selected</h4>
-        <p>Pick someone on the left to see their connection and start a call.</p>
-      </div>
+      <EmptyState title="No conversation selected">
+        Pick someone on the left to see their connection and start a call.
+      </EmptyState>
     );
   }
 

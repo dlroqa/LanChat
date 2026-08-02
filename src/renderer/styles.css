@@ -401,6 +401,59 @@ textarea {
   transform: translate(-50%, 0);
 }
 
+/* ---- the task floor's three views ------------------------------------------
+   A name at the top of the floor, a body, and the three views along the bottom.
+   The floor is a `.panel-deck-face`, which is `position: absolute; inset: 0` —
+   so this fills the deck exactly whatever is inside it, and the slide is still
+   one deck height on transform alone. Nothing in here animates layout.
+
+   Only the body scrolls. Putting the overflow on the floor instead would let a
+   long list carry the title and the buttons off the top and bottom of it, and
+   the one thing this floor has to keep saying is which view you are looking at
+   and how to get to the other two. */
+.task-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+/* The floor's own heading, under the pinned dictation card and hairlined off
+   from it. `.panel-title` above names the floor; this names what is on it, so
+   they are two headings rather than one that changes its mind. Same size, same
+   weight, same colour — and --fg-muted rather than --fg-faint for the reason
+   given up there: at 11.5px this is small text and needs 4.5:1 on --bg-2.
+
+   It borrows the title animation too, keyed on the view in TaskBarFace, so the
+   name arrives with the view rather than swapping in place under a body that
+   has already changed. */
+.task-view-title {
+  margin: 0;
+  padding: 12px 16px 9px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+  border-bottom: 1px solid var(--border-soft);
+  animation: panel-title-in 200ms ease-out;
+}
+.task-view-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* Against the grip rather than under the title: the top of the floor is spoken
+   for by the dictation card, and a row of controls wedged between the card and
+   the heading would read as belonging to the card. The same hairline the grip
+   uses, so the floor reads as bracketed by two rules of one weight. */
+.task-view-menu {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 0 8px;
+  border-top: 1px solid var(--border-soft);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .panel-deck-face,
   .panel-face-tasks,
@@ -412,7 +465,8 @@ textarea {
     transform: translate(-50%, 0);
     transition: opacity 150ms ease-out;
   }
-  .panel-title {
+  .panel-title,
+  .task-view-title {
     animation: none;
   }
 }

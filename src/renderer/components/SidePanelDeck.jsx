@@ -1,4 +1,6 @@
 import React, { useEffect, useRef } from 'react';
+import TaskBarFace from './TaskBarFace.jsx';
+import { stepTaskView } from '../lib/taskViews.js';
 
 // The right column, named and standing on two floors.
 //
@@ -17,7 +19,9 @@ import React, { useEffect, useRef } from 'react';
 //
 // The view is a prop rather than state here: a call replaces this whole panel,
 // and the floor a person left the column on should still be under it when the
-// call ends. App owns it for that reason (see the aside in App.jsx).
+// call ends. App owns it for that reason (see the aside in App.jsx). The same
+// goes for which of the Task Bar's three views is showing — one floor down, and
+// a call takes it away just as completely.
 
 // The modifier is what keeps the shortcut clear of the arrow keys the composer,
 // the search results and the sidebar grips already use — none of those look at
@@ -33,7 +37,16 @@ const DRAG_START = 6;
 // And below this the drag has not asked for the other floor, so it springs back.
 const COMMIT = 24;
 
-export default function SidePanelDeck({ up, onUp, dictation, activity }) {
+// Where a bare left or right arrow belongs to something else. Inside a text
+// field an arrow is the caret, and taking it to move a panel would make the
+// note being typed unwritable; a select and a range are the same bargain. This
+// is checked for the sideways keys only — the modifier on the up and down pair
+// is what keeps those clear, and they have always reached the deck from inside
+// the composer.
+const editing = (el) =>
+  Boolean(el && el.closest && el.closest('input, textarea, select, [contenteditable="true"]'));
+
+export default function SidePanelDeck({ up, onUp, view, onView, dictation, activity, tasks }) {
   const deckRef = useRef(null);
   const drag = useRef(null);
   // A drag ends in a click as well as a pointerup; without this the toggle would
@@ -42,11 +55,28 @@ export default function SidePanelDeck({ up, onUp, dictation, activity }) {
 
   useEffect(() => {
     const onKey = (e) => {
-      if (MAC ? !e.metaKey || e.ctrlKey : !e.ctrlKey || e.metaKey) return;
-      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
       // The panel is gone below 980px and behind a call. A shortcut that moved
       // something nobody can see would be a key press with no answer.
       if (!deckRef.current || !deckRef.current.offsetParent) return;
+      // Sideways: the Task Bar's three views. Bare arrows, because that is what
+      // was asked for, and they are affordable here in a way up and down were
+      // not — every other arrow handler in this app takes up and down only, so
+      // the only thing left or right can be taken from is a caret. Hence the two
+      // gates below rather than a modifier.
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        // Held modifiers are somebody else's shortcut, not a slower version of
+        // this one: ⌘← is the start of the line and ⌥← is the previous word.
+        if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+        if (editing(e.target)) return;
+        // There is one view on the other floor, and stepping through a set of
+        // one is a key press with no answer for the same reason as above.
+        if (!up) return;
+        e.preventDefault();
+        onView(stepTaskView(view, e.key === 'ArrowRight' ? 1 : -1));
+        return;
+      }
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      if (MAC ? !e.metaKey || e.ctrlKey : !e.ctrlKey || e.metaKey) return;
       e.preventDefault();
       onUp(e.key === 'ArrowUp');
     };
@@ -54,7 +84,10 @@ export default function SidePanelDeck({ up, onUp, dictation, activity }) {
     // after whichever of them happens to hold focus.
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [onUp]);
+    // The floor and the view are read by the handler, not just written by it, so
+    // they belong in here: one window listener re-subscribed on a change nobody
+    // can make faster than they can press a key.
+  }, [onUp, onView, up, view]);
 
   const pull = (px) => {
     const el = deckRef.current;
@@ -154,15 +187,9 @@ export default function SidePanelDeck({ up, onUp, dictation, activity }) {
           {activity}
         </div>
         <div className="panel-deck-face panel-face-tasks" aria-hidden={up ? undefined : 'true'}>
-          <div className="panel-empty">
-            <div className="pulse-ring" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </div>
-            <h4>Nothing running</h4>
-            <p>Tasks will collect here. Pull the bar back down for the activity panel.</p>
-          </div>
+          <TaskBarFace view={view} onView={onView}>
+            {tasks}
+          </TaskBarFace>
         </div>
       </div>
 

@@ -19,6 +19,8 @@ import { Ringer, playNotification, playCallEvent, playPttCue, playRejectCue } fr
 import ConnectionPanel from './components/ConnectionPanel.jsx';
 import PttBar from './components/PttBar.jsx';
 import SidePanelDeck from './components/SidePanelDeck.jsx';
+import EmptyState from './components/EmptyState.jsx';
+import { DEFAULT_TASK_VIEW } from './lib/taskViews.js';
 import { PttManager, attachPttKey, defaultPttKey, hasOwnDictationKey } from './lib/ptt.js';
 import { DictationManager, shouldDictate, holdMode, dictateKeyMode, tapAction } from './lib/dictation.js';
 import { toWavBytes } from './lib/wav.js';
@@ -129,6 +131,13 @@ export default function App() {
   // back where it was left. Nothing resets it on a selection either: picking a
   // different thread changes what the floors hold, not which one is showing.
   const [taskBar, setTaskBar] = useState(false);
+  // And which of that floor's three views is showing. Beside taskBar for the
+  // same reason, and deliberately not saved for the same reason either: the
+  // floor you are standing on is a position in a session, not a preference, and
+  // this is that position one level down. Saving it would mean reopening the app
+  // on the Activity Panel with a view selected underneath that nobody can see,
+  // and the first press of the shortcut landing somewhere it was not left.
+  const [taskView, setTaskView] = useState(DEFAULT_TASK_VIEW);
   const [ptt, setPtt] = useState({ transmitting: false, connecting: false, talkers: [], inboundStreams: [] });
   const [dictation, setDictation] = useState({ phase: 'idle', threadId: null, startedAt: 0, error: null });
   // null = not asked yet, and treated as ready: a check that has not come back
@@ -1878,6 +1887,17 @@ export default function App() {
     );
   }
 
+  // What the Task Bar floor is showing. Resolved here rather than inside the
+  // deck: the deck knows there are three named views and how to move between
+  // them, and nothing about what a note or a task is.
+  const taskBody = {
+    notes: <EmptyState title="No notes yet">Anything you write here stays on this machine.</EmptyState>,
+    agent: <EmptyState title="No tasks yet">Give an agent a standing job and run it from here.</EmptyState>,
+    schedule: (
+      <EmptyState title="Nothing scheduled">Tasks set to run on their own will be listed here.</EmptyState>
+    ),
+  }[taskView];
+
   return (
     <div
       className="app"
@@ -2053,6 +2073,9 @@ export default function App() {
           <SidePanelDeck
             up={taskBar}
             onUp={setTaskBar}
+            view={taskView}
+            onView={setTaskView}
+            tasks={taskBody}
             dictation={
               config.pttEnabled === false ? null : (
                 <PttBar
