@@ -347,8 +347,15 @@ const contrast = (fg, bg) => {
   // taken while one is in flight reports the position it started from, and any
   // number derived from it would be a fiction. What the transition itself is
   // given is reported above, straight off the computed style.
+  // The floor's heading arrives on a 200ms transform, and the boxes read below
+  // are read off it. A measurement taken while that is still running finds the
+  // heading three pixels down from where it comes to rest, which reads as a gap
+  // above it and an overlap under it — a fiction about the layout, produced by
+  // an animation that changes no layout at all. Whether it runs is asserted
+  // from the stylesheet; where the parts sit is asked here, with it taken out.
   const still = document.createElement('style');
-  still.textContent = '.panel-deck-face { transition: none !important; }';
+  still.textContent =
+    '.panel-deck-face { transition: none !important; } .task-view-title { animation: none !important; }';
   document.head.appendChild(still);
 
   grip().click();
