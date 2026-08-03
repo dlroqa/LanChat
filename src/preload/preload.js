@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld('lanchat', {
   setSessionAgent: (id, agentId) => invoke('lanchat:setSessionAgent', { id, agentId }),
   askableAgents: () => invoke('lanchat:askableAgents'),
   sessionRound: (id) => invoke('lanchat:sessionRound', { id }),
+  stopSessionRound: (id) => invoke('lanchat:stopSessionRound', { id }),
   deleteSession: (id) => invoke('lanchat:deleteSession', { id }),
   importSessionText: (id) => invoke('lanchat:importSessionText', { id }),
 

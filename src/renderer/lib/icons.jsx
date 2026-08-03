@@ -90,6 +90,11 @@ export const Plus = (p) => (
     <line x1="5" y1="12" x2="19" y2="12" />
   </S>
 );
+export const Minus = (p) => (
+  <S {...p}>
+    <line x1="5" y1="12" x2="19" y2="12" />
+  </S>
+);
 export const Search = (p) => (
   <S {...p}>
     <circle cx="11" cy="11" r="8" />

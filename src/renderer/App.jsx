@@ -1290,6 +1290,10 @@ export default function App() {
         agentIds: record.agentIds || [],
         allAgents: Boolean(record.allAgents),
         mode: record.mode || 'parallel',
+        // How many turns a discussion in this session gets. Carried even when
+        // the mode is not `dialogue`, so switching to it does not show a stepper
+        // with nothing in it while the record catches up.
+        turns: record.turns,
         agentNames: counsel.map((a) => a.name),
         agentId: counsel[0]?.id || null,
         agentName: counsel[0]?.name || null,
@@ -1534,6 +1538,14 @@ export default function App() {
   async function setSessionCounsel(id, patch) {
     const record = await api.setSessionCounsel(id, patch);
     if (record) setSessions((list) => list.map((s) => (s.id === record.id ? record : s)));
+  }
+
+  // Calling off a question a session has out. Nothing is updated here: main
+  // closes the round and pushes the closed view down the same channel every
+  // other change to it arrives by, so there is one path into that state rather
+  // than one for the button and one for everything else.
+  async function stopSessionRound(id) {
+    await api.stopSessionRound(id);
   }
 
   // Loading a saved conversation in. The messages are written in main, so the
@@ -2095,6 +2107,7 @@ export default function App() {
             onSummon={summonAgent}
             onRenameSession={renameSession}
             onSetCounsel={setSessionCounsel}
+            onStopRound={stopSessionRound}
             onImportText={() => importSessionText(selectedId)}
             // Branching is offered where a question can be asked from: inside a
             // session, and in the agent threads a session can be started from.

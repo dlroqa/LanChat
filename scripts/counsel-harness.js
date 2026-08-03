@@ -84,7 +84,7 @@ const agents = [
 
 // The record, mirrored the way App.jsx mirrors it: the pane is handed a card,
 // hands back a patch, and the next render is drawn from the patched record.
-let record = { agentIds: ['agent:1'], allAgents: false, mode: 'parallel' };
+let record = { agentIds: ['agent:1'], allAgents: false, mode: 'parallel', turns: 6 };
 const patches = [];
 
 const card = () => {
@@ -93,7 +93,7 @@ const card = () => {
     : record.agentIds.map((id) => agents.find((a) => a.id === id)).filter(Boolean);
   return {
     id: 'session:1', kind: 'session', name: 'why the turn moved', online: true,
-    agentIds: record.agentIds, allAgents: record.allAgents, mode: record.mode,
+    agentIds: record.agentIds, allAgents: record.allAgents, mode: record.mode, turns: record.turns,
     agentNames: counsel.map((a) => a.name),
     agentId: counsel[0] ? counsel[0].id : null,
     agentName: counsel[0] ? counsel[0].name : null,
@@ -177,6 +177,26 @@ function state() {
       name: r.querySelector('.agent-pick-name').textContent,
       checked: r.getAttribute('aria-checked'),
     })),
+    // The turn budget, which exists only while the mode that spends it is
+    // chosen. Reported as null the rest of the time rather than left out, so an
+    // assertion can tell "not shown" from "the harness forgot to look".
+    turns: (() => {
+      const el = document.querySelector('.agent-turns-box');
+      if (!el) return null;
+      return {
+        count: el.querySelector('.agent-turns-count').textContent,
+        role: el.getAttribute('role'),
+        label: el.getAttribute('aria-label'),
+        live: el.querySelector('.agent-turns-count').getAttribute('aria-live'),
+        // Every child of the menu, by role. The list is what proves nothing in
+        // it is a role a menu will not announce.
+        stepRoles: [...el.querySelectorAll('.agent-turns-step')].map((b) => b.getAttribute('role')),
+        // Whether either end of the range is refusing to go further, which is
+        // the whole of what makes this a bounded control rather than a box.
+        downOff: el.querySelector('.agent-turns-step').disabled,
+        upOff: [...el.querySelectorAll('.agent-turns-step')].pop().disabled,
+      };
+    })(),
     // What the rest of the window says about the same counsel, so the chip and
     // the composer can be caught disagreeing with each other.
     placeholder: document.querySelector('.composer textarea').placeholder,
@@ -233,6 +253,26 @@ function state() {
   click(modes().find((m) => m.querySelector('.agent-pick-name').textContent === 'In turn'));
   await wait(60);
   steps.relay = state();
+
+  // The mode that keeps going, and the budget that stops it. The stepper appears
+  // with the choice rather than sitting greyed out beside the other two modes,
+  // so it is worth proving it is actually there and actually bounded.
+  click(modes().find((m) => m.querySelector('.agent-pick-name').textContent === 'Between themselves'));
+  await wait(60);
+  steps.dialogue = state();
+
+  // Down to the floor, one press past it. The second press must do nothing.
+  for (let i = 0; i < 6; i += 1) {
+    click(document.querySelector('.agent-turns-step'));
+    await wait(20);
+  }
+  steps.turnsFloor = state();
+
+  // And back up, using the keyboard this time — a spinbutton that only answers
+  // the mouse is a spinbutton nobody on a keyboard can set.
+  key(document.querySelector('.agent-turns-box'), 'ArrowUp');
+  await wait(60);
+  steps.turnsKeyed = state();
 
   key(menu(), 'Escape');
   await wait(60);

@@ -8,7 +8,7 @@ import AgentFlash from './AgentFlash.jsx';
 import SessionTitle from './SessionTitle.jsx';
 import FindBar from './FindBar.jsx';
 import AgentPicker from './AgentPicker.jsx';
-import { Phone, Video, Trash, Download, Upload, Sessions, Alert, Search } from '../lib/icons.jsx';
+import { Phone, Video, Trash, Download, Upload, Sessions, Alert, Search, Stop } from '../lib/icons.jsx';
 import { useQueueLabel } from './QueueBadge.jsx';
 import { useAgentPhrase } from '../lib/agentPhrase.js';
 import { threadHits } from '../lib/findInThread.js';
@@ -77,6 +77,9 @@ export default function ChatPane({
   // What the session currently has out with its agents: who was asked, who is
   // still thinking, and who is yet to be asked. Null when nothing is in flight.
   round = null,
+  // Calling off what a session has out. Mainly for a discussion between agents,
+  // which is the one thing here that carries on without anybody typing.
+  onStopRound,
   onApprove,
   // The connection light: `{ nonce, mode, ms }` while one should be playing, and
   // null the rest of the time. The nonce is what makes a second summon restart it
@@ -319,6 +322,7 @@ export default function ChatPane({
                 agentIds={peer.agentIds || (peer.agentId ? [peer.agentId] : [])}
                 allAgents={Boolean(peer.allAgents)}
                 mode={peer.mode || 'parallel'}
+                turns={peer.turns}
                 onChange={(patch) => onSetCounsel(peer.id, patch)}
               />
             </div>
@@ -508,6 +512,22 @@ export default function ChatPane({
                 <i />
                 <i />
               </span>
+              {/* The way out of a discussion that is going nowhere.
+                  Only on a dialogue: it is the only mode that keeps asking after
+                  the first lap, and so the only one where waiting is a decision
+                  rather than simply what happens next. Subordinate to everything
+                  around it — this is an escape hatch, not the thing to do. */}
+              {round && round.mode === 'dialogue' && onStopRound && (
+                <button
+                  type="button"
+                  className="round-stop"
+                  onClick={() => onStopRound(peer.id)}
+                  title="End the discussion after this turn"
+                >
+                  <Stop size={11} />
+                  Stop
+                </button>
+              )}
             </>
           )}
         </div>

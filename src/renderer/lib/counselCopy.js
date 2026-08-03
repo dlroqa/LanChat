@@ -89,6 +89,11 @@ export function askPlaceholder({ allAgents, names, mode } = {}) {
   // Two of them are named in full either way — "all 2 agents" is a sentence
   // written by a counter rather than by a person, and there is room for both
   // names at that size.
+  if (mode === 'dialogue') {
+    return list.length === 2
+      ? `Give ${list[0]} and ${list[1]} something to discuss…${keys}`
+      : `Give ${list.length} agents something to discuss…${keys}`;
+  }
   if (mode === 'relay') {
     return list.length === 2
       ? `Ask ${list[0]}, then ${list[1]}…${keys}`
@@ -114,6 +119,13 @@ export function thinkingLine(round, phrase, fallbackName = 'The agent') {
   if (!round || !round.open) return `${fallbackName} is ${verb}`;
   const nameOf = (id) => round.asked.find((a) => a.agentId === id)?.name || 'an agent';
   const running = (round.running || []).map(nameOf);
+  // A discussion says which turn it is on as well as who is speaking. Two agents
+  // replying to each other look exactly like one agent being slow otherwise —
+  // the count is the only thing on screen that says this is going somewhere and
+  // roughly how much of it is left.
+  if (round.mode === 'dialogue' && running.length) {
+    return `${running[0]} is ${verb} · turn ${round.turn} of ${round.cap}`;
+  }
   if (running.length === 0) return `${fallbackName} is ${verb}`;
   const head = running.length === 1 ? `${running[0]} is ${verb}` : `${counselNames(running)} are ${verb}`;
   const next = (round.next || []).map((a) => a.name);
@@ -149,6 +161,11 @@ export function agentNote(agent) {
 // three did, and a round that ends with two answers and a silence should say so.
 export function roundSummary(round) {
   if (!round || round.open) return '';
+  // A discussion has its own ending, worked out by the thing that ended it and
+  // sent down with the round. Counting answers here instead would say "4
+  // answered" about a conversation, which is true and tells nobody why it
+  // stopped — the one thing somebody watching it wants to know.
+  if (round.mode === 'dialogue' && round.endedNotice) return round.endedNotice;
   const answered = (round.answered || []).length;
   const quiet = (round.empty || []).length;
   const failed = (round.failed || []).length;

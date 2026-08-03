@@ -276,9 +276,37 @@ test('mounted in a browser: ticking a counsel together, and nothing lost on the 
   }
   assert.deepEqual(
     s.opened.modes.map((m) => `${m.name}=${m.checked}`),
-    ['All at once=true', 'In turn=false'],
-    'the two modes are one choice, so they are radios'
+    ['All at once=true', 'In turn=false', 'Between themselves=false'],
+    'the three modes are one choice, so they are radios'
   );
+  // ---- the turn budget ----------------------------------------------------
+  //
+  // The one control here that guards against spending money. It appears with the
+  // mode that spends it, it is a spinbutton rather than a text box, and both ends
+  // of its range stop rather than letting somebody type past them.
+  assert.equal(s.opened.turns, null, 'no budget until the mode that has one is chosen');
+  assert.equal(s.relay.turns, null, 'and not for a relay either — one lap has no turns to cap');
+  assert.ok(s.dialogue.turns, 'choosing a discussion brings out the budget it will run to');
+  assert.equal(s.dialogue.turns.count, '6');
+  // The only children a menu announces are menuitems, groups and separators, so
+  // the control that visually reads as a number box is built out of the two
+  // things it really is. A spinbutton here would be correct semantics in a
+  // container that will not announce it, which is a control nobody can find.
+  assert.equal(s.dialogue.turns.role, 'group', 'a group is something a menu will announce');
+  assert.deepEqual(s.dialogue.turns.stepRoles, ['menuitem', 'menuitem'], 'and its buttons are menuitems');
+  assert.equal(
+    s.dialogue.turns.label,
+    'Turns: 6, between 2 and 12',
+    'the value and the range are on it, not just enforced behind it'
+  );
+  assert.equal(s.dialogue.turns.live, 'polite', 'and pressing a step says what it became');
+  // Six presses to take 6 down to 2, and two of those presses have nothing left
+  // to do. It stops at the floor rather than going under it.
+  assert.equal(s.turnsFloor.turns.count, '2', 'pressing past the bottom does not go under it');
+  assert.equal(s.turnsFloor.turns.downOff, true, 'and the button says so rather than silently failing');
+  assert.equal(s.turnsFloor.turns.upOff, false);
+  assert.equal(s.turnsKeyed.turns.count, '3', 'the arrow keys work it too, not only the mouse');
+
   assert.equal(named(s.opened, 'Fable').note, 'switched off — will be skipped');
   assert.equal(named(s.opened, 'Fable').disabled, false, 'an agent that is off can still be chosen');
   // An agent somebody else is hosting is on the list and says whose it is. The

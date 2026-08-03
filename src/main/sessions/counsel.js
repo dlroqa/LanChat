@@ -13,6 +13,8 @@
 // socket or a clock, and every sentence it produces can be read in a test
 // instead of inferred from a screenshot.
 
+const { fence, clip } = require('./dialogue.js');
+
 const MAX_RELAY_CHARS = 8000;
 
 // Why somebody could not be asked. These are the words the notice is built from,
@@ -110,13 +112,15 @@ function unreachableNotice(record, missed) {
 // The names are in the block on purpose. "Somebody said this" invites a summary;
 // "Tessie said this" invites a reply to Tessie, which is the entire point of
 // asking a counsel one at a time.
+//
+// The bodies go through fence() for the reason given where it is defined: the
+// delimiters are what tell the next agent where the quotation ends and where
+// LanChat's own instructions begin, and the words inside them were written by an
+// agent rather than by us. One lap of a relay is far less exposure than a
+// dialogue, but it is the same hole, so it gets the same lid.
 function relayPrompt(question, answers) {
   if (!answers || answers.length === 0) return question;
-  const said = answers.map((a) => {
-    const body =
-      a.text.length > MAX_RELAY_CHARS ? `${a.text.slice(0, MAX_RELAY_CHARS)}\n[Truncated]` : a.text;
-    return `${a.name}:\n${body}`;
-  });
+  const said = answers.map((a) => `${a.name}:\n${fence(clip(a.text, MAX_RELAY_CHARS))}`);
   const block = [
     '[Answers already given to this question by other agents]',
     '<<<',
@@ -126,10 +130,30 @@ function relayPrompt(question, answers) {
   return question ? `${block}\n\n${question}` : block;
 }
 
+// Why a dialogue cannot start, when only one of its agents can be reached.
+//
+// A discussion needs two, and one is not most of two — it is an agent being
+// asked to argue with itself. So this is a refusal rather than a smaller
+// dialogue: the question comes back with the sentence, the composer keeps the
+// words, and the person can switch the agent on or change the mode. Naming who
+// is here and who is not is the difference between a dead end and a fix.
+function soloNotice(targets, missed) {
+  const here =
+    targets.length === 1 ? `Only ${targets[0].name || 'one agent'} is available` : 'Nobody is available';
+  if (!missed || missed.length === 0) {
+    return `${here}, and a discussion needs two. Add another agent to this session, or ask them in parallel instead.`;
+  }
+  const parts = missed.map((m) => `${m.name || 'an agent'} is ${REASONS[m.reason] || REASONS.off}`);
+  const list =
+    parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+  return `${here}, and a discussion needs two: ${list}.`;
+}
+
 module.exports = {
   resolveCounsel,
   missedNotice,
   unreachableNotice,
+  soloNotice,
   relayPrompt,
   names,
   REASONS,

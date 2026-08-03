@@ -784,10 +784,11 @@ function createIpc({
     return record;
   });
 
-  // Who a session asks: a list of agents, or whoever is available, and whether
-  // they are asked all at once or one after another.
-  ipcMain.handle('lanchat:setSessionCounsel', (_e, { id, agentIds, allAgents, mode }) => {
-    const record = sessions.setCounsel(id, { agentIds, allAgents, mode });
+  // Who a session asks: a list of agents, or whoever is available, whether they
+  // are asked all at once, one after another, or left to talk to each other —
+  // and, for that last one, how many turns they get.
+  ipcMain.handle('lanchat:setSessionCounsel', (_e, { id, agentIds, allAgents, mode, turns }) => {
+    const record = sessions.setCounsel(id, { agentIds, allAgents, mode, turns });
     if (record) publishSessions();
     return record;
   });
@@ -811,6 +812,12 @@ function createIpc({
   // just switched threads. Live state is pushed as it changes; this is how a
   // reader who missed the push catches up.
   ipcMain.handle('lanchat:sessionRound', (_e, { id }) => sessions.roundFor(id));
+
+  // Calling off the question a session has out. Mainly for a discussion between
+  // agents, which is the only thing here that keeps going without anybody typing,
+  // but it works on any open round: a run that has stopped being worth waiting
+  // for is a run that has stopped being worth waiting for.
+  ipcMain.handle('lanchat:stopSessionRound', (_e, { id }) => ({ ok: sessions.stopRound(id) }));
 
   // Deleting a session puts it in the Trash. Same channel it has always been,
   // and the same `{ ok }` back: what changed is that the transcript stays on

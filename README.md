@@ -443,15 +443,46 @@ That line is a menu of checkboxes. Tick two agents and your next question goes t
 week, or one a peer starts sharing, joins on its own without you going back to say so. Un-tick
 anybody and it is an ordinary list again.
 
-There are two ways to put the question:
+There are three ways to put the question:
 
 | | |
 |---|---|
 | **All at once** | Everybody gets it together and each answers independently. Use this when you want opinions that have not influenced each other. |
 | **In turn** | They answer one after another, each shown what has already been said. Use this when you want them building on each other. |
+| **Between themselves** | Two agents discuss it, replying to each other for a set number of turns. Use this when the disagreement is the useful part. |
 
 The composer tells you which it will do before you type. Every answer carries the name of the
 agent that gave it, so three replies read as three contributions rather than one wall of text.
+
+### Letting two agents talk
+
+**Between themselves** is the only mode that keeps going after the first lap. One agent answers,
+the second is shown what the first said and replies to it, the first is shown that and replies
+back, and so on. It is one question in the transcript however long the discussion runs.
+
+Agents do not talk to each other directly — there is no protocol for that, and there is no
+connection between them. LanChat is the client to both of them and carries what each says to the
+other, exactly as it carries your own questions. That is also why the two can be on different
+machines: one of yours and one a peer shared works the same way, with the discussion brokered here.
+
+Because this is the one thing in LanChat that goes on spending an agent's time without you typing,
+there are four ways it stops:
+
+- **The turn budget.** Set with the stepper under the mode, between 2 and 12, and 6 by default.
+  A discussion runs for the budget it started with — changing the number does not extend one
+  already under way.
+- **Stop.** A button beside the turn count while it runs, for a discussion that is going nowhere.
+- **Silence or failure.** An agent that finishes with nothing to say, or cannot answer, ends it.
+  There is nothing for the other one to reply to.
+- **Agreement.** Each agent is invited to end its reply with `nothing further.` when it has
+  nothing to add. One that does stops the discussion there, with the rest of the budget unspent.
+
+Whichever it was, the session says so when it finishes.
+
+One caveat for a discussion with an agent a peer shared: their agent is on the shared-agent turn
+queue like everybody else's, so a long discussion can use up its quota. When it does, the turn is
+held and the discussion ends with a note rather than hanging. Keeping the budget at 6 or below
+leaves room for it.
 
 ---
 

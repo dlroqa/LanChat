@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { cleanTurns, DEFAULT_TURNS } = require('./dialogue.js');
 
 // Persistent list of sessions, stored as plain JSON in the Electron userData
 // dir — its own file rather than config.json, for the same reason agents.json is
@@ -24,9 +25,15 @@ const DEFAULT_TITLE = 'New Session';
 // the sidebar row and the header stay one line.
 const MAX_TITLE = 80;
 
-// How a session puts a question to more than one agent: all at once, or one
-// after another with each shown what has been said so far.
-const MODES = ['parallel', 'relay'];
+// How a session puts a question to more than one agent: all at once, one after
+// another with each shown what has been said so far, or talking to each other
+// until they are done.
+//
+// A build older than this one reads `dialogue` through cleanMode() below and
+// gets `parallel`, which is the right way for this to degrade: the session still
+// asks the same agents the same question, it simply stops looping. Nothing about
+// the record has to be repaired to go back.
+const MODES = ['parallel', 'relay', 'dialogue'];
 const DEFAULT_MODE = 'parallel';
 
 function newSessionId() {
@@ -79,6 +86,7 @@ function normalize(record) {
   if (!record.agentIds) record.agentIds = record.agentId ? [record.agentId] : [];
   if (record.allAgents === undefined) record.allAgents = false;
   if (!MODES.includes(record.mode)) record.mode = DEFAULT_MODE;
+  if (record.turns === undefined) record.turns = DEFAULT_TURNS;
   return record;
 }
 
@@ -129,7 +137,7 @@ class SessionRegistry {
     return this.records.find((r) => r.id === id) || null;
   }
 
-  create({ title, agentId, agentIds, allAgents, mode } = {}) {
+  create({ title, agentId, agentIds, allAgents, mode, turns } = {}) {
     const now = Date.now();
     const list = agentIds ? cleanIds(agentIds) : cleanIds(agentId ? [agentId] : []);
     const record = {
@@ -150,8 +158,14 @@ class SessionRegistry {
       // standing instruction, so an agent added or shared tomorrow is in this
       // session's counsel tomorrow with nothing having been written down today.
       allAgents: allAgents === true,
-      // All at once, or one after another with each shown what the last one said.
+      // All at once, one after another with each shown what the last one said,
+      // or talking to each other.
       mode: cleanMode(mode),
+      // How many turns a dialogue in this session may take. Stored whatever the
+      // mode is, so switching to a dialogue and back does not lose the number
+      // somebody chose — and so the field is always there to read rather than
+      // being one more thing that might be missing.
+      turns: cleanTurns(turns === undefined ? DEFAULT_TURNS : turns),
       createdAt: now,
       updatedAt: now,
     };
@@ -167,6 +181,7 @@ class SessionRegistry {
     if (patch.agentIds !== undefined) record.agentIds = cleanIds(patch.agentIds);
     if (patch.allAgents !== undefined) record.allAgents = patch.allAgents === true;
     if (patch.mode !== undefined) record.mode = cleanMode(patch.mode);
+    if (patch.turns !== undefined) record.turns = cleanTurns(patch.turns);
     // `agentId` is a mirror of the counsel, not a member of it, and it is written
     // on every change so it can never disagree with the list.
     //
@@ -292,6 +307,8 @@ module.exports = {
   MAX_TITLE,
   MODES,
   DEFAULT_MODE,
+  DEFAULT_TURNS,
   cleanIds,
+  cleanTurns,
   normalize,
 };

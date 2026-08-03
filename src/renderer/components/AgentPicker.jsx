@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, Dot } from '../lib/icons.jsx';
+import { Check, ChevronDown, Dot, Minus, Plus } from '../lib/icons.jsx';
 import { agentNote, chipLabel } from '../lib/counselCopy.js';
 
 // Who a session asks.
@@ -20,11 +20,20 @@ import { agentNote, chipLabel } from '../lib/counselCopy.js';
 // announces itself as a single choice and this is not one. The mode rows below
 // are `menuitemradio` for the same reason in reverse: those two really are one
 // choice.
+// What a discussion may cost, in turns. The same bounds main clamps to — see
+// cleanTurns in sessions/dialogue.js — because a stepper that lets somebody
+// press up past the ceiling and then silently disagrees with the record is worse
+// than one that stops.
+const MIN_TURNS = 2;
+const MAX_TURNS = 12;
+const DEFAULT_TURNS = 6;
+
 export default function AgentPicker({
   agents = [],
   agentIds = [],
   allAgents = false,
   mode = 'parallel',
+  turns = DEFAULT_TURNS,
   onChange,
 }) {
   const [open, setOpen] = useState(false);
@@ -120,6 +129,75 @@ export default function AgentPicker({
     </li>
   );
 
+  // How long two agents may go on for.
+  //
+  // A stepper rather than a free number box: the range is small, both ends are
+  // hard limits, and the only thing anybody wants to do to it is nudge it. It
+  // sits under the mode row it belongs to and only when that mode is chosen —
+  // shown always, it would be a control with no effect for the two modes that
+  // have no turns.
+  //
+  // A `group` of two `menuitem`s rather than the `spinbutton` this visually is.
+  //
+  // A spinbutton is the right control for a small bounded number, and it is the
+  // wrong one *here*: the only valid children of a `menu` are menuitems, groups
+  // and separators, so a spinbutton inside this list is a control a screen reader
+  // may decline to announce at all. Correct semantics in the wrong container is
+  // still a control nobody can find.
+  //
+  // So the two buttons are what they look like — things to press — the group
+  // carries the name and the current value for anyone arriving at it, and the
+  // count is a live region so pressing them says what happened. The arrow keys
+  // are kept on the group because somebody who reads this as a number will try
+  // them, and doing nothing would be the surprise.
+  const step = (by) => onChange({ turns: Math.min(MAX_TURNS, Math.max(MIN_TURNS, turns + by)) });
+  const turnStepper = (
+    <li role="none" className="agent-turns">
+      <span className="agent-pick-note" aria-hidden="true">
+        Turns
+      </span>
+      <span
+        role="group"
+        aria-label={`Turns: ${turns}, between ${MIN_TURNS} and ${MAX_TURNS}`}
+        className="agent-turns-box"
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowUp' || e.key === 'ArrowRight') {
+            e.preventDefault();
+            step(1);
+          }
+          if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') {
+            e.preventDefault();
+            step(-1);
+          }
+        }}
+      >
+        <button
+          type="button"
+          role="menuitem"
+          className="agent-turns-step"
+          onClick={() => step(-1)}
+          disabled={turns <= MIN_TURNS}
+          aria-label="One turn fewer"
+        >
+          <Minus size={12} />
+        </button>
+        <span className="agent-turns-count" aria-live="polite">
+          {turns}
+        </span>
+        <button
+          type="button"
+          role="menuitem"
+          className="agent-turns-step"
+          onClick={() => step(1)}
+          disabled={turns >= MAX_TURNS}
+          aria-label="One turn more"
+        >
+          <Plus size={12} />
+        </button>
+      </span>
+    </li>
+  );
+
   return (
     <div className="agent-picker" ref={box}>
       <button
@@ -190,6 +268,12 @@ export default function AgentPicker({
           <li role="none" className="agent-menu-rule" />
           {modeRow('parallel', 'All at once', 'each answers on its own')}
           {modeRow('relay', 'In turn', 'each sees the answers already given')}
+          {/* Two agents replying to each other, which is the only mode that keeps
+              going after the first lap — so it is the only one with a budget
+              under it, and the stepper appears with the choice rather than
+              sitting there greyed out beside the other two. */}
+          {modeRow('dialogue', 'Between themselves', 'they reply to each other until they are done')}
+          {mode === 'dialogue' ? turnStepper : null}
         </ul>
       )}
     </div>

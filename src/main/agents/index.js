@@ -1294,8 +1294,15 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     releaseIdleTurns,
     TURN_QUOTA,
     TURN_IDLE_MS,
+    // How close together one peer may put questions to the same agent before the
+    // anti-flood starts swallowing them. Published because a caller on this
+    // machine can be the thing asking too fast — a discussion between two agents
+    // takes turns as quickly as they answer — and the only way to be a good
+    // neighbour about it is to know the number the far side is measuring by.
+    // See bookRemote() in sessions/index.js.
+    PEER_MIN_INTERVAL_MS,
     KINDS,
   };
 }
 
-module.exports = { createAgentHub, LOCAL_ORIGIN };
+module.exports = { createAgentHub, LOCAL_ORIGIN, PEER_MIN_INTERVAL_MS };

@@ -2168,6 +2168,60 @@ input:focus-visible {
   font-style: italic;
 }
 
+/* How long two agents may go on for. Indented to the depth of the mode row's
+   text rather than its tick, because it belongs to that row and is not another
+   choice beside it. */
+.agent-turns {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 9px 7px 32px;
+}
+.agent-turns-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.agent-turns-box:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+.agent-turns-step {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.agent-turns-step:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--fg);
+}
+/* At the end of the range, and saying so rather than silently doing nothing. */
+.agent-turns-step:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+/* Tabular figures so stepping from 9 to 10 does not shuffle the buttons either
+   side of it. */
+.agent-turns-count {
+  min-width: 18px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--fg);
+}
+
 /* ---- find in a conversation -----------------------------------------------
    A thread nobody scrolls twice. The button sits beside the name of the thing
    being searched; the bar it opens floats over the top of the messages, so the
@@ -2761,6 +2815,29 @@ mark.find-hit.current {
   flex: none;
   position: relative;
   z-index: 1;
+}
+
+/* Ending a discussion between agents. Sits in the typing strip beside the turn
+   count, because that is where somebody is already looking to decide whether
+   they want more of it. Quiet by default and only itself on hover: this is a way
+   out, not the thing to do, and a bright button here would read as one. */
+.round-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.round-stop:hover {
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 /* Animated ellipsis for the typing indicator. Each dot is offset so the group
