@@ -32,6 +32,7 @@ A simple, peer-to-peer **LAN & Tailscale chat** app — text, voice, video, and 
 | 🤖 **Agents** | Add an AI agent in **Settings → Agents** and it becomes just another thread. Four ways to connect one — **HTTP API** (recommended), **ACP** over stdio, a **local command**, or an **SSH command** on another host. Share yours with people on your network and they reach it *through* you: approvals stay on your machine and are never handed to a peer, and everyone sharing it takes turns. A new agent is local-only until you grant reach, peer by peer. |
 | ✨ **Living agent status** | An agent has no latency worth charting, so it gets the graph's slot to say what it is *doing* — and the row moves while it does. The phrase types itself in under a block cursor, which then sweeps back across the finished word; the pip beside it throws a small firework in a fresh neon colour every burst; and light trails race the width of the row, timed so they fall back into step each time the phrase changes. The moment it finishes, a firework goes off from the middle of the row — neon rays spreading outward to fill it corner to corner, then fading away over a couple of seconds — and then it settles to a slow green-to-cyan wave running from the pip through the word. Behind the text the trails are damped down, so the word stays easily readable while they pass, and **reduce motion** removes the animation entirely rather than freezing it — the words still say everything. |
 | 🗂️ **Sessions** | A workspace on your machine that puts questions to your agents and keeps the answers filed with it, rather than in those agents' own threads. A session can ask several at once: tick the agents you want, or tick **All agents** and it stands as an instruction — one you add next week, or one a peer starts sharing, joins on its own. Ask **all at once** for opinions that have not influenced each other, or **in turn** to let them build on what has already been said. Every answer carries the name of the agent that gave it. Each session's row shows the day it was started, so two untitled ones are still told apart. A question a run failed to answer says so, and takes itself away once you have asked it again and something came back. Deleting a session moves it to the **Trash**, where it keeps every word of its conversation until you recover it or delete it for good. |
+| 🗒️ **Task Bar** | Pull the right column up — or press ⌘↑ / Ctrl+↑ — and the ground under the dictation card slides to a second floor with three views on it, stepped between with the ← and → keys. **Notes** is somewhere to write that belongs to this machine and to no conversation: it saves itself as you type, and a note you delete waits in a Trash of its own until you put it back or delete it for good. **Agent Task** is a standing instruction — pick an agent, write what it should do, and run it whenever you like; the answer is kept with the task rather than filed into any thread, and the view leads with everything an agent on this machine is doing right now, wherever it was started from. **Scheduled Task** runs one of those on its own: once at a time you pick, on a repeat, or on a cron expression — and whichever you use, the panel shows the next few times it would actually happen before you save it. |
 | 🗃️ **Sidebar categories** | The left panel is four headings — Sessions, Agents, People, On your tailnet — each keeping its list shut until you point at it, so the panel opens as four words instead of one long scroll. Pin any of them open, drag them into the order you want, and both come back next launch. A shut category with something unread lights its own title until the message is actually read. |
 | 🔎 **Search everything** | One box at the top of the panel searches all four categories at once, matching more than names — hostnames, the system a machine runs, its address, the connector an agent speaks — and saying which part matched when it isn't the one on show. Aim it at a single category with the chip on its left. Results open in the middle panel where there is room to read them, laid over your conversation rather than replacing it, so closing the search puts you back mid-sentence. |
 | 🔦 **Find in a conversation** | ⌘F on a Mac, Ctrl+F elsewhere — or the button beside the thread's name — opens a bar that counts every occurrence and walks them with arrows that wrap at both ends. Every hit is marked, not just the current one, so you can see a word's density in a long thread at a glance; file names and pinned excerpts are searched too. Escape puts it away and leaves the cursor in the composer. **Settings → Conversations** chooses whether every conversation gets the button or only sessions do. |
@@ -451,6 +452,65 @@ There are two ways to put the question:
 
 The composer tells you which it will do before you type. Every answer carries the name of the
 agent that gave it, so three replies read as three contributions rather than one wall of text.
+
+---
+
+## The Task Bar
+
+The right-hand column stands on two floors. The one it opens on is the **Activity Panel** —
+connection graphs for a person, what an agent is doing, where a session's question stands. Drag the
+bar at the bottom of it upwards, click it, or press ⌘↑ (Ctrl+↑ elsewhere), and the ground slides up
+to the **Task Bar**. ⌘↓ brings it back. The dictation card stays pinned above both: a pull can
+never take push-to-talk away from you as a side effect.
+
+The Task Bar holds three views, named along the bottom and stepped between with the plain **←** and
+**→** keys — bare arrows, because they are yours anywhere except inside a text field, where they
+still belong to the cursor.
+
+### Notes
+
+Somewhere to write that belongs to this machine rather than to any conversation. Nothing here is
+ever sent, asked for, or reachable over the network.
+
+Press **+** for a new one, type a title and a body, and it saves itself — there is no Save button,
+and there is nothing to lose by closing the panel, switching notes, or taking a call mid-sentence.
+A note's row shows its first line, so a list of them is recognisable without opening anything.
+
+Deleting one moves it to a Trash of its own, keeping every word until you **restore** it or delete
+it for good. That second step is the one that asks.
+
+### Agent Task
+
+A standing instruction: one agent, one thing to do, run whenever you want it run.
+
+Pick the agent, write the instruction, and press **Run**. While it works, the answer appears as it
+is written; when it lands, it is kept with the task — not filed into that agent's conversation and
+not into any thread, because a task is not a conversation. Each task keeps its last twenty runs, so
+"has this been failing since Tuesday?" is a question with an answer.
+
+If a run cannot start, the panel says why in a sentence rather than doing nothing: the agent is
+switched off, or mid-run, or no longer here.
+
+Above your tasks, **Running now** lists everything an agent on this machine is doing at that moment
+— your tasks, sessions waiting on an answer, an agent mid-reply in its own thread, and questions a
+peer has put to an agent you share. Anything that lives elsewhere in the window opens there when
+clicked.
+
+### Scheduled Task
+
+The same tasks, running on their own.
+
+Pick a task and say when: **once** at a time you choose, on a **repeat** (hourly, daily, weekly), or
+on a **cron** expression for anything else. Whichever you use, the panel shows the next three times
+it would actually happen, worked out by the same clock that will run it — so a cron expression that
+parses but means the wrong thing is visible before you save it rather than at three in the morning.
+Save is not available until that preview is good.
+
+A schedule fires while LanChat is open. If one came round while the app was closed, it runs when you
+come back — once, if it was due within the last hour. It does not queue up a week of missed
+alarms and let them all off at your agent: an hourly schedule and a week away produce one run, and
+the row says how many went by. If the agent was switched off, busy, or gone when the moment came,
+that is recorded too, in words, so a schedule that appears not to have fired can always say why.
 
 ---
 

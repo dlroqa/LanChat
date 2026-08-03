@@ -505,6 +505,14 @@ function createIpc({
       // agent's thread, not under the chat with the peer who hosts it.
       case 'agent-reply': {
         const stored = remoteAgents.receive(from, msg);
+        // An answer to a task, from an agent on somebody else's machine. It
+        // goes onto the task record and nowhere else, exactly as one from an
+        // agent here does — and, as there, it is neither stored nor emitted as
+        // a message. Handled first, so nothing below can turn it into one.
+        if (stored && isTaskId(stored.peerId)) {
+          tasks.noteReply({ ...stored, from: stored.peerId });
+          break;
+        }
         if (stored) emit('chat', stored);
         // An answer from somebody else's agent ends its slot in the round exactly
         // as one of ours does. Queue chatter does not — being told where we stand

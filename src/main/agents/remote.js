@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 
 const { remoteAgentIdFor, isRemoteAgentId, parseRemoteAgentId } = require('./registry');
+const { isTaskId } = require('../tasks/registry');
 const { createVirtualSocket } = require('./virtualSocket');
 const { busyLine, legacyGreeting } = require('./turnCopy');
 
@@ -392,7 +393,12 @@ function createRemoteAgents({ hub, store, bus = null }) {
       // one it came from.
       ...(into !== entry.id && { speaker: entry.name, agentId: entry.id }),
     };
-    if (!notice) store.append(into, message);
+    // A task keeps no transcript — its answers live on the task record and
+    // nowhere else. The local path decides that in ipc.js, in the branch above
+    // the session one; a shared agent's answer never passes through there, so
+    // the same rule has to be applied here or asking a peer's agent would be
+    // the one way to make a task write a conversation.
+    if (!notice && !isTaskId(into)) store.append(into, message);
     // The error itself is never written down; the mark it leaves on the question
     // is, so a question that was never answered is still not counted as one after
     // a restart.
