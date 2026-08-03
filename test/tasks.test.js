@@ -383,7 +383,11 @@ test('deleting a task takes its answers with it, and it all survives a restart',
   // not parse is a fresh start rather than a crash on launch.
   const file = path.join(n.dir, 'tasks.json');
   fs.writeFileSync(file, JSON.stringify([{ id: 'task:real' }, { id: 'note:no' }, null, 'nonsense']), 'utf8');
-  const guarded = new TaskRegistry(file.replace(/\/tasks\.json$/, ''));
+  // The directory it already has, rather than one derived from the file path:
+  // deriving it meant stripping a separator, and the separator this was written
+  // with is not the one Windows uses — so the registry was pointed at a path
+  // that did not exist and read an empty list, on that runner alone.
+  const guarded = new TaskRegistry(n.dir);
   assert.deepEqual(
     guarded.list().map((r) => r.id),
     ['task:real']
