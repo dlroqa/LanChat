@@ -90,6 +90,16 @@ contextBridge.exposeInMainWorld('lanchat', {
   deleteTask: (id) => invoke('lanchat:deleteTask', { id }),
   runTask: (id) => invoke('lanchat:runTask', { id }),
   stopTask: (id) => invoke('lanchat:stopTask', { id }),
+
+  // Scheduled tasks: a task, and when it should run on its own. `previewSchedule`
+  // is the validation — it runs the same walker the scheduler does and hands
+  // back the next few real moments, so what the panel shows is what will happen.
+  listSchedules: () => invoke('lanchat:listSchedules'),
+  previewSchedule: (spec, count) => invoke('lanchat:previewSchedule', { spec, count }),
+  createSchedule: (taskId, spec) => invoke('lanchat:createSchedule', { taskId, spec }),
+  updateSchedule: (id, patch) => invoke('lanchat:updateSchedule', { id, patch: patch || {} }),
+  setScheduleEnabled: (id, enabled) => invoke('lanchat:setScheduleEnabled', { id, enabled }),
+  deleteSchedule: (id) => invoke('lanchat:deleteSchedule', { id }),
   purgeMessages: (id, ids) => invoke('lanchat:purgeMessages', { id, ids }),
   summonAgent: (threadId) => invoke('lanchat:summonAgent', { threadId }),
   sendTyping: (peerId, isTyping) => invoke('lanchat:sendTyping', { peerId, isTyping }),

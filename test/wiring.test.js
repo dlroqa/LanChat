@@ -101,6 +101,10 @@ test('every service main.js constructs is wired and reachable', async (t) => {
       s.outbox.stop();
       s.hub.close();
       s.agentHub.stopAll();
+      // The one timer the Task Bar adds. Unref'd, so it would not hold the
+      // suite open on its own — cleared anyway, because a test that leaks a
+      // timer teaches the next person that leaking one is fine.
+      s.scheduler.stop();
     }
     restore();
     delete process.env.LANCHAT_PORT;
@@ -119,6 +123,20 @@ test('every service main.js constructs is wired and reachable', async (t) => {
   assert.ok(s.pins && Array.isArray(s.pins.list()), 'a pin store exists and can be read');
   assert.ok(s.netScope && typeof s.netScope.allowInbound === 'function');
   assert.ok(s.grants && typeof s.grants.issue === 'function');
+
+  // And the Task Bar's three stores, which are built inside createIpc — where
+  // sessions is, and for the same reason — and handed back out through it.
+  // Named here because a store that was never constructed would not fail until
+  // somebody pulled the panel up.
+  assert.ok(s.notes && Array.isArray(s.notes.list()), 'a note store exists and can be read');
+  assert.ok(s.tasks && Array.isArray(s.tasks.list()), 'and a task store');
+  assert.ok(s.schedules && Array.isArray(s.schedules.list()), 'and the schedules');
+  // The clock that runs them, started by startServices and stoppable — the
+  // ordering matters and is asserted rather than assumed: a sweep that ran
+  // before the agent hub was asked to come up would find every agent switched
+  // off and record a skip for each one.
+  assert.ok(s.scheduler && typeof s.scheduler.stop === 'function', 'the tick can be torn down');
+  assert.equal(s.scheduler.running(), true, 'and it was started');
 
   // The key and the pins landed on disk, only readable by us.
   assert.ok(fs.existsSync(s.deviceKey.file));
@@ -156,6 +174,10 @@ test('the unauthenticated card main.js serves carries the key it will prove', as
       s.outbox.stop();
       s.hub.close();
       s.agentHub.stopAll();
+      // The one timer the Task Bar adds. Unref'd, so it would not hold the
+      // suite open on its own — cleared anyway, because a test that leaks a
+      // timer teaches the next person that leaking one is fine.
+      s.scheduler.stop();
     }
     restore();
     delete process.env.LANCHAT_PORT;

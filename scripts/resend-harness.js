@@ -149,6 +149,8 @@ window.lanchat = {
   // Agent tasks, likewise: read on boot, empty because this harness is about
   // what a question does after it is re-sent.
   listTasks: () => Promise.resolve([]),
+  // And the schedules that run them, read on boot for the same reason.
+  listSchedules: () => Promise.resolve([]),
   askableAgents: () => Promise.resolve([{ id: 'agent:tessie', name: 'Tessie' }]),
   getHistory: (id) => { calls.history.push(id); return Promise.resolve(histories[id] || []); },
   sessionRound: nothing,

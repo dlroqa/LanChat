@@ -171,4 +171,20 @@ const byLabel = (label) => (n) => n.props && n.props['aria-label'] === label;
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-module.exports = { load, mount, find, findAll, byClass, byLabel, wait };
+// Waits for something to become true, rather than for a length of time.
+//
+// The debounced saves these tests drive settle after half a second, and a fixed
+// sleep a little longer than that is a race the suite loses on a busy machine —
+// which is exactly where a test suite runs. So: poll, give up after a bound
+// that is long enough to mean something is actually wrong, and let the caller's
+// own assertion produce the message.
+async function until(predicate, { timeout = 5000, every = 10 } = {}) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await wait(every);
+  }
+  return predicate();
+}
+
+module.exports = { load, mount, find, findAll, byClass, byLabel, wait, until };

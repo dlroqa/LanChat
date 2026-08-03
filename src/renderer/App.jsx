@@ -19,9 +19,9 @@ import { Ringer, playNotification, playCallEvent, playPttCue, playRejectCue } fr
 import ConnectionPanel from './components/ConnectionPanel.jsx';
 import PttBar from './components/PttBar.jsx';
 import SidePanelDeck from './components/SidePanelDeck.jsx';
-import EmptyState from './components/EmptyState.jsx';
 import NotesView from './components/NotesView.jsx';
 import AgentTaskView from './components/AgentTaskView.jsx';
+import ScheduledTaskView from './components/ScheduledTaskView.jsx';
 import { DEFAULT_TASK_VIEW } from './lib/taskViews.js';
 import { liveWork } from './lib/liveWork.js';
 import { PttManager, attachPttKey, defaultPttKey, hasOwnDictationKey } from './lib/ptt.js';
@@ -149,6 +149,10 @@ export default function App() {
   // The Task Bar's agent tasks. Records only — the answers are read one task at
   // a time, when one is opened, for the reason the note bodies are.
   const [tasks, setTasks] = useState([]);
+  // And when they run on their own. Pushed like the rest: a schedule that fires
+  // rolls on to its next moment with nobody touching anything, so the window
+  // cannot be the one keeping track.
+  const [schedules, setSchedules] = useState([]);
   const [ptt, setPtt] = useState({ transmitting: false, connecting: false, talkers: [], inboundStreams: [] });
   const [dictation, setDictation] = useState({ phase: 'idle', threadId: null, startedAt: 0, error: null });
   // null = not asked yet, and treated as ready: a check that has not come back
@@ -712,6 +716,7 @@ export default function App() {
       api.listNotes().then((list) => setNotes(list || []));
       api.listNoteTrash().then((list) => setNoteTrash(list || []));
       api.listTasks().then((list) => setTasks(list || []));
+      api.listSchedules().then((list) => setSchedules(list || []));
       // Windows only: start from whatever has already been measured, rather than
       // an empty panel until the next round trip lands. A window opened from the
       // tray after hours of uptime should not look like a link that has never
@@ -959,6 +964,11 @@ export default function App() {
         // result on the screen without anybody asking.
         case 'tasks':
           setTasks(payload || []);
+          break;
+        // A schedule fired and rolled on, or one was written. Arrives with
+        // nobody having asked, which is the whole point of it.
+        case 'schedules':
+          setSchedules(payload || []);
           break;
         // Where a session's question stands. Arrives whenever anything about the
         // round changes and once more as it closes; the closed one is what ends
@@ -1967,7 +1977,17 @@ export default function App() {
       />
     ),
     schedule: (
-      <EmptyState title="Nothing scheduled">Tasks set to run on their own will be listed here.</EmptyState>
+      <ScheduledTaskView
+        schedules={schedules}
+        tasks={tasks}
+        onCreate={(taskId, spec) => api.createSchedule(taskId, spec)}
+        onUpdate={(id, patch) => api.updateSchedule(id, patch)}
+        onToggle={(id, enabled) => api.setScheduleEnabled(id, enabled)}
+        onDelete={(id) => api.deleteSchedule(id)}
+        // What a spec would actually do, answered by the same walker that will
+        // run it — so the panel cannot show a time the scheduler will not keep.
+        onPreview={(spec) => api.previewSchedule(spec)}
+      />
     ),
   }[taskView];
 

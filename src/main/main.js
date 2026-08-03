@@ -298,6 +298,11 @@ async function startServices() {
   // Agents are restored last: enabled ones reconnect, disabled ones appear in
   // the roster as offline. A failure here must not stop the app from starting.
   agentHub.startAll().catch((err) => console.error('[agents] startup failed:', err.message));
+  // And the Task Bar's clock, after them: it sweeps for runs that fell due
+  // while the app was closed, and a sweep that ran before the hub had been
+  // asked to come up would find every agent switched off and record a skip for
+  // each one. Torn down in before-quit below.
+  ipcApi.scheduler.start();
 
   // Check GitHub for a newer release on every launch. Deferred a few seconds so
   // it never competes with first-run setup or the initial peer scan, and fully
@@ -331,6 +336,14 @@ async function startServices() {
     pins,
     netScope,
     grants,
+    // The Task Bar's three stores and the timer that drives the last of them.
+    // Built inside createIpc, where sessions is, because they need `askable` —
+    // and named here so before-quit can reach the timer and the wiring test can
+    // see that they exist.
+    notes: ipcApi.notes,
+    tasks: ipcApi.tasks,
+    schedules: ipcApi.schedules,
+    scheduler: ipcApi.scheduler,
   };
   return ipcApi;
 }
@@ -412,6 +425,10 @@ if (!gotLock && !process.env.LANCHAT_USERDATA) {
       // Tears down in-flight runs and kills any agent child processes.
       services.agentHub.stopAll();
       services.outbox.stop();
+      // The scheduler's interval is unref'd, so it would not hold the process
+      // open on its own — cleared anyway, because a timer nobody clears is how
+      // the next one comes to be left as well.
+      services.scheduler.stop();
     }
   });
 }

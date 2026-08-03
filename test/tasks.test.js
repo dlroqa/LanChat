@@ -392,3 +392,119 @@ test('deleting a task takes its answers with it, and it all survives a restart',
   fs.writeFileSync(file, 'not json', 'utf8');
   assert.deepEqual(new TaskRegistry(n.dir).list(), []);
 });
+
+// ---- schedules, through the same door ---------------------------------------
+//
+// The store and the tick are pinned in scheduler.test.js with an injected
+// clock. What is asked here is the wiring around them: that a spec is checked
+// before it is saved rather than after it never fires, that the preview and the
+// scheduler answer with the same walker, and that a schedule cannot outlive the
+// task it runs.
+
+test('a schedule is checked before it is saved, and knows when it is next due', async (t) => {
+  const n = makeNode('schedules');
+  t.after(() => n.agentHub.stopAll?.());
+
+  const agent = await withAgent(n);
+  const task = await n.call('lanchat:createTask', { agentId: agent.id, instruction: 'Nightly' });
+
+  // The preview is the validation. It runs the same walker the scheduler will,
+  // so what it shows is what will happen.
+  const good = await n.call('lanchat:previewSchedule', { spec: { kind: 'cron', expr: '0 9 * * 1-5' } });
+  assert.equal(good.ok, true);
+  assert.equal(good.next.length, 3);
+  assert.equal(good.describes, '0 9 * * 1-5');
+  assert.ok(good.next[0] > Date.now());
+
+  const bad = await n.call('lanchat:previewSchedule', { spec: { kind: 'cron', expr: 'every so often' } });
+  assert.equal(bad.ok, false);
+  assert.ok(bad.error.length > 0, 'and it says so in a sentence');
+  const never = await n.call('lanchat:previewSchedule', { spec: { kind: 'cron', expr: '0 0 31 2 *' } });
+  assert.equal(never.ok, false, 'a spec that will never come round is refused too');
+
+  // A spec that cannot be read is refused rather than saved and silently never
+  // fired, which is the failure nobody would notice.
+  const refused = await n.call('lanchat:createSchedule', {
+    taskId: task.id,
+    spec: { kind: 'cron', expr: 'x' },
+  });
+  assert.equal(refused.ok, false);
+  assert.deepEqual(await n.call('lanchat:listSchedules'), []);
+
+  const orphan = await n.call('lanchat:createSchedule', {
+    taskId: 'task:nope',
+    spec: { kind: 'cron', expr: '0 9 * * *' },
+  });
+  assert.equal(orphan.ok, false, 'and a schedule with no task is not a schedule');
+
+  const sched = await n.call('lanchat:createSchedule', {
+    taskId: task.id,
+    spec: { kind: 'cron', expr: '0 9 * * 1-5' },
+  });
+  assert.match(sched.id, /^sched:/);
+  assert.equal(sched.enabled, true);
+  // The number the tick compares against, computed here and written down.
+  assert.equal(sched.nextRunAt, good.next[0], 'the preview and the record agree');
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(n.dir, 'schedules.json'), 'utf8'))[0].nextRunAt,
+    sched.nextRunAt
+  );
+});
+
+test('switching a schedule off and on recomputes when it is next due', async (t) => {
+  const n = makeNode('toggle');
+  t.after(() => n.agentHub.stopAll?.());
+
+  const agent = await withAgent(n);
+  const task = await n.call('lanchat:createTask', { agentId: agent.id, instruction: 'Nightly' });
+  const sched = await n.call('lanchat:createSchedule', {
+    taskId: task.id,
+    spec: { kind: 'cron', expr: '* * * * *' },
+  });
+
+  const off = await n.call('lanchat:setScheduleEnabled', { id: sched.id, enabled: false });
+  assert.equal(off.enabled, false);
+
+  // Coming back on asks the clock again. A schedule that was off for a week
+  // must not return already overdue and fire the instant it is switched on.
+  const on = await n.call('lanchat:setScheduleEnabled', { id: sched.id, enabled: true });
+  assert.equal(on.enabled, true);
+  assert.ok(on.nextRunAt > Date.now(), 'due next in the future, not in the past');
+});
+
+test('a schedule cannot outlive the task it runs', async (t) => {
+  const n = makeNode('cascade');
+  t.after(() => n.agentHub.stopAll?.());
+
+  const agent = await withAgent(n);
+  const task = await n.call('lanchat:createTask', { agentId: agent.id, instruction: 'Nightly' });
+  await n.call('lanchat:createSchedule', { taskId: task.id, spec: { kind: 'cron', expr: '0 9 * * *' } });
+  await n.call('lanchat:createSchedule', { taskId: task.id, spec: { kind: 'cron', expr: '0 18 * * *' } });
+  assert.equal((await n.call('lanchat:listSchedules')).length, 2);
+
+  await n.call('lanchat:deleteTask', { id: task.id });
+  // A clock with nothing on the other end of it would come round forever,
+  // refuse every time, and there would be no task left to reach it through.
+  assert.deepEqual(await n.call('lanchat:listSchedules'), []);
+  assert.equal(pushed(n, 'schedules').at(-1).length, 0, 'and the window was told');
+});
+
+test('a schedule survives a restart knowing what it was waiting for', async (t) => {
+  const n = makeNode('sched-restart');
+  t.after(() => n.agentHub.stopAll?.());
+
+  const agent = await withAgent(n);
+  const task = await n.call('lanchat:createTask', { agentId: agent.id, instruction: 'Nightly' });
+  const sched = await n.call('lanchat:createSchedule', {
+    taskId: task.id,
+    spec: { kind: 'every', preset: 'daily', hour: 7, minute: 30 },
+  });
+
+  const { ScheduleRegistry } = require('../src/main/tasks/schedules.js');
+  const [after] = new ScheduleRegistry(n.dir).list();
+  assert.equal(after.id, sched.id);
+  assert.equal(after.nextRunAt, sched.nextRunAt, 'the moment it was waiting for is on disk');
+  assert.deepEqual(after.spec, { kind: 'every', preset: 'daily', hour: 7, minute: 30 });
+  assert.equal(new Date(after.nextRunAt).getHours(), 7);
+  assert.equal(new Date(after.nextRunAt).getMinutes(), 30);
+});

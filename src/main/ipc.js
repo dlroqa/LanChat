@@ -12,6 +12,9 @@ const { createSessions, isSessionId } = require('./sessions');
 const { createDictation } = require('./dictation');
 const { NoteStore } = require('./notes');
 const { createTasks, isTaskId } = require('./tasks');
+const { ScheduleRegistry } = require('./tasks/schedules');
+const { createScheduler } = require('./tasks/scheduler');
+const { parseSchedule, nextRuns, describeSchedule } = require('./tasks/cron');
 const { normalizeWebUrl } = require('./webLinks');
 const { createLinkPreview } = require('./linkPreview');
 const { resolveMedia } = require('./media');
@@ -177,6 +180,17 @@ function createIpc({
     bus,
   });
 
+  // And the clock that runs them on their own. Not started here: startServices
+  // starts it once the agents have been asked to come up, so the catch-up sweep
+  // does not find every one of them switched off — see main.js.
+  const schedules = new ScheduleRegistry(userDataDir);
+  const scheduler = createScheduler({
+    schedules,
+    tasks,
+    askable: () => sessions.askable(),
+    bus,
+  });
+
   // Threads that exist only on this machine. Nothing off the wire may claim one.
   //
   // Three namespaces now, and all three are checked here rather than at their
@@ -259,6 +273,9 @@ function createIpc({
   });
   // The list of tasks changed: one was written, run, or has just answered.
   bus.on('tasks', (list) => emit('tasks', list));
+  // And the schedules, when one fires and rolls on to its next moment — which
+  // happens with nobody touching anything, so it has to be pushed.
+  bus.on('schedules', (list) => emit('schedules', list));
   // Where a session's question stands: who was asked, who is still thinking, and
   // who was left out. Worked out in main, which is the only place that knows,
   // and pushed rather than reassembled in the window out of four kinds of event.
@@ -911,13 +928,88 @@ function createIpc({
 
   ipcMain.handle('lanchat:createTask', (_e, draft) => tasks.create(draft || {}));
   ipcMain.handle('lanchat:updateTask', (_e, { id, patch }) => tasks.update(id, patch || {}));
-  ipcMain.handle('lanchat:deleteTask', (_e, { id }) => ({ ok: tasks.remove(id) }));
+  ipcMain.handle('lanchat:deleteTask', (_e, { id }) => {
+    const ok = tasks.remove(id);
+    // The schedules go with it. One left behind is a clock with nothing on the
+    // other end: it would come round forever, refuse every time, and there
+    // would be no task left to reach it through and switch it off.
+    if (ok && schedules.removeForTask(id)) emit('schedules', schedules.list());
+    return { ok };
+  });
 
   // Running one by hand. A refusal comes back with the sentence to show for it
   // rather than a bare false — the same bargain a session's composer strikes:
   // being told why costs nobody their words.
   ipcMain.handle('lanchat:runTask', (_e, { id }) => tasks.run(id, { by: 'manual' }));
   ipcMain.handle('lanchat:stopTask', (_e, { id }) => tasks.stop(id));
+
+  // ---- scheduled tasks ----
+  //
+  // A task, a spec that says when, and the moment it is next due. That moment
+  // is computed here on every change rather than at fire time: the tick has to
+  // be a numeric comparison, and a number on disk is only ever as good as the
+  // last time something worked it out.
+
+  function publishSchedules() {
+    emit('schedules', schedules.list());
+  }
+
+  ipcMain.handle('lanchat:listSchedules', () => schedules.list());
+
+  // What a spec would actually do, in times and in words. This is the whole of
+  // the validation a cron expression can have — and it runs the same walker the
+  // scheduler does, so it cannot promise a moment that will not happen.
+  ipcMain.handle('lanchat:previewSchedule', (_e, { spec, count }) => {
+    if (!parseSchedule(spec)) return { ok: false, error: 'That is not a schedule this can read.' };
+    const next = nextRuns(spec, Date.now(), count || 3) || [];
+    if (next.length === 0) return { ok: false, error: 'That will never come round.' };
+    return { ok: true, next, describes: describeSchedule(spec) };
+  });
+
+  ipcMain.handle('lanchat:createSchedule', (_e, { taskId, spec }) => {
+    if (!tasks.get(taskId)) return { ok: false, error: 'That task is no longer here.' };
+    const nextRunAt = scheduler.nextFor(spec);
+    if (!nextRunAt) return { ok: false, error: 'That is not a schedule this can read.' };
+    const record = schedules.create({ taskId, spec, nextRunAt });
+    publishSchedules();
+    return record;
+  });
+
+  ipcMain.handle('lanchat:updateSchedule', (_e, { id, patch }) => {
+    const before = schedules.get(id);
+    if (!before) return null;
+    const spec = patch && patch.spec !== undefined ? patch.spec : before.spec;
+    const nextRunAt = scheduler.nextFor(spec);
+    // A spec that cannot be read is refused rather than saved and silently
+    // never fired, which is the failure nobody would notice.
+    if (patch && patch.spec !== undefined && !nextRunAt) {
+      return { ok: false, error: 'That is not a schedule this can read.' };
+    }
+    const record = schedules.update(id, { ...patch, nextRunAt });
+    if (record) publishSchedules();
+    return record;
+  });
+
+  // Switching one off, and back on. Coming back on recomputes when it is next
+  // due from now — a schedule that was off for a week must not come back
+  // already overdue and fire the moment it is enabled.
+  ipcMain.handle('lanchat:setScheduleEnabled', (_e, { id, enabled }) => {
+    const record = schedules.get(id);
+    if (!record) return null;
+    const on = Boolean(enabled);
+    const updated = schedules.update(id, {
+      enabled: on,
+      nextRunAt: on ? scheduler.nextFor(record.spec) : record.nextRunAt,
+    });
+    if (updated) publishSchedules();
+    return updated;
+  });
+
+  ipcMain.handle('lanchat:deleteSchedule', (_e, { id }) => {
+    const ok = schedules.remove(id);
+    if (ok) publishSchedules();
+    return { ok };
+  });
 
   // Clearing out errors an older version wrote into a session's history.
   //
@@ -1470,7 +1562,7 @@ function createIpc({
     return { sent };
   }
 
-  return { emit, notes, tasks };
+  return { emit, notes, tasks, schedules, scheduler };
 }
 
 const MAX_AVATAR_BYTES = 96 * 1024;

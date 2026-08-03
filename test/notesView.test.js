@@ -5,7 +5,7 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { renderToStaticMarkup } = require('react-dom/server');
 const React = require('react');
-const { load, mount, find, byClass, wait } = require('../scripts/lib/reactDrive.js');
+const { load, mount, find, byClass, wait, until } = require('../scripts/lib/reactDrive.js');
 
 // The notes view, and the one thing it must never do.
 //
@@ -117,7 +117,7 @@ test('driven: typing saves once it stops, and not on every letter', async () => 
   }
   assert.deepEqual(saves, [], 'nothing yet: this is one sentence being typed');
 
-  await wait(700);
+  await until(() => saves.length > 0);
   assert.equal(saves.length, 1, 'one save for the lot of it');
   assert.equal(saves[0].body, 'first lines and', 'carrying the last letter typed');
   assert.ok(!saves[0].final, 'a pause is not a finish');
@@ -136,7 +136,8 @@ test('driven: every way out of the editor flushes what is in it first', async ()
     await view.settle();
     assert.deepEqual(saves, [{ id: 'note:a', title: 'Tap washer', body: 'unsaved words', final: true }]);
     // And the flush cancelled the timer rather than racing it.
-    await wait(700);
+    // Long enough that a save which was going to fire would have.
+    await wait(900);
     assert.equal(saves.length, 1, 'the debounced save did not fire on top');
     assert.ok(find(view.tree, byClass('note-list')), 'and the list is back');
     view.unmount();
@@ -207,7 +208,7 @@ test('driven: the title is saved the same way the body is', async () => {
   await open(view);
   find(view.tree, byClass('note-title')).props.onChange({ target: { value: 'Washer size' } });
   await view.settle();
-  await wait(700);
+  await until(() => saves.length > 0);
   assert.equal(saves.length, 1);
   assert.equal(saves[0].title, 'Washer size');
   assert.equal(saves[0].body, 'first line', 'and carries the body it did not touch');

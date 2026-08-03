@@ -143,6 +143,8 @@ window.lanchat = {
   listNoteTrash: () => Promise.resolve([]),
   // Agent tasks, read on boot and empty: not what is under test here.
   listTasks: () => Promise.resolve([]),
+  // And the schedules that run them.
+  listSchedules: () => Promise.resolve([]),
   deleteSession: (id) => {
     calls.deleted.push(id);
     const r = find(id);

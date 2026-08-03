@@ -5,7 +5,7 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { renderToStaticMarkup } = require('react-dom/server');
 const React = require('react');
-const { load, mount, find, findAll, byClass, wait } = require('../scripts/lib/reactDrive.js');
+const { load, mount, find, findAll, byClass, wait, until } = require('../scripts/lib/reactDrive.js');
 
 // The agent task view.
 //
@@ -139,7 +139,7 @@ test('driven: the instruction is written once the typing stops, not once per let
   // the whole reason it holds a draft.
   assert.equal(find(v.tree, byClass('task-instruction')).props.value, 'Check the nigh');
 
-  await wait(700);
+  await until(() => writes.length > 0);
   assert.equal(writes.length, 1, 'one write for the lot of it');
   assert.equal(writes[0].instruction, 'Check the nigh', 'carrying the last letter typed');
   assert.equal(writes[0].id, 'task:a');
@@ -189,7 +189,8 @@ test('driven: every way out of the editor writes what is in it first', async () 
     await v.settle();
     assert.equal(writes.length, 1);
     assert.equal(writes[0].instruction, 'half typed');
-    await wait(700);
+    // Long enough that a write which was going to fire would have.
+    await wait(900);
     assert.equal(writes.length, 1, 'the debounced write did not fire on top');
     assert.ok(find(v.tree, byClass('task-list')), 'and the list is back');
     v.unmount();
