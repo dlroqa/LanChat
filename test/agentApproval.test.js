@@ -14,11 +14,14 @@ const orig = Module._resolveFilename;
 Module._resolveFilename = function (r, ...a) {
   return r === 'electron' ? 'estub' : orig.call(this, r, ...a);
 };
+// The ipc handlers are captured rather than discarded, so the settings channel
+// can be driven with the payload preload actually builds.
+const handlers = new Map();
 require.cache['estub'] = {
   id: 'estub',
   filename: 'estub',
   loaded: true,
-  exports: { ipcMain: { handle: () => {} }, dialog: {}, shell: {} },
+  exports: { ipcMain: { handle: (channel, fn) => handlers.set(channel, fn) }, dialog: {}, shell: {} },
 };
 
 const { createApprovalGate } = require('../src/main/agents/approvalGate.js');
@@ -26,6 +29,9 @@ const { createAgentHub } = require('../src/main/agents/index.js');
 const { normaliseApprovals } = require('../src/main/agents/registry.js');
 const { PeerHub } = require('../src/main/peers.js');
 const { MessageStore } = require('../src/main/store.js');
+const { Config } = require('../src/main/config.js');
+const { buildIdentity } = require('../src/main/identity.js');
+const { createIpc } = require('../src/main/ipc.js');
 
 const fakeSafeStorage = {
   isEncryptionAvailable: () => true,
@@ -113,6 +119,102 @@ async function sharedAgent(agentHub, extra = {}) {
   });
   return agent;
 }
+
+// A hub behind the real ipc router, so the settings channel can be driven with
+// the payload preload builds rather than by calling the hub directly.
+function wiredNode(name) {
+  const dir = tmpdir(name);
+  const config = new Config(dir);
+  config.set({ displayName: name, servicePort: 0 });
+  const bus = new EventEmitter();
+  const getIdentity = () => buildIdentity(config);
+  const hub = new PeerHub({ getIdentity, bus });
+  const store = new MessageStore(dir);
+  const agentHub = createAgentHub({
+    userDataDir: dir,
+    hub,
+    bus,
+    store,
+    safeStorage: fakeSafeStorage,
+    transports: {
+      acp: ({ id, name: n }) => ({
+        id,
+        name: n,
+        kind: 'stub',
+        start: async () => ({ detail: 'ok' }),
+        send: async () => {},
+        stop: async () => {},
+      }),
+    },
+  });
+  handlers.clear();
+  createIpc({
+    config,
+    getIdentity,
+    hub,
+    bus,
+    store,
+    fileSender: { send: async () => ({}) },
+    discovery: { peers: () => [], refresh: () => {} },
+    updater: null,
+    linkStats: null,
+    pip: null,
+    agentHub,
+    outbox: { enqueue: () => {}, pendingCount: () => 0, counts: () => ({}) },
+    userDataDir: dir,
+    downloadsDir: path.join(dir, 'dl'),
+    getWindow: () => ({ isDestroyed: () => false, webContents: { send: () => {} } }),
+    revealWindow: () => {},
+    applyLoginItem: () => {},
+    onUnread: () => {},
+  });
+  const own = new Map(handlers);
+  return { dir, hub, bus, store, agentHub, call: (channel, arg) => own.get(channel)(null, arg) };
+}
+
+// ---- the settings channel ----
+
+test('a saved approvals setting survives the list, the disk and a restart', async () => {
+  // The renderer half of this is driven in agentApprovalForm.test.js — that is
+  // where the settings were being dropped. This is the other half: what the
+  // channel does with them once they arrive, end to end, with nothing stubbed
+  // below the bridge.
+  const node = wiredNode('wired');
+  const added = await node.call('lanchat:addAgent', {
+    name: 'Mac',
+    kind: 'acp',
+    config: {},
+    secret: { mode: 'none' },
+  });
+  const id = added.agent.id;
+  assert.equal(added.agent.approvals.delegated, false, 'a new agent hands nothing on');
+
+  // Exactly the payload preload builds from setAgentApprovals(id, patch).
+  const patch = { delegated: true, unattended: true, handoverMs: 20000, passcode: 'let me in' };
+  const res = await node.call('lanchat:setAgentApprovals', { id, ...patch });
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.agent.approvals, { delegated: true, unattended: true, handoverMs: 20000 });
+  assert.equal(res.agent.hasApprovalPasscode, true);
+  assert.equal('passcode' in res.agent, false, 'and the passcode never comes back');
+
+  // What a reopened form reads.
+  const listed = (await node.call('lanchat:listAgents')).find((a) => a.id === id);
+  assert.deepEqual(listed.approvals, { delegated: true, unattended: true, handoverMs: 20000 });
+  assert.equal(listed.hasApprovalPasscode, true);
+
+  // And what a fresh launch over the same directory finds.
+  const again = createAgentHub({
+    userDataDir: node.dir,
+    hub: new PeerHub({ getIdentity: () => ({ id: 'me', name: 'Me' }), bus: new EventEmitter() }),
+    bus: new EventEmitter(),
+    store: node.store,
+    safeStorage: fakeSafeStorage,
+    transports: {},
+  });
+  const after = again.list().find((a) => a.id === id);
+  assert.deepEqual(after.approvals, { delegated: true, unattended: true, handoverMs: 20000 });
+  assert.equal(after.hasApprovalPasscode, true, 'the passcode outlives the process too');
+});
 
 // ---- the gate itself ----
 

@@ -27,6 +27,23 @@ const React = require('react');
 // The real files, transformed the way vite would, so what is driven is what the
 // app mounts rather than a fixture of it.
 const cache = new Map();
+
+// An import written the way the app writes them. Vite resolves an extension for
+// you, so the components say `from '../lib/agentCopy'` and mean `agentCopy.js`
+// — and this harness used to read that path verbatim and throw ENOENT, which
+// quietly made any component importing one of them undrivable. Every extension
+// the renderer actually uses is tried, in the order vite tries them, and the
+// path is still returned untouched when it names a real file.
+const EXTENSIONS = ['', '.js', '.jsx', '/index.js', '/index.jsx'];
+function resolve(from, id) {
+  const base = path.resolve(path.dirname(from), id);
+  for (const ext of EXTENSIONS) {
+    const candidate = base + ext;
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
+  }
+  return base;
+}
+
 function load(file) {
   if (cache.has(file)) return cache.get(file);
   const esbuild = require('esbuild');
@@ -38,7 +55,7 @@ function load(file) {
   cache.set(file, mod.exports);
   new Function('module', 'exports', 'require', code)(mod, mod.exports, (id) => {
     if (id === 'react') return React;
-    if (id.startsWith('.')) return load(path.resolve(path.dirname(file), id));
+    if (id.startsWith('.')) return load(resolve(file, id));
     return require(id);
   });
   cache.set(file, mod.exports);

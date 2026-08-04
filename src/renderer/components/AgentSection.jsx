@@ -275,7 +275,7 @@ export default function AgentSection({ peers = [] }) {
           agent={editingPeers}
           peers={peers}
           onCancel={() => setEditingPeers(null)}
-          onSave={(allowed, sharing) => savePeers(editingPeers, allowed, sharing)}
+          onSave={(allowed, sharing, approvals) => savePeers(editingPeers, allowed, sharing, approvals)}
         />
       )}
 
