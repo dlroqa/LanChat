@@ -437,6 +437,95 @@ function createRemoteAgents({ hub, store, bus = null }) {
     return entry;
   }
 
+  // ---- approvals held on the owner's behalf ----
+
+  // Ask an owner for the right to answer one of their agent's permission
+  // prompts. The passcode crosses the authenticated socket once, here; what
+  // comes back is a token, and it is the token that rides every answer.
+  function claimApprovals(ownerPeerId, entry, passcode) {
+    return hub.send(ownerPeerId, {
+      type: 'agent-approval-claim',
+      agentId: entry.agentId,
+      passcode: String(passcode || ''),
+    });
+  }
+
+  // The owner's answer to that. A refusal says only that it was refused —
+  // deliberately, on their end — so there is nothing here to interpret beyond
+  // whether to keep the token and how long to wait before trying again.
+  function setApprovalToken(ownerPeerId, msg) {
+    const entry = get(ownerPeerId, msg && msg.agentId);
+    if (!entry) return null;
+    if (msg.ok === true && msg.token) {
+      entry.approvalToken = msg.token;
+      entry.approvalExpires = msg.expires || 0;
+    } else {
+      entry.approvalToken = null;
+      entry.approvalExpires = 0;
+    }
+    return { entry, ok: msg.ok === true, lockedMs: msg.lockedMs || 0 };
+  }
+
+  // Their agent is asking to run something on their machine, and they have
+  // arranged for us to be able to answer it.
+  //
+  // Shown in the agent's own thread, never in the chat with its owner: it is a
+  // question from the agent, and the thread is where its questions live. The
+  // `approvalId` is the owner's to interpret — it names nothing here — so it is
+  // carried back verbatim and never used as a key for anything local.
+  function receiveApproval(ownerPeerId, msg) {
+    if (!msg || !msg.agentId || !msg.approvalId) return null;
+    const entry = get(ownerPeerId, msg.agentId);
+    // Only for an agent this owner is actually advertising to us. An unknown id
+    // is a frame to drop, exactly as it is for a reply.
+    if (!entry) return null;
+    // And only if we asked for the right. Without this, a peer could put an
+    // authorisation prompt on somebody's screen unbidden — which is the shape of
+    // every prompt that gets clicked through without being read.
+    if (!entry.approvalToken) return null;
+    show(ownerPeerId, entry);
+    entry.pendingApproval = {
+      agentId: entry.id,
+      runId: msg.approvalId,
+      command: msg.command,
+      choices: msg.choices,
+      // What the card needs to say whose machine this runs on.
+      via: entry.name,
+      viaOwner: (hub.presenceList().find((p) => p.id === ownerPeerId) || {}).name || 'a peer',
+      remote: true,
+    };
+    return entry.pendingApproval;
+  }
+
+  // Answering one. The token goes with it rather than being assumed from the
+  // socket: the owner re-checks everything at this moment, and a token they have
+  // since revoked is how they say no.
+  function answerApproval(threadId, choice) {
+    const found = resolveThread(threadId);
+    if (!found) return false;
+    const { entry, ownerPeerId } = found;
+    const pending = entry.pendingApproval;
+    if (!pending || !entry.approvalToken) return false;
+    entry.pendingApproval = null;
+    return hub.send(ownerPeerId, {
+      type: 'agent-approval-answer',
+      agentId: entry.agentId,
+      approvalId: pending.runId,
+      choice,
+      token: entry.approvalToken,
+    });
+  }
+
+  // It was answered somewhere else, or it expired. Nothing to do but stop
+  // showing it.
+  function closeApproval(ownerPeerId, msg) {
+    const entry = get(ownerPeerId, msg && msg.agentId);
+    if (!entry || !entry.pendingApproval) return null;
+    if (msg.approvalId && entry.pendingApproval.runId !== msg.approvalId) return null;
+    entry.pendingApproval = null;
+    return { threadId: entry.id, reason: msg.reason || 'closed' };
+  }
+
   // What the agent is doing right now, relayed by its owner. Kept on the card
   // like the queue standing, so the roster and panel read it the ordinary way.
   function setActivity(ownerPeerId, msg) {
@@ -493,6 +582,11 @@ function createRemoteAgents({ hub, store, bus = null }) {
     receive,
     setStanding,
     setActivity,
+    claimApprovals,
+    setApprovalToken,
+    receiveApproval,
+    answerApproval,
+    closeApproval,
     resolveThread,
     threadFor,
     emptyRun,

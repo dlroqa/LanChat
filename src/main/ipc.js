@@ -253,6 +253,11 @@ function createIpc({
   bus.on('agent-status', (s) => emit('agent-status', s));
   bus.on('agent-delta', (d) => emit('agent-delta', d));
   bus.on('agent-approval', (a) => emit('agent-approval', a));
+  // The question is over, and not because this window answered it: a delegate
+  // did, or it ran out of time, or the run ended underneath it. Either way the
+  // card has to come down on its own — a prompt left on screen for something
+  // already decided is a prompt somebody will click.
+  bus.on('agent-approval-closed', (a) => emit('agent-approval-closed', a));
   // Addressed to the thread that is waiting on the run rather than to the agent,
   // which are the same id unless a session asked. See deliver() in agents/index.js.
   bus.on('agent-typing', ({ agentId, threadId, isTyping }) =>
@@ -463,6 +468,52 @@ function createIpc({
         if (agentHub) agentHub.routeSummon(from, msg.agentId);
         break;
       }
+      // A peer offering a passcode for the right to answer one of our agents'
+      // permission prompts. Every gate — reach, delegation, the passcode itself
+      // and its lockout — is applied inside claimApprovals, in one place, for
+      // the same reason the three routing gates are.
+      case 'agent-approval-claim': {
+        if (agentHub) agentHub.claimApprovals(from, msg.agentId, msg.passcode);
+        break;
+      }
+      // An owner's answer to a claim of ours.
+      case 'agent-approval-grant': {
+        const result = remoteAgents && remoteAgents.setApprovalToken(from, msg);
+        if (result) {
+          emit('agent-approval-grant', {
+            threadId: result.entry.id,
+            ok: result.ok,
+            lockedMs: result.lockedMs,
+          });
+        }
+        break;
+      }
+      // Their agent wants to run something on their machine, and they have
+      // given us the right to say yes or no. Filed as an approval on the agent's
+      // own thread, exactly as one of ours is — the window draws the same card.
+      case 'agent-approval-ask': {
+        const req = remoteAgents && remoteAgents.receiveApproval(from, msg);
+        if (req) emit('agent-approval', req);
+        break;
+      }
+      // Somebody's answer to one of ours, from a peer we handed the right to.
+      // Nothing waits on the result — the run reports itself the ordinary way —
+      // but the promise is still caught: an unhandled rejection off the wire is
+      // a frame from a peer being able to end the main process.
+      case 'agent-approval-answer': {
+        if (agentHub) {
+          agentHub
+            .answerRemoteApproval(from, msg)
+            .catch((err) => console.error('[ipc] delegated approval failed:', err.message));
+        }
+        break;
+      }
+      // It was answered at the owner's machine, or it ran out of time.
+      case 'agent-approval-close': {
+        const closed = remoteAgents && remoteAgents.closeApproval(from, msg);
+        if (closed) emit('agent-approval-closed', { agentId: closed.threadId, reason: closed.reason });
+        break;
+      }
       // A run of ours that finished with nothing in it, on a question this peer
       // asked. Resolved through remoteAgents rather than trusted: get() only
       // returns an agent this peer actually advertised to us, so nobody can make a
@@ -658,9 +709,41 @@ function createIpc({
     }
   });
 
-  ipcMain.handle('lanchat:answerAgentApproval', (_e, { agentId, runId, choice }) =>
-    agentHub.answerApproval(agentId, runId, choice)
-  );
+  // Answering a permission prompt. Two destinations behind one channel, decided
+  // by the id: our own agent's transport, or the owner of somebody else's agent
+  // who handed us the right to answer for them. The window asks the same way
+  // either way — which of the two it is, is not something a card should have to
+  // know.
+  ipcMain.handle('lanchat:answerAgentApproval', (_e, { agentId, runId, choice }) => {
+    if (remoteAgents && remoteAgents.isRemoteAgentId(agentId)) {
+      return remoteAgents.answerApproval(agentId, choice);
+    }
+    return agentHub.answerApproval(agentId, runId, choice);
+  });
+
+  // Asking an owner for the right to answer for them. The passcode goes out on
+  // the authenticated socket and is never written down at either end — main
+  // holds it only long enough to put it in the frame.
+  ipcMain.handle('lanchat:claimAgentApprovals', (_e, { threadId, passcode } = {}) => {
+    const found = remoteAgents && remoteAgents.resolveThread(threadId);
+    if (!found) return { ok: false, error: 'That agent is not being shared with you.' };
+    const sent = remoteAgents.claimApprovals(found.ownerPeerId, found.entry, passcode);
+    // Only that it was asked. Whether it was granted comes back as its own
+    // frame, because the owner decides it and may take a lockout to say so.
+    return { ok: sent, ...(sent ? {} : { error: 'That peer is not connected.' }) };
+  });
+
+  // The owner's side of the same feature: who may answer for this agent, how
+  // soon, and the passcode that proves it. One way only, like an agent's key.
+  ipcMain.handle('lanchat:setAgentApprovals', async (_e, { id, ...patch } = {}) => {
+    try {
+      const agent = await agentHub.setApprovals(id, patch);
+      if (!agent) return { ok: false, error: 'No such agent.' };
+      return { ok: true, agent };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
 
   ipcMain.handle('lanchat:stopAgentRun', (_e, { agentId }) => agentHub.stopRun(agentId));
 

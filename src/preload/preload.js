@@ -24,6 +24,12 @@ contextBridge.exposeInMainWorld('lanchat', {
   listAgentProfiles: (id, draft) => invoke('lanchat:listAgentProfiles', { id, draft }),
   answerAgentApproval: (agentId, runId, choice) =>
     invoke('lanchat:answerAgentApproval', { agentId, runId, choice }),
+  // Who may answer this agent's permission prompts besides you, and the passcode
+  // that proves it. The passcode travels one way only, exactly like an agent's
+  // key: it can be set here and never read back.
+  setAgentApprovals: (id, patch) => invoke('lanchat:setAgentApprovals', { id, ...patch }),
+  // The other end of it: asking a peer for the right to answer for their agent.
+  claimAgentApprovals: (threadId, passcode) => invoke('lanchat:claimAgentApprovals', { threadId, passcode }),
   stopAgentRun: (agentId) => invoke('lanchat:stopAgentRun', { agentId }),
 
   // Developer panel gate. Only a boolean verdict ever comes back — the hash

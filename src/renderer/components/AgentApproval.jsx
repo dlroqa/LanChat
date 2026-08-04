@@ -1,6 +1,6 @@
 import React from 'react';
 
-// An agent is asking permission to run something on this machine.
+// An agent is asking permission to run something.
 //
 // This is rendered as a distinct card rather than a chat bubble, and deliberately
 // so: the text of a message is attacker-influenced (a remote peer may have
@@ -9,22 +9,42 @@ import React from 'react';
 // framing, and the fact that only real approval events produce it, is what makes
 // the difference visible.
 //
-// Only the local user ever sees this. A peer may have asked the question, but
-// authorisation is never delegated across the network.
+// Whose question it is depends on which machine the agent runs on, and the card
+// has to say so rather than assume. Four cases, and the hint line is the whole
+// difference between them:
+//
+//   * ours, nobody else may answer — the original, and still the default;
+//   * ours, and a named peer may answer it in a moment;
+//   * ours, and a named peer may answer it right now (unattended sharing);
+//   * somebody else's, and they have handed us the right to answer for them.
+//
+// The last one is the one worth being loud about. Clicking Allow there runs a
+// command on a machine that is not this one, and a card that looked identical to
+// the local case would be inviting somebody to approve something for a computer
+// they are not sitting at.
 
 export default function AgentApproval({ request, agentName, onAnswer }) {
   if (!request) return null;
   const choices = normaliseChoices(request.choices);
+  const remote = request.remote === true;
+  const delegates = Array.isArray(request.delegates) ? request.delegates : [];
 
   return (
-    <div className="agent-approval" role="alertdialog" aria-label={`${agentName} is requesting permission`}>
+    <div
+      className={`agent-approval${remote ? ' agent-approval-remote' : ''}`}
+      role="alertdialog"
+      aria-label={`${agentName} is requesting permission`}
+    >
       <div className="agent-approval-head">
         <span className="agent-approval-icon" aria-hidden="true">
           !
         </span>
         <div>
-          <b>{agentName}</b> wants to run something on this device.
-          <div className="hint">Only you can answer this. Peers cannot approve it.</div>
+          <b>{agentName}</b>{' '}
+          {remote
+            ? `wants to run something on ${request.viaOwner ? `${request.viaOwner}'s` : 'their'} device.`
+            : 'wants to run something on this device.'}
+          <div className="hint">{hint({ remote, request, delegates })}</div>
         </div>
       </div>
 
@@ -43,6 +63,23 @@ export default function AgentApproval({ request, agentName, onAnswer }) {
       </div>
     </div>
   );
+}
+
+// The one line that says whose decision this is. Written from what the event
+// actually carries rather than from a setting the window would have to be told
+// separately, so it cannot claim a peer may answer when main has not offered it
+// to one.
+function hint({ remote, request, delegates }) {
+  if (remote) {
+    const owner = request.viaOwner || 'its owner';
+    return `Answering on behalf of ${owner}. Whatever you choose runs on their device, not yours.`;
+  }
+  if (!delegates.length) return 'Only you can answer this. Peers cannot approve it.';
+  const names = delegates.map((d) => d.name).join(', ');
+  const seconds = Math.round((request.handoverMs || 0) / 1000);
+  return seconds > 0
+    ? `You can answer this. If you do not, ${names} may answer it in ${seconds}s.`
+    : `You can answer this, and so can ${names} — whoever gets there first.`;
 }
 
 // The HTTP transport reports choices as plain strings, ACP as {id, label}

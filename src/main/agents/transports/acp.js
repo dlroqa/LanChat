@@ -30,6 +30,27 @@ const MAX_PROTOCOL_VERSION = Math.max(...SUPPORTED_PROTOCOL_VERSIONS);
 
 const DEFAULT_TIMEOUT_MS = 180000;
 
+// How long a permission request may sit unanswered before it is refused for us.
+//
+// There was no clock on one at all. The only timer was the one below, on the
+// outstanding `session/prompt` — which kept running while the request sat
+// parked, so a prompt waiting on a human reliably "timed out" after three
+// minutes and told the asker the transport had failed. It had not: nobody had
+// answered yet. Worse, the parked JSON-RPC id was never replied to, so the agent
+// went on waiting forever for an answer that could no longer arrive.
+//
+// So the two clocks are separated. The prompt's budget is paused for as long as
+// a question is on somebody's screen, and the question gets a budget of its own,
+// generous enough to cover somebody being away from their desk. When it runs
+// out the agent is told `cancelled` — which unblocks it — and the run ends
+// saying what actually happened.
+const DEFAULT_APPROVAL_TIMEOUT_MS = 10 * 60 * 1000;
+
+// What an unanswered request leaves behind, when the run produced nothing else.
+// Deliberately not phrased as a fault: nothing failed, a question went
+// unanswered and the safe reading of silence is no.
+const UNANSWERED = 'Nobody answered the permission request in time, so it was refused.';
+
 // Enough of the agent's stderr to explain a failure, and no more. Kept for the
 // owner only: it is written by a program on this machine and routinely names
 // paths, hosts and configuration, so it travels as `detail` and is never
@@ -45,6 +66,8 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
   const args = Array.isArray(config.args) && config.args.length ? config.args.map(String) : ['acp'];
   const cwd = config.cwd || process.cwd();
   const budget = timeoutMs || DEFAULT_TIMEOUT_MS;
+  const approvalBudget =
+    Number(config.approvalTimeoutMs) > 0 ? Number(config.approvalTimeoutMs) : DEFAULT_APPROVAL_TIMEOUT_MS;
 
   let child = null;
   let sessionId = null;
@@ -52,31 +75,101 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
   let buffer = '';
   let stderrTail = '';
   let authMethods = [];
-  const pending = new Map(); // json-rpc id -> {resolve, reject}
-  const openApprovals = new Map(); // our approval id -> json-rpc request id
+  const pending = new Map(); // json-rpc id -> {resolve, reject, timer, method}
+  const openApprovals = new Map(); // our approval id -> {rpcId, timer}
   let liveHandlers = null; // handlers for the in-flight prompt
+  // Requests that went unanswered during the current run. Counted rather than
+  // flagged: one prompt can raise several.
+  let unanswered = 0;
 
   function write(obj) {
     if (!child || child.killed) throw new Error('The agent process is not running.');
     child.stdin.write(`${JSON.stringify(obj)}\n`);
   }
 
+  // Every call is on the clock, except while a human is being asked something.
+  //
+  // Held and released together rather than per call: what is being waited on is
+  // a person, and every outstanding call is waiting on them equally. Releasing
+  // restarts the budget from full, which is the point — a call that spent ten
+  // minutes parked has had none of its own time.
+  function holdBudgets() {
+    for (const entry of pending.values()) {
+      if (!entry.timer) continue;
+      clearTimeout(entry.timer);
+      entry.timer = null;
+    }
+  }
+
+  function releaseBudgets() {
+    if (openApprovals.size) return; // somebody is still being asked
+    for (const [rpcId, entry] of pending) {
+      if (entry.timer) continue;
+      entry.timer = setTimeout(() => {
+        if (pending.delete(rpcId)) entry.reject(new Error(`ACP call '${entry.method}' timed out.`));
+      }, budget);
+    }
+  }
+
+  // Empty the call table, cancelling each entry's clock as it goes. The timers
+  // used to be dropped rather than cleared, which left a three-minute handle
+  // alive per abandoned call for no purpose; now that a paused call can hold one
+  // for far longer, clearing them is the difference between tidy and a leak.
+  // `failure` is null when nothing is waiting to be told (stop()).
+  function failPending(failure) {
+    for (const [, entry] of pending) {
+      if (entry.timer) clearTimeout(entry.timer);
+      if (failure) entry.reject(failure);
+    }
+    pending.clear();
+  }
+
   function call(method, params) {
     const rpcId = nextId++;
     return new Promise((resolve, reject) => {
-      pending.set(rpcId, { resolve, reject });
-      const timer = setTimeout(() => {
-        if (pending.delete(rpcId)) reject(new Error(`ACP call '${method}' timed out.`));
-      }, budget);
-      pending.get(rpcId).timer = timer;
+      const entry = { resolve, reject, method, timer: null };
+      pending.set(rpcId, entry);
+      // Started only if nothing is currently waiting on a human. A call made
+      // while a question is open starts paused, exactly as one paused mid-flight
+      // does, rather than being the one call the hold does not cover.
+      if (!openApprovals.size) {
+        entry.timer = setTimeout(() => {
+          if (pending.delete(rpcId)) reject(new Error(`ACP call '${method}' timed out.`));
+        }, budget);
+      }
       try {
         write({ jsonrpc: '2.0', id: rpcId, method, params: params || {} });
       } catch (err) {
-        clearTimeout(timer);
+        if (entry.timer) clearTimeout(entry.timer);
         pending.delete(rpcId);
         reject(err);
       }
     });
+  }
+
+  // Reply to a parked permission request and take it off the books, whatever
+  // the reason. Every path out of an open approval goes through here: answered,
+  // expired, or the run it belonged to ending underneath it.
+  //
+  // Writing may fail — the agent may already be gone — and that is not a
+  // failure worth propagating: the request dies with the process either way.
+  function closeApproval(approvalId, choice, reason) {
+    const held = openApprovals.get(approvalId);
+    if (!held) return false;
+    openApprovals.delete(approvalId);
+    if (held.timer) clearTimeout(held.timer);
+    const outcome =
+      choice === 'deny' || choice === 'cancelled'
+        ? { outcome: 'cancelled' }
+        : { outcome: 'selected', optionId: choice };
+    try {
+      write({ jsonrpc: '2.0', id: held.rpcId, result: { outcome } });
+    } catch {}
+    // Whoever is showing this question needs to know it is over — the local
+    // card, and any peer the owner delegated it to.
+    if (reason) liveHandlers?.onApprovalClosed?.({ runId: approvalId, reason });
+    releaseBudgets();
+    return true;
   }
 
   // Agent -> client notifications and requests.
@@ -111,7 +204,16 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
         kind: o.kind,
       }));
       const approvalId = `acp-${msg.id}`;
-      openApprovals.set(approvalId, msg.id);
+      // The question is now the thing being waited on, so the run stops being
+      // charged for the wait.
+      holdBudgets();
+      const timer = setTimeout(() => {
+        unanswered += 1;
+        closeApproval(approvalId, 'deny', 'expired');
+      }, approvalBudget);
+      // Never let an unanswered question hold the process open on its own.
+      if (typeof timer.unref === 'function') timer.unref();
+      openApprovals.set(approvalId, { rpcId: msg.id, timer });
       liveHandlers?.onApproval?.({
         runId: approvalId,
         command: msg.params?.toolCall?.title || msg.params?.toolCall?.rawInput || 'a tool call',
@@ -180,15 +282,20 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
       // command name is local, so it travels as detail.
       const failure =
         err.code === 'ENOENT' ? localError('The agent could not be started.', notFoundMessage(file)) : err;
-      for (const [, entry] of pending) entry.reject(failure);
-      pending.clear();
+      failPending(failure);
     });
     child.on('exit', () => {
       child = null;
       sessionId = null;
+      // Any question still on a screen died with the process. Taken off the
+      // books here so nothing can be answered into a session that is gone, and
+      // so the cards showing it come down rather than waiting out a ten-minute
+      // clock for an agent that no longer exists.
+      for (const [approvalId] of [...openApprovals]) {
+        closeApproval(approvalId, 'deny', 'ended');
+      }
       const failure = localError('The agent stopped unexpectedly.', stderrTail.trim() || null);
-      for (const [, entry] of pending) entry.reject(failure);
-      pending.clear();
+      failPending(failure);
     });
 
     const init = await call('initialize', {
@@ -243,6 +350,7 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
     // session/prompt resolves with only a stop reason, so the reply text has to
     // be accumulated from the session/update chunks as they arrive.
     let collected = '';
+    unanswered = 0;
     liveHandlers = {
       ...handlers,
       onDelta: (d) => {
@@ -258,32 +366,39 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
       // limit, cancelled. Saying which is far better than an empty bubble, but
       // only when there is genuinely nothing to show: a reply that did arrive
       // is never second-guessed by the reason it stopped.
-      handlers.onDone?.({ text: answer || describeStop(result?.stopReason) });
+      //
+      // A question nobody answered outranks the stop reason. The agent will
+      // report `cancelled`, which is true and useless — it says the run was
+      // called off without saying that what called it off was a prompt sitting
+      // on a screen with nobody in front of it.
+      handlers.onDone?.({
+        text: answer || (unanswered ? UNANSWERED : describeStop(result?.stopReason)),
+      });
     } catch (err) {
       handlers.onError?.(err);
     } finally {
+      // Whatever ended the run ends its open questions with it. Without this a
+      // request outlives the thing it was asked for, and an answer arriving late
+      // would write a JSON-RPC result against a run that is already over.
+      for (const [approvalId] of [...openApprovals]) {
+        closeApproval(approvalId, 'deny', 'ended');
+      }
       liveHandlers = null;
     }
   }
 
+  // Somebody answered. Returning false rather than throwing is how this says the
+  // question is no longer open — expired, already answered, or belonging to a run
+  // that has since ended — which is what stops a late click from writing a
+  // JSON-RPC result for an id that means nothing any more.
   async function answerApproval(approvalId, choice) {
-    const rpcId = openApprovals.get(approvalId);
-    if (rpcId === undefined) return false;
-    openApprovals.delete(approvalId);
-    const outcome =
-      choice === 'deny' || choice === 'cancelled'
-        ? { outcome: 'cancelled' }
-        : { outcome: 'selected', optionId: choice };
-    write({ jsonrpc: '2.0', id: rpcId, result: { outcome } });
-    return true;
+    return closeApproval(approvalId, choice, null);
   }
 
   async function stop() {
     // Deny anything still waiting, so the agent unblocks rather than hanging.
-    for (const [approvalId] of openApprovals) {
-      try {
-        await answerApproval(approvalId, 'deny');
-      } catch {}
+    for (const [approvalId] of [...openApprovals]) {
+      closeApproval(approvalId, 'deny', 'stopped');
     }
     if (sessionId && child) {
       try {
@@ -297,7 +412,7 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
     }
     child = null;
     sessionId = null;
-    pending.clear();
+    failPending(null);
   }
 
   return { id, name, kind: 'acp', start, send, stop, answerApproval };

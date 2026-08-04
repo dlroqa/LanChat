@@ -164,6 +164,10 @@ export default function App() {
   const [group, setGroup] = useState({ status: 'idle', participants: [], count: 0 });
   const [agentStatus, setAgentStatus] = useState({}); // agentId -> {status, detail}
   const [approvals, setApprovals] = useState({}); // agentId -> pending approval request
+  // Where our request to answer for somebody else's agent stands, by thread:
+  // granted, refused, or refused with a wait attached. Never a passcode — that
+  // is typed, sent, and forgotten.
+  const [approvalClaims, setApprovalClaims] = useState({});
   const [awaiting, setAwaiting] = useState({}); // agent thread -> we asked and have not heard back
   // What a session currently has out with its agents, keyed by session id.
   //
@@ -822,7 +826,21 @@ export default function App() {
           // counsel are still writing.
           if (payload.peerId.startsWith('agent:') || isSessionThread(payload.peerId)) {
             clearStream(payload.peerId, payload.agentId);
-            setApprovals((a) => (a[payload.peerId] ? { ...a, [payload.peerId]: null } : a));
+            // An approval is stored under the agent's own id, but the thread an
+            // answer arrives on is often not that id: a peer's question is
+            // answered in a delegate thread (`agent:<id>#<peer>`), and a
+            // session's in the session. Clearing by the thread alone therefore
+            // missed exactly the runs that raise approvals most, and left a card
+            // on screen for a run that had already finished. Both ways of
+            // naming the agent are cleared.
+            const owners = [payload.peerId.split('#')[0], payload.agentId].filter(Boolean);
+            setApprovals((a) => {
+              const stale = owners.filter((id) => a[id]);
+              if (!stale.length) return a;
+              const next = { ...a };
+              for (const id of stale) next[id] = null;
+              return next;
+            });
           }
           // An answer — or a refusal explaining the queue — ends the wait. Not in
           // a session, where the wait is the whole round and one answer of three
@@ -925,9 +943,28 @@ export default function App() {
           setAuthFailures((f) => ({ ...f, [payload.peerId || payload.address]: payload.reason }));
           break;
         case 'agent-approval':
-          // Never auto-answered — it sits until the local user decides.
+          // Never auto-answered — it sits until somebody decides. Usually that is
+          // the person at this machine; when `remote` is set it is an agent on a
+          // peer's machine whose owner handed us the right to answer for them.
           setApprovals((a) => ({ ...a, [payload.agentId]: payload }));
           setSelectedId(payload.agentId);
+          break;
+        // Decided elsewhere, or out of time. The card comes down on its own — a
+        // prompt left up for something already settled is a prompt that gets
+        // clicked, and the click would go nowhere.
+        case 'agent-approval-closed':
+          setApprovals((a) => (a[payload.agentId] ? { ...a, [payload.agentId]: null } : a));
+          break;
+        // An owner's answer to our asking for the right to approve for them.
+        case 'agent-approval-grant':
+          setApprovalClaims((c) => ({
+            ...c,
+            [payload.threadId]: {
+              ok: payload.ok === true,
+              lockedMs: payload.lockedMs || 0,
+              at: Date.now(),
+            },
+          }));
           break;
         case 'agent-delta': {
           // Live typing; the authoritative reply arrives as a normal 'chat' event.
@@ -2236,6 +2273,8 @@ export default function App() {
                 typing={Boolean(typing[selectedId])}
                 streaming={selectedStreams.length > 0}
                 commits={selectedCommits}
+                approvalClaim={approvalClaims[selectedId]}
+                onClaimApprovals={(threadId, passcode) => api.claimAgentApprovals(threadId, passcode)}
               />
             }
           />

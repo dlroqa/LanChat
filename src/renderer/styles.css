@@ -5737,6 +5737,42 @@ kbd {
   overflow-y: auto;
 }
 
+/* A prompt for a machine that is not this one. A modifier rather than a second
+   card — it is the same question, asked of somebody standing further away — but
+   the accent moves off the warning colour and onto the danger one, because
+   "allow" here spends somebody else's trust rather than your own. */
+.agent-approval-remote {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface));
+}
+
+.agent-approval-remote .agent-approval-icon {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* ---- answering for somebody else's agent ---------------------------------- */
+
+.conn-claim-btn {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.conn-claim {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.conn-claim-refused {
+  color: var(--danger);
+}
+
 /* ---- modal chrome ---------------------------------------------------------
    Title row with a persistent close affordance. Modals previously offered no
    visible escape route beyond a Cancel button or a backdrop click. */

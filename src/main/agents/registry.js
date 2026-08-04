@@ -18,6 +18,35 @@ const REMOTE_AGENT_ID_PREFIX = 'remote-agent:';
 const DELEGATE_SEPARATOR = '#';
 const KINDS = Object.freeze(['http', 'command', 'acp', 'ssh']);
 
+// Who may answer this agent's approval prompts besides the owner, and when.
+// Every field is off or inert by default, so an agent that predates this — or
+// one added without thinking about it — keeps the old rule: approvals are the
+// owner's alone. See approvalGate.js for the passcode that backs `delegated`.
+//
+// `handoverMs` is how long the owner is given to answer before the notice is
+// also offered to a holder. It is a delay, never a deadline: the local card
+// stays until it is answered either way.
+const DEFAULT_APPROVALS = Object.freeze({ delegated: false, unattended: false, handoverMs: 20000 });
+
+// Long enough to walk back to the machine, short enough to be worth having.
+const MIN_HANDOVER_MS = 0;
+const MAX_HANDOVER_MS = 10 * 60 * 1000;
+
+function normaliseApprovals(patch, base = DEFAULT_APPROVALS) {
+  const merged = { ...DEFAULT_APPROVALS, ...base, ...(patch && typeof patch === 'object' ? patch : {}) };
+  const ms = Number(merged.handoverMs);
+  return {
+    delegated: merged.delegated === true,
+    // Unattended is meaningless without delegation and would be a trap to store
+    // on its own: an owner who switched delegation off and later back on would
+    // find the wider setting still armed from months ago.
+    unattended: merged.delegated === true && merged.unattended === true,
+    handoverMs: Number.isFinite(ms)
+      ? Math.min(Math.max(Math.round(ms), MIN_HANDOVER_MS), MAX_HANDOVER_MS)
+      : DEFAULT_APPROVALS.handoverMs,
+  };
+}
+
 function isAgentId(id) {
   return typeof id === 'string' && id.startsWith(AGENT_ID_PREFIX);
 }
@@ -118,6 +147,11 @@ class AgentRegistry {
       // agent added before these existed stays exactly as private as it was.
       networkWide: a.networkWide === true,
       directChat: a.directChat === true,
+      // Whether approvals may be handed to a named peer, and how. Booleans and
+      // a number — the passcode itself lives in agent-approvals.json and never
+      // appears here. `hasApprovalPasscode` is filled in by the hub, which is
+      // the half that holds the gate.
+      approvals: normaliseApprovals(a.approvals),
       hasSecret: Boolean(a.secret && a.secret.mode && a.secret.mode !== 'none'),
       secretMode: (a.secret && a.secret.mode) || 'none',
       // The variable name is not itself sensitive — only the value it resolves
@@ -185,6 +219,11 @@ class AgentRegistry {
       // for explicitly, so a newly connected agent starts local-only.
       networkWide: draft.networkWide === true,
       directChat: draft.directChat === true,
+      // Never inherited from a draft either, and for a stronger version of the
+      // same reason: a new agent that could hand its approvals to a peer the
+      // moment it was added would be handing over the one thing sharing has
+      // always kept back.
+      approvals: { ...DEFAULT_APPROVALS },
       enabled: draft.enabled !== false,
       createdAt: Date.now(),
     };
@@ -215,6 +254,11 @@ class AgentRegistry {
     if (patch.allowedPeers !== undefined) {
       agent.allowedPeers = Array.isArray(patch.allowedPeers) ? patch.allowedPeers.filter(Boolean) : [];
     }
+    // Merged onto what is already there rather than replacing it, so a caller
+    // that means to move one switch does not silently reset the other two.
+    if (patch.approvals !== undefined) {
+      agent.approvals = normaliseApprovals(patch.approvals, agent.approvals);
+    }
     // Only reseal when a new secret is actually supplied, so that editing an
     // agent does not silently wipe a key the user did not retype.
     if (patch.secret !== undefined) agent.secret = this.sealSecret(patch.secret);
@@ -233,6 +277,8 @@ class AgentRegistry {
 
 module.exports = {
   AgentRegistry,
+  DEFAULT_APPROVALS,
+  normaliseApprovals,
   isAgentId,
   newAgentId,
   delegateIdFor,

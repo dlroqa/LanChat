@@ -44,7 +44,17 @@ const QUALITY = {
   unreachable: { label: 'Not responding', color: 'var(--warn)', bars: 0 },
 };
 
-export default function ConnectionPanel({ peer, stats, agentStatus, awaiting, typing, streaming, commits }) {
+export default function ConnectionPanel({
+  peer,
+  stats,
+  agentStatus,
+  awaiting,
+  typing,
+  streaming,
+  commits,
+  approvalClaim,
+  onClaimApprovals,
+}) {
   if (!peer) {
     return (
       <EmptyState title="No conversation selected">
@@ -53,7 +63,16 @@ export default function ConnectionPanel({ peer, stats, agentStatus, awaiting, ty
     );
   }
 
-  if (peer.kind === 'agent') return <AgentPanel peer={peer} status={agentStatus} awaiting={awaiting} />;
+  if (peer.kind === 'agent')
+    return (
+      <AgentPanel
+        peer={peer}
+        status={agentStatus}
+        awaiting={awaiting}
+        approvalClaim={approvalClaim}
+        onClaimApprovals={onClaimApprovals}
+      />
+    );
 
   if (peer.kind === 'session') {
     return (
@@ -101,7 +120,7 @@ export default function ConnectionPanel({ peer, stats, agentStatus, awaiting, ty
 // no tooltip, because a tooltip repeating a word you can already read is noise.
 const CUT_RISK = 80;
 
-function AgentPanel({ peer, status, awaiting }) {
+function AgentPanel({ peer, status, awaiting, approvalClaim, onClaimApprovals }) {
   // Three sources, all of them real: the bus for an agent hosted here, the
   // owner's relay for a shared one, and simply having asked and not yet heard
   // back. The last is what keeps the panel honest when a relay frame is slow or
@@ -166,9 +185,15 @@ function AgentPanel({ peer, status, awaiting }) {
         {peer.delegate
           ? `A record of what ${peer.viaName} has asked this agent. Reply to it from your own thread with the agent.`
           : peer.remote
-            ? `Reached through ${peer.viaName}, who approves anything it wants to run. Everyone sharing it takes turns.`
-            : 'Runs on this machine. You approve every tool call it wants to make — that is never handed to a peer.'}
+            ? `Reached through ${peer.viaName}, on their machine. Everyone sharing it takes turns.`
+            : 'Runs on this machine. Every tool call it wants to make is yours to approve, unless you have handed that on.'}
       </div>
+
+      {/* Answering for somebody else's machine. Offered only for an agent that
+          is actually somebody else's, and it does nothing on its own: the
+          passcode is checked at their end, by them, and a refusal here says only
+          that it was refused. */}
+      {peer.remote && <ApprovalClaim peer={peer} claim={approvalClaim} onClaim={onClaimApprovals} />}
 
       {/* The one thing worth saying to somebody standing in a queue: you do not
           have to watch it. Only shown while it is true, and it stops being true
@@ -179,6 +204,80 @@ function AgentPanel({ peer, status, awaiting }) {
           your queries.
         </div>
       )}
+    </div>
+  );
+}
+
+// Asking an owner for the right to answer their agent's permission prompts.
+//
+// This exists for one situation: their machine is sharing an agent with nobody
+// in front of it, and the agent stops to ask whether it may run something. The
+// only person there to answer is whoever asked the question — here. So the owner
+// sets a passcode, names who may use it, and this is where it is entered.
+//
+// The passcode is typed, sent and forgotten. It is never held in this component
+// beyond the keystroke, never stored, and the answer that comes back says only
+// whether it worked — the owner's end decides that, and deliberately gives no
+// more away than the fact of a refusal.
+function ApprovalClaim({ peer, claim, onClaim }) {
+  const [open, setOpen] = useState(false);
+  const [passcode, setPasscode] = useState('');
+  const granted = claim && claim.ok === true;
+
+  if (granted) {
+    return (
+      <div className="conn-note conn-note-held">
+        You can answer this agent's approval prompts for {peer.viaName}. It ends when either of you
+        disconnects.
+      </div>
+    );
+  }
+
+  if (!open) {
+    return (
+      <button className="btn conn-claim-btn" onClick={() => setOpen(true)}>
+        Answer approvals for {peer.viaName}…
+      </button>
+    );
+  }
+
+  const submit = () => {
+    if (!passcode) return;
+    onClaim?.(peer.id, passcode);
+    setPasscode('');
+    setOpen(false);
+  };
+
+  return (
+    <div className="conn-claim">
+      <label className="hint" htmlFor="approval-passcode">
+        {peer.viaName} can give you a passcode that lets you answer this agent's prompts while they are away.
+      </label>
+      <input
+        id="approval-passcode"
+        className="input"
+        type="password"
+        autoComplete="off"
+        value={passcode}
+        placeholder="Approval passcode"
+        onChange={(e) => setPasscode(e.target.value)}
+        onKeyDown={(e) => e.key === 'Enter' && submit()}
+      />
+      {claim && claim.ok === false && (
+        <div className="hint conn-claim-refused" role="status">
+          {claim.lockedMs
+            ? `Refused. Try again in ${Math.ceil(claim.lockedMs / 1000)}s.`
+            : 'Refused. Check the passcode, or ask them whether they have switched this on.'}
+        </div>
+      )}
+      <div className="row" style={{ gap: 8 }}>
+        <button className="btn primary" onClick={submit} disabled={!passcode}>
+          Ask
+        </button>
+        <button className="btn" onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }

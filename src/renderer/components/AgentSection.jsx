@@ -192,11 +192,15 @@ export default function AgentSection({ peers = [] }) {
     setResult({ id: agent.id, ok: res.ok, text: res.detail });
   }
 
-  async function savePeers(agent, allowed, sharing) {
+  async function savePeers(agent, allowed, sharing, approvals) {
     // Reach and the allowlist are stored separately on purpose: switching
     // network-wide off must leave the ticked list intact and governing again.
     await window.lanchat.setAgentPeers(agent.id, allowed);
     await window.lanchat.setAgentSharing(agent.id, sharing);
+    // Last, and after reach: handing approvals to a peer who cannot reach the
+    // agent is meaningless, and main prunes holders against the allowlist as it
+    // saves — so this has to see the list that has already been written.
+    if (approvals) await window.lanchat.setAgentApprovals(agent.id, approvals);
     setAgents(await window.lanchat.listAgents());
     setEditingPeers(null);
   }
@@ -537,6 +541,13 @@ function PeerPicker({ agent, peers, onSave, onCancel }) {
   const [allowed, setAllowed] = useState(agent.allowedPeers || []);
   const [networkWide, setNetworkWide] = useState(agent.networkWide === true);
   const [directChat, setDirectChat] = useState(agent.directChat === true);
+  const settings = agent.approvals || {};
+  const [delegated, setDelegated] = useState(settings.delegated === true);
+  const [unattended, setUnattended] = useState(settings.unattended === true);
+  const [handover, setHandover] = useState(Math.round((settings.handoverMs ?? 20000) / 1000));
+  // Typed once and sent once. Never read back — main only ever says whether
+  // there is one, exactly as it does for an agent's key.
+  const [passcode, setPasscode] = useState('');
   const humans = peers.filter((p) => p.kind !== 'agent');
 
   // Widening reach to everyone is the broadest grant in the app, so it is the
@@ -551,9 +562,28 @@ function PeerPicker({ agent, peers, onSave, onCancel }) {
         'Every LanChat user who can reach this machine will be able to ask it to do things, ' +
         'not just the people you have ticked. Your ticked list is kept and takes over again ' +
         'the moment you switch this back off.\n\n' +
-        'You still approve every tool call it wants to run — that is never handed to a peer.'
+        'You still approve every tool call it wants to run, unless you have switched approvals ' +
+        'over to a passcode holder below.'
     );
     if (ok) setNetworkWide(true);
+  }
+
+  // The other grant that asks before it takes effect, and it asks harder,
+  // because it widens twice over: it skips the wait that would have let you
+  // answer first, and it opens up runs *you* started as well as theirs.
+  function toggleUnattended() {
+    if (unattended) {
+      setUnattended(false);
+      return;
+    }
+    const ok = window.confirm(
+      `Let approval holders answer for “${agent.name}” while you are away?\n\n` +
+        'Prompts go to them immediately instead of waiting for you — and prompts from runs you ' +
+        'started yourself, not just theirs, are offered to them too.\n\n' +
+        'They can choose “Always allow”, which widens what this agent may do on this machine. ' +
+        'Everything they decide is written into the agent’s thread here.'
+    );
+    if (ok) setUnattended(true);
   }
 
   return (
@@ -561,9 +591,9 @@ function PeerPicker({ agent, peers, onSave, onCancel }) {
       <div className="field">
         <label>Who may message {agent.name}?</label>
         <div className="hint">
-          Anyone with access can ask this agent to do things. Only you can approve a tool call it wants to run
-          — that is never delegated to a peer. Their conversation with it stays in its own thread, so your
-          chat with them stays clean.
+          Anyone with access can ask this agent to do things. Approving a tool call it wants to run is yours
+          alone, unless you hand it on below. Their conversation with it stays in its own thread, so your chat
+          with them stays clean.
         </div>
       </div>
 
@@ -620,8 +650,114 @@ function PeerPicker({ agent, peers, onSave, onCancel }) {
         ))}
       </div>
 
+      {/* Handing approvals on. Its own block, below reach, because it only means
+          anything for peers who already have reach — and because it is the one
+          setting here that lets somebody else decide what runs on this machine. */}
+      <div className="field" style={{ marginTop: 16 }}>
+        <label>Approvals</label>
+        <div className="hint">
+          When this agent asks to run something, you are asked first — always. This is how you also let a peer
+          answer, so a shared agent does not stall on an empty chair.
+        </div>
+      </div>
+
+      <label className="agent-share-row" onClick={(e) => e.preventDefault()}>
+        <button
+          type="button"
+          className={`toggle ${delegated ? 'on' : ''}`}
+          onClick={() => {
+            setDelegated((v) => !v);
+            if (delegated) setUnattended(false);
+          }}
+          aria-pressed={delegated}
+          aria-label="Let a peer answer approval prompts"
+        />
+        <div>
+          <div className="agent-share-title">Let a ticked peer answer with a passcode</div>
+          <div className="hint">
+            {delegated
+              ? 'A peer who is ticked above and knows the passcode can answer prompts for questions they asked.'
+              : 'Off — approval prompts are yours alone, as they have always been.'}
+          </div>
+        </div>
+      </label>
+
+      {delegated && (
+        <>
+          <div className="field">
+            <label htmlFor="agent-approval-passcode">Approval passcode</label>
+            <input
+              id="agent-approval-passcode"
+              className="input"
+              type="password"
+              autoComplete="new-password"
+              value={passcode}
+              placeholder={agent.hasApprovalPasscode ? 'Set — type to replace' : 'Not set'}
+              onChange={(e) => setPasscode(e.target.value)}
+            />
+            <div className="hint">
+              Give this to the peers you want to hand approvals to, out of band. It is checked on this machine
+              and never sent anywhere; changing it takes back whatever the old one granted.
+            </div>
+          </div>
+
+          <label className="agent-share-row" onClick={(e) => e.preventDefault()}>
+            <button
+              type="button"
+              className={`toggle ${unattended ? 'on' : ''}`}
+              onClick={toggleUnattended}
+              aria-pressed={unattended}
+              aria-label="Answer immediately, including for your own runs"
+            />
+            <div>
+              <div className="agent-share-title">Answer immediately, including for runs you started</div>
+              <div className="hint">
+                {unattended
+                  ? 'Prompts go to holders at once, and prompts from your own sessions go to them too. For a machine nobody is sitting at.'
+                  : `Off — you get ${handover}s to answer first, and your own runs are never offered to anyone.`}
+              </div>
+            </div>
+          </label>
+
+          {!unattended && (
+            <div className="field">
+              <label htmlFor="agent-handover">Give me this long to answer first</label>
+              <input
+                id="agent-handover"
+                className="input"
+                type="number"
+                min="0"
+                max="600"
+                value={handover}
+                onChange={(e) => setHandover(Math.max(0, Number(e.target.value) || 0))}
+              />
+              <div className="hint">
+                Seconds. The prompt stays on your screen either way — whoever answers first wins.
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
       <div className="row" style={{ gap: 8, marginTop: 12 }}>
-        <button className="btn primary" onClick={() => onSave(allowed, { networkWide, directChat })}>
+        <button
+          className="btn primary"
+          onClick={() =>
+            onSave(
+              allowed,
+              { networkWide, directChat },
+              {
+                delegated,
+                unattended,
+                handoverMs: handover * 1000,
+                // Only when one was typed. An untouched field must not wipe a
+                // passcode that is already set — the same rule the agent's key
+                // follows in sealSecret().
+                ...(passcode ? { passcode } : {}),
+              }
+            )
+          }
+        >
           Save
         </button>
         <button className="btn ghost" onClick={onCancel}>

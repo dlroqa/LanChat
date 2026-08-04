@@ -9,8 +9,10 @@ const {
   delegateIdFor,
   isDelegateId,
   parseDelegateId,
+  normaliseApprovals,
   KINDS,
 } = require('./registry');
+const { createApprovalGate } = require('./approvalGate');
 const { createVirtualSocket } = require('./virtualSocket');
 const { createHttpTransport } = require('./transports/http');
 const { discoverProfiles, hermesLaunchArgs } = require('./profiles');
@@ -35,8 +37,12 @@ const { resolveMedia } = require('../media');
 //   added, enabled   transport running, socket open, reachable
 //
 // Reach: an agent is local-first. Remote peers can only address it if they are on
-// that agent's allowlist AND they address it explicitly. Approvals are never
-// delegated to the LAN — only the local user can authorise a tool call.
+// that agent's allowlist AND they address it explicitly.
+//
+// Approvals are the owner's by default and stay that way unless the owner hands
+// them over deliberately, per agent, to peers they have already given reach, who
+// have redeemed a passcode. See approvalGate.js for why that is two gates rather
+// than one, and `approvalAudience` below for who a given question is offered to.
 
 // Marks a 'peer-message' as having been produced locally by an agent rather than
 // received from the network. A Symbol is used deliberately: inbound frames are
@@ -93,8 +99,22 @@ const TURN_SWEEP_MS = 5000;
 // never touches the network; production always uses the real table above.
 function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports = TRANSPORTS }) {
   const registry = new AgentRegistry(userDataDir, { safeStorage });
-  const live = new Map(); // agentId -> { transport, socket, busy, pendingApproval }
+  const approvals = createApprovalGate({ userDataDir });
+  // `origin` is the peer whose question started the current run, or null for the
+  // owner's own. It is what an approval raised during that run is bound to.
+  const live = new Map(); // agentId -> { transport, socket, busy, pendingApproval, origin }
   const throttle = new Map(); // `${agentId}|${peerId}|${scope}` -> { last, refusals, expires }
+
+  // The renderer's view of an agent, plus the one fact about it that lives
+  // outside the registry: whether a passcode has been set for it. The hash never
+  // comes anywhere near this — only whether there is one.
+  function publicAgents() {
+    return registry.publicList().map((a) => ({ ...a, hasApprovalPasscode: approvals.has(a.id) }));
+  }
+
+  function publicAgent(agentId) {
+    return publicAgents().find((a) => a.id === agentId);
+  }
 
   // May this peer reach this agent at all? Network-wide is a widening of the
   // allowlist, never a replacement: switching it off restores whatever the
@@ -116,6 +136,230 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     if (!record || record.enabled === false) return false;
     if (!peerMayReach(record, peerId)) return false;
     return live.has(record.id);
+  }
+
+  // ---- delegated approvals ----
+
+  // An agent asking to run something is asked of the owner first, always. What
+  // follows decides whether anybody *else* is asked as well.
+  //
+  // Every question that is relayed is relayed under an id minted here, never
+  // under the transport's own. The transport's id names a parked JSON-RPC
+  // request in a process on this machine; the wire id names nothing except an
+  // entry in the table below, and it is issued per recipient so two holders
+  // cannot answer as each other.
+  //
+  // `${agentId}|${runId}` -> { agentId, runId, command, choices, origin,
+  //                            wire: Map<wireId, peerId>, handover: timer|null }
+  const outstanding = new Map();
+  const byWire = new Map(); // wireId -> `${agentId}|${runId}`
+
+  function approvalKey(agentId, runId) {
+    return `${agentId}|${runId}`;
+  }
+
+  function peerName(peerId) {
+    const peer = hub.presenceList().find((p) => p.id === peerId);
+    return (peer && (peer.name || peer.hostname)) || 'a peer';
+  }
+
+  // Who, besides the owner, may answer this question.
+  //
+  // Recomputed at every decision point rather than worked out once and
+  // remembered — at the moment the question is raised, again when the handover
+  // delay elapses, and again when an answer arrives. That is what makes
+  // switching a toggle off take effect on questions already on somebody's
+  // screen, instead of only on the next one.
+  function approvalAudience(record, origin) {
+    if (!record || record.enabled === false) return [];
+    const settings = normaliseApprovals(record.approvals);
+    if (!settings.delegated) return [];
+    // A peer asked the question. It is theirs to answer, and nobody else's:
+    // this is the whole of the default behaviour, and it is why a delegate can
+    // never authorise something they did not set in motion.
+    if (origin) {
+      return peerMayReach(record, origin) && approvals.holders(record.id).includes(origin) ? [origin] : [];
+    }
+    // Nobody asked from the network, so this is the owner's own run — a session
+    // they started, or a question typed into the agent's thread. Only the
+    // unattended switch opens one of those up, and it opens it to everyone
+    // currently holding rights rather than to a nominated deputy: the point of
+    // it is that whoever is around answers.
+    if (!settings.unattended) return [];
+    return approvals.holders(record.id).filter((peerId) => peerMayReach(record, peerId));
+  }
+
+  // Put the question on a holder's screen. One frame per recipient, and a
+  // recipient the frame could not reach is simply not part of the audience.
+  function relayApproval(state, audience) {
+    const key = approvalKey(state.agentId, state.runId);
+    if (!outstanding.has(key)) return; // answered or expired while we waited
+    for (const peerId of audience) {
+      if ([...state.wire.values()].includes(peerId)) continue; // already asked
+      const wireId = crypto.randomBytes(9).toString('base64url');
+      const sent = hub.send(peerId, {
+        type: 'agent-approval-ask',
+        agentId: state.agentId,
+        name: nameOf(state.agentId),
+        approvalId: wireId,
+        command: state.command,
+        choices: state.choices,
+      });
+      if (!sent) continue;
+      state.wire.set(wireId, peerId);
+      byWire.set(wireId, key);
+    }
+  }
+
+  // The question is over — answered here, answered there, expired, or the run it
+  // belonged to ended underneath it. Everyone still showing it is told to take
+  // it down, and the ids it was relayed under stop meaning anything.
+  function closeApproval(agentId, runId, { reason = 'answered', by = null } = {}) {
+    const key = approvalKey(agentId, runId);
+    const state = outstanding.get(key);
+    if (!state) return;
+    outstanding.delete(key);
+    if (state.handover) clearTimeout(state.handover);
+    for (const [wireId, peerId] of state.wire) {
+      byWire.delete(wireId);
+      // Not back to whoever just answered — they know.
+      if (peerId === by) continue;
+      hub.send(peerId, { type: 'agent-approval-close', agentId, approvalId: wireId, reason });
+    }
+    const entry = live.get(agentId);
+    if (entry) entry.pendingApproval = null;
+    bus.emit('agent-approval-closed', { agentId, runId, reason, by, byName: by ? peerName(by) : null });
+  }
+
+  // Everything this agent still has open, closed at once.
+  //
+  // A run ending is the backstop, not the ordinary path: the ACP transport tells
+  // us about each question it closes, so by the time a run of its ends there is
+  // usually nothing here. The HTTP transport has no such signal at all — it can
+  // raise an approval and then simply finish — so without this its unanswered
+  // questions would sit in `outstanding` for the life of the process, with their
+  // wire ids still resolving to a run that is over.
+  //
+  // Written as a sweep over the agent rather than an extra argument threaded
+  // through every ending, so an ending added later is covered by having called
+  // this once rather than by having remembered a rule.
+  function closeApprovalsFor(agentId, reason) {
+    for (const key of [...outstanding.keys()]) {
+      const state = outstanding.get(key);
+      if (state && state.agentId === agentId) closeApproval(agentId, state.runId, { reason });
+    }
+  }
+
+  // An agent has asked for permission. Raised for the owner unconditionally;
+  // offered onward only if the owner arranged for that.
+  function offerApproval(agentId, origin, req) {
+    const record = registry.get(agentId);
+    const key = approvalKey(agentId, req.runId);
+    const state = {
+      agentId,
+      runId: req.runId,
+      command: req.command,
+      choices: req.choices,
+      origin: origin || null,
+      wire: new Map(),
+      handover: null,
+    };
+    outstanding.set(key, state);
+
+    const audience = approvalAudience(record, origin || null);
+    const settings = normaliseApprovals(record && record.approvals);
+    // Nobody is at this machine to be given a head start, so a run the owner
+    // started under unattended sharing goes out at once. A peer's own question
+    // waits out the handover delay first, unless the owner said not to.
+    const immediate = !origin || settings.unattended || settings.handoverMs <= 0;
+
+    if (audience.length && immediate) {
+      relayApproval(state, audience);
+    } else if (audience.length) {
+      state.handover = setTimeout(() => {
+        state.handover = null;
+        // Recomputed, not reused: the owner may have switched delegation off
+        // during the delay, and a holder may have gone offline.
+        relayApproval(state, approvalAudience(registry.get(agentId), origin || null));
+      }, settings.handoverMs);
+      if (typeof state.handover.unref === 'function') state.handover.unref();
+    }
+
+    return {
+      delegates: audience.map((peerId) => ({ id: peerId, name: peerName(peerId) })),
+      handoverMs: audience.length && !immediate ? settings.handoverMs : 0,
+    };
+  }
+
+  // A peer offering a passcode for one of our agents.
+  //
+  // Every refusal looks the same on the wire. Which of the conditions failed is
+  // this machine's business — the same reasoning as handshake.js, which answers
+  // "refused" to an old build and an attacker alike.
+  function claimApprovals(peerId, agentId, passcode) {
+    const record = registry.get(agentId);
+    // An id that resolves to nothing is a frame to drop rather than one to
+    // answer: replying would confirm which agent ids exist on this machine.
+    if (!peerId || !record) return false;
+    const settings = normaliseApprovals(record.approvals);
+    const eligible =
+      record.enabled !== false &&
+      settings.delegated &&
+      peerMayReach(record, peerId) &&
+      approvals.has(agentId);
+    const result = eligible ? approvals.redeem({ agentId, peerId, passcode }) : { ok: false };
+    hub.send(peerId, {
+      type: 'agent-approval-grant',
+      agentId,
+      ok: result.ok === true,
+      ...(result.token && { token: result.token, expires: result.expires }),
+      ...(result.lockedMs && { lockedMs: result.lockedMs }),
+    });
+    if (!result.ok) {
+      console.warn(
+        `[agents] refused approval rights for ${agentId} to ${peerId}` +
+          (eligible ? ' (wrong passcode)' : ' (not eligible)')
+      );
+    }
+    return result.ok === true;
+  }
+
+  // A delegate's answer, arriving off the wire.
+  //
+  // Nothing here is trusted from the moment the question was relayed. Reach, the
+  // token, delegation itself and the audience are all asked again now, so an
+  // owner who changed their mind while the frame was in flight is obeyed rather
+  // than raced.
+  async function answerRemoteApproval(peerId, msg) {
+    if (!peerId || !msg || !msg.approvalId) return false;
+    const key = byWire.get(msg.approvalId);
+    const state = key ? outstanding.get(key) : null;
+    if (!state) return false;
+    // The id was issued to one peer. Answering under somebody else's is the
+    // thing this table exists to make impossible.
+    if (state.wire.get(msg.approvalId) !== peerId) return false;
+    const record = registry.get(state.agentId);
+    if (!approvals.verifyToken({ agentId: state.agentId, peerId, token: msg.token })) return false;
+    if (!approvalAudience(record, state.origin).includes(peerId)) return false;
+    return answerApproval(state.agentId, state.runId, msg.choice, { by: peerId });
+  }
+
+  // What a delegate decided, written into the owner's transcript.
+  //
+  // Kept rather than swept, unlike every other piece of machinery this file
+  // reports. A tool call authorised on this machine while its owner was away is
+  // exactly the thing they will want to find afterwards, and "shown once to
+  // nobody" is not a record.
+  function auditDelegatedAnswer(state, choice, peerId) {
+    const label = choice === 'deny' || choice === 'cancelled' ? 'refused' : `allowed (${choice})`;
+    // Filed where the owner will look for it: the delegate's own thread when a
+    // peer's question started the run, and the agent's own thread when the run
+    // was the owner's and unattended sharing answered it.
+    const threadId = state.origin ? delegateIdFor(state.agentId, state.origin) : state.agentId;
+    reply(state.agentId, `🔑 ${peerName(peerId)} ${label} “${state.command}” on your behalf.`, null, {
+      keep: true,
+      threadId,
+    });
   }
 
   // ---- fair-share turns ----
@@ -537,6 +781,10 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
       return;
     }
     entry.busy = true;
+    // Whose question this is. An approval raised while the run is under way is
+    // bound to it — see approvalAudience() — so it has to be on the entry rather
+    // than only in this closure.
+    entry.origin = origin || null;
     // Live feedback — thinking and streamed words — is addressed to the thread a
     // reader is actually looking at. A session gets its own; everything else
     // keeps going out under the agent's id, exactly as it always has, so a
@@ -561,14 +809,30 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
           relayActivity(agentId, origin, true, status || null);
         },
         onApproval: (req) => {
-          // Surfaced to the local user only. A remote peer may have asked the
-          // question, but only the machine's owner can authorise the answer.
+          // The owner is always asked, and asked first — that has not changed
+          // and is not configurable. What `offerApproval` decides is whether
+          // anybody else is asked as well, and how soon.
           entry.pendingApproval = req;
-          bus.emit('agent-approval', { agentId, ...req });
+          const { delegates, handoverMs } = offerApproval(agentId, origin, req);
+          bus.emit('agent-approval', {
+            agentId,
+            ...req,
+            // So the card can say who else can answer this, and when. Empty is
+            // the ordinary case and reads as the wording it always had.
+            delegates,
+            handoverMs,
+          });
+        },
+        // The question is over without anybody here having clicked: it expired,
+        // or the run ended underneath it. Both cards come down and the agent has
+        // already been told; this is only the bookkeeping.
+        onApprovalClosed: ({ runId, reason }) => {
+          closeApproval(agentId, runId, { reason });
         },
         onDone: ({ text: output }) => {
           entry.busy = false;
           entry.pendingApproval = null;
+          closeApprovalsFor(agentId, 'ended');
           bus.emit('agent-typing', { agentId, threadId: liveId, isTyping: false });
           relayActivity(agentId, origin, false, null);
           // A run can finish with genuinely nothing in it: a CLI exiting 0 with an
@@ -592,6 +856,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
         onError: (err) => {
           entry.busy = false;
           entry.pendingApproval = null;
+          closeApprovalsFor(agentId, 'ended');
           bus.emit('agent-typing', { agentId, threadId: liveId, isTyping: false });
           relayActivity(agentId, origin, false, null);
           emitStatus(agentId, 'error', describeError(err));
@@ -765,7 +1030,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
       // Frames arrive here exactly as PeerHub.send() serialised them.
       if (frame.type === 'chat' && frame.text) deliver(record.id, frame.text, null);
     });
-    live.set(record.id, { transport, socket, busy: false, pendingApproval: null });
+    live.set(record.id, { transport, socket, busy: false, pendingApproval: null, origin: null });
     hub.setIdentity(record.id, identityFor(record));
     emitStatus(record.id, 'connecting');
     try {
@@ -785,6 +1050,10 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   async function stopAgent(agentId) {
     const entry = live.get(agentId);
     if (!entry) return;
+    // Before the transport goes, and before the entry does: a question still on
+    // somebody's screen for an agent that is being torn down has to be taken
+    // down there too, rather than waiting for an answer nothing can act on.
+    closeApprovalsFor(agentId, 'stopped');
     live.delete(agentId);
     try {
       await entry.transport.stop();
@@ -801,6 +1070,10 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     if (!record) return null;
     if (enabled) await startAgent(record);
     else {
+      // Switching an agent off is the hardest gate there is, so it takes the
+      // approval rights with it rather than leaving tokens that would work again
+      // the moment it came back.
+      approvals.revokeAgent(agentId, { keepPasscode: true });
       await stopAgent(agentId);
       // Keep the identity so a disabled agent stays visible in the roster as
       // offline, rather than silently vanishing.
@@ -809,7 +1082,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     // Disabling is a hard gate, so it must also retract the agent from every
     // peer that could see it — not just refuse them at the door.
     announce(record);
-    return registry.publicList().find((a) => a.id === agentId);
+    return publicAgent(agentId);
   }
 
   // Who may reach the agent, and how discoverable it is. Both are re-advertised
@@ -821,9 +1094,51 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
       ...(patch.directChat !== undefined ? { directChat: patch.directChat } : {}),
     });
     if (!record) return null;
+    pruneApprovalHolders(record);
     announce(record);
     hub.emitPresence();
-    return registry.publicList().find((a) => a.id === agentId);
+    return publicAgent(agentId);
+  }
+
+  // Whether approvals for this agent may be handed on, to whom, and how quickly
+  // — plus the passcode that backs it.
+  //
+  // The passcode travels one way, exactly like an agent's key: it is set here
+  // and never read back. What the renderer learns afterwards is whether there is
+  // one, and nothing else.
+  async function setApprovals(agentId, patch = {}) {
+    const record = registry.get(agentId);
+    if (!record) return null;
+    if (patch.passcode !== undefined) {
+      const value = patch.passcode === null ? '' : String(patch.passcode);
+      if (value) approvals.setPasscode(agentId, value);
+      else approvals.clearPasscode(agentId);
+    }
+    const next = registry.update(agentId, {
+      approvals: {
+        ...(patch.delegated !== undefined ? { delegated: patch.delegated } : {}),
+        ...(patch.unattended !== undefined ? { unattended: patch.unattended } : {}),
+        ...(patch.handoverMs !== undefined ? { handoverMs: patch.handoverMs } : {}),
+      },
+    });
+    // Switching delegation off is a revocation, not just a setting. Anything
+    // already granted under it stops working immediately rather than lasting out
+    // its token — which is the difference between a switch and a suggestion.
+    if (!normaliseApprovals(next.approvals).delegated) {
+      approvals.revokeAgent(agentId, { keepPasscode: true });
+    }
+    pruneApprovalHolders(next);
+    return publicAgent(agentId);
+  }
+
+  // Approval rights cannot outlive the reach they were built on. A peer taken
+  // off an agent's allowlist loses them at once, without waiting for the token
+  // to expire or for the next answer to be re-checked.
+  function pruneApprovalHolders(record) {
+    if (!record) return;
+    for (const peerId of approvals.holders(record.id)) {
+      if (!peerMayReach(record, peerId)) approvals.revokeHolder(record.id, peerId);
+    }
   }
 
   // ---- advertising an agent to the peers entitled to reach it ----
@@ -910,6 +1225,20 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     announceAllTo(peerId);
   });
 
+  // Approval rights die with the connection that earned them — the same rule
+  // attachGrantIssuer applies to file permits, and for the same reason: a right
+  // that survives the peer going away is a right nobody is watching. Coming back
+  // means claiming again, which costs one passcode and proves the peer is still
+  // who redeemed it.
+  let approvalPeers = new Set();
+  bus.on('presence', (list) => {
+    const online = new Set(list.filter((p) => p.online && p.kind !== 'agent').map((p) => p.id));
+    for (const peerId of approvalPeers) {
+      if (!online.has(peerId)) approvals.revokePeer(peerId);
+    }
+    approvalPeers = online;
+  });
+
   // ---- public API ----
 
   // The probe result is returned alongside the record rather than swallowed: a
@@ -922,7 +1251,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     if (record.enabled) probe = await startAgent(record);
     else hub.setIdentity(record.id, identityFor(record));
     announce(record);
-    return { agent: registry.publicList().find((a) => a.id === record.id), probe };
+    return { agent: publicAgent(record.id), probe };
   }
 
   // Edit an existing agent. Restarting a live transport is required, not
@@ -941,7 +1270,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     }
     // A rename changes how peers address it, so the advert has to be refreshed.
     announce(record);
-    return { agent: registry.publicList().find((a) => a.id === agentId), probe };
+    return { agent: publicAgent(agentId), probe };
   }
 
   // Removal must leave nothing behind — this is the "nothing permanent" contract.
@@ -975,6 +1304,9 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
       if (key.startsWith(`${agentId}|`)) throttle.delete(key);
     }
     turns.delete(agentId);
+    // The passcode goes too, not just the tokens: "removes everything" has to
+    // mean the file in userData as well as the record.
+    approvals.revokeAgent(agentId);
     registry.remove(agentId); // drops the sealed secret with the record
     hub.emitPresence();
     return true;
@@ -1007,11 +1339,20 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     }
   }
 
-  async function answerApproval(agentId, runId, choice) {
+  // `by` names the peer who answered, when it was not the owner. Both paths come
+  // through here so that whoever answers first genuinely wins: the transport
+  // refuses the second answer, and the losing side's card is taken down by the
+  // close below rather than being left to be clicked into nothing.
+  async function answerApproval(agentId, runId, choice, { by = null } = {}) {
     const entry = live.get(agentId);
     if (!entry || !entry.transport.answerApproval) return false;
     entry.pendingApproval = null;
-    return entry.transport.answerApproval(runId, choice);
+    const state = outstanding.get(approvalKey(agentId, runId));
+    const answered = await entry.transport.answerApproval(runId, choice);
+    if (!answered) return false;
+    if (by && state) auditDelegatedAnswer(state, choice, by);
+    closeApproval(agentId, runId, { reason: 'answered', by });
+    return true;
   }
 
   async function stopRun(agentId) {
@@ -1215,6 +1556,10 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   // on its own precisely because the grant list outlives the warning.
   function revokePeer(peerId) {
     if (!peerId) return [];
+    // Unconditionally, and before anything else: approval rights are held by
+    // peer id too, and a key change means the thing holding that id is no longer
+    // the thing the passcode was given to.
+    approvals.revokePeer(peerId);
     const revoked = [];
     for (const agent of registry.list()) {
       const allowed = agent.allowedPeers || [];
@@ -1237,7 +1582,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   }
 
   return {
-    list: () => registry.publicList(),
+    list: () => publicAgents(),
     add,
     update,
     remove,
@@ -1245,15 +1590,24 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     profilesFor,
     setEnabled,
     setSharing,
+    setApprovals,
     setAllowedPeers: (agentId, peers) => {
       const record = registry.update(agentId, { allowedPeers: peers });
       // Visibility now follows permission, so a change here has to reach both
       // the local roster and the peers who just gained or lost the agent.
-      if (record) announce(record);
+      if (record) {
+        pruneApprovalHolders(record);
+        announce(record);
+      }
       hub.emitPresence();
-      return registry.publicList().find((a) => a.id === agentId);
+      return publicAgent(agentId);
     },
     answerApproval,
+    // The two halves of handing an approval on: a peer proving it may, and a
+    // peer answering one. Both are reached only from the wire router, which is
+    // what keeps every check in one place rather than at each call site.
+    claimApprovals,
+    answerRemoteApproval,
     stopRun,
     // Asking from this machine, on behalf of a thread that is not the agent's
     // own — a session. False when the agent is not running, so the caller can

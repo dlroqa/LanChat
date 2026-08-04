@@ -56,7 +56,7 @@ const { createPins } = require('../src/main/pins.js');
 const { PeerHub } = require('../src/main/peers.js');
 const { createServer } = require('../src/main/server.js');
 const { MessageStore } = require('../src/main/store.js');
-const { createAgentHub } = require('../src/main/agents/index.js');
+const { createAgentHub, PEER_MIN_INTERVAL_MS } = require('../src/main/agents/index.js');
 const { createIpc } = require('../src/main/ipc.js');
 
 const fakeSafeStorage = {
@@ -68,14 +68,36 @@ const fakeSafeStorage = {
 // Echoes the prompt back, so a reply arriving on the far side proves the whole
 // path rather than the transport.
 function echoTransports(log) {
+  // The one run that does not finish inside send(): a prompt that asks
+  // permission first and produces its answer only once somebody has decided.
+  // Held here rather than in a second stub so the approval path is driven
+  // through the same transport as every other outcome.
+  let held = null;
   return {
     http: ({ id, name }) => ({
       id,
       name,
       kind: 'stub',
       start: async () => ({ detail: 'ready' }),
+      answerApproval: async (runId, choice) => {
+        if (!held || held.runId !== runId) return false;
+        const { h } = held;
+        held = null;
+        log.push(`approval:${choice}`);
+        h.onDone?.({ text: `ran with ${choice}` });
+        return true;
+      },
       send: async ({ text }, h) => {
         log.push(text);
+        if (text.startsWith('approve:')) {
+          held = { runId: 'run-1', h };
+          h.onApproval?.({
+            runId: 'run-1',
+            command: text.slice('approve:'.length),
+            choices: ['once', 'always', 'deny'],
+          });
+          return;
+        }
         // A prompt that makes the run fail, so the error path can be driven
         // without a second transport stub.
         if (text.startsWith('faildetail:')) {
@@ -1834,4 +1856,122 @@ test('an owner going offline takes their agents with them, without a runaway pre
   const ids = B.hub.presenceList().map((p) => p.id);
   assert.equal(ids.includes(remoteOne), false);
   assert.equal(ids.includes(remoteTwo), false);
+});
+
+// ---- handing an approval to the peer who asked for it ----
+
+test('a peer holding the passcode answers an approval on the owner’s machine', async (t) => {
+  const A = makeNode('owner10', await freePort());
+  const B = makeNode('peer10', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+
+  const idA = A.getIdentity().id;
+  const idB = B.getIdentity().id;
+
+  const { agent } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  await A.agentHub.setSharing(agent.id, { networkWide: true, directChat: true });
+  await connect(A, B);
+  const remoteId = await waitFor(() => remoteIdOn(B, idA, agent.id), 5000, "B to see A's agent");
+
+  // Before anything is handed over, the old rule holds end to end: B asks, A's
+  // agent stops to ask permission, and nothing about that question crosses the
+  // wire.
+  B.call('lanchat:sendChat', { peerId: remoteId, text: 'approve:rm -rf /' });
+  await waitFor(() => A.events.some((e) => e.type === 'agent-approval'), 5000, 'A to be asked');
+  const local = A.events.find((e) => e.type === 'agent-approval');
+  assert.deepEqual(local.payload.delegates, [], 'and nobody else is offered it');
+  assert.equal(
+    B.events.some((e) => e.type === 'agent-approval'),
+    false,
+    'B is told nothing about it'
+  );
+  // Nor can B answer it by naming the owner's own run id.
+  await A.agentHub.answerRemoteApproval(idB, {
+    agentId: agent.id,
+    approvalId: 'run-1',
+    choice: 'always',
+    token: 'made up',
+  });
+  assert.equal(
+    A.log.some((l) => l.startsWith('approval:')),
+    false,
+    'the agent was told nothing'
+  );
+  // Clear it the way its owner would, so the next run starts clean.
+  await A.agentHub.answerApproval(agent.id, 'run-1', 'deny');
+  await waitFor(() => A.log.includes('approval:deny'), 5000, 'the owner’s own answer');
+
+  // Now A hands approvals for this agent to the peers it is shared with.
+  await A.call('lanchat:setAgentApprovals', {
+    id: agent.id,
+    delegated: true,
+    passcode: 'let me in',
+    handoverMs: 0,
+  });
+
+  // A wrong passcode is refused, over the real socket, with nothing given away.
+  await B.call('lanchat:claimAgentApprovals', { threadId: remoteId, passcode: 'wrong' });
+  const refusal = await waitFor(
+    () => B.events.find((e) => e.type === 'agent-approval-grant'),
+    5000,
+    'the refusal to come back'
+  );
+  assert.equal(refusal.payload.ok, false);
+
+  // The right one is granted.
+  await B.call('lanchat:claimAgentApprovals', { threadId: remoteId, passcode: 'let me in' });
+  await waitFor(
+    () => B.events.some((e) => e.type === 'agent-approval-grant' && e.payload.ok === true),
+    5000,
+    'the grant to come back'
+  );
+
+  // B asks again. The owner's anti-flood swallows anything a peer asks within a
+  // few seconds of their last question, so the second one has to wait it out —
+  // this is the real gate, not a test artefact.
+  await new Promise((r) => setTimeout(r, PEER_MIN_INTERVAL_MS + 250));
+  B.call('lanchat:sendChat', { peerId: remoteId, text: 'approve:rm -rf /' });
+  const relayed = await waitFor(
+    () => B.events.find((e) => e.type === 'agent-approval'),
+    5000,
+    'the prompt to reach B'
+  );
+  assert.equal(relayed.payload.remote, true, 'and it says whose machine it runs on');
+  assert.equal(relayed.payload.command, 'rm -rf /');
+  assert.equal(relayed.payload.agentId, remoteId, 'filed in the agent’s own thread');
+  // The owner's transport id is not what travelled.
+  assert.notEqual(relayed.payload.runId, 'run-1');
+
+  // B answers, through the same ipc channel the card uses.
+  await B.call('lanchat:answerAgentApproval', {
+    agentId: remoteId,
+    runId: relayed.payload.runId,
+    choice: 'always',
+  });
+
+  // The agent on A's machine is told what B chose, and the run finishes.
+  await waitFor(() => A.log.includes('approval:always'), 5000, 'the agent to be told');
+  const delegate = `${agent.id}#${idB}`;
+  await waitFor(
+    () => A.store.read(delegate).some((m) => /on your behalf/.test(m.text || '')),
+    5000,
+    'the decision to be recorded'
+  );
+  const audit = A.store.read(delegate).find((m) => /on your behalf/.test(m.text));
+  assert.match(audit.text, /allowed \(always\)/);
+  assert.match(audit.text, /rm -rf \//);
+
+  // And the answer reaches B the ordinary way, so the run really did complete.
+  await waitFor(
+    () => B.store.read(remoteId).some((m) => m.text === 'ran with always'),
+    5000,
+    'the answer to come back'
+  );
 });
