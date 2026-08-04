@@ -25,8 +25,14 @@ test('the app only raises its file sheet for files', () => {
   // getting that far, and this is the second half of the same guard — one that
   // still holds if a later panel starts a drag and forgets to.
   const app = fs.readFileSync(path.join(SRC, 'App.jsx'), 'utf8');
-  const handler = app.slice(app.indexOf('onDragOver={(e) => {'), app.indexOf('onDragLeave='));
-  assert.match(handler, /types[^)]*\)\.includes\('Files'\)/, 'the drop sheet should only answer to files');
+  const guard = app.slice(app.indexOf('const dragCarriesFiles'), app.indexOf('async function onDrop'));
+  assert.match(guard, /types[^)]*\)\.includes\('Files'\)/, 'the drop sheet should only answer to files');
+  // And every way the sheet goes up asks that one guard, rather than each
+  // carrying its own copy of it — a second copy is a second chance to be wrong.
+  for (const on of ['onDragEnter', 'onDragOver']) {
+    const handler = app.slice(app.indexOf(`${on}={(e) => {`), app.indexOf(`${on}={(e) => {`) + 220);
+    assert.match(handler, /dragCarriesFiles\(e\)/, `${on} should raise the sheet through the shared guard`);
+  }
 });
 
 test('mounted in a browser: pointing, pinning, dragging, and a title that keeps flashing until it is read', async () => {

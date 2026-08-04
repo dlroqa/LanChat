@@ -34,6 +34,7 @@ import NewGroupCallModal from './components/NewGroupCallModal.jsx';
 import { GroupCallManager } from './lib/groupCall.js';
 import { listDevices, labelFor } from './lib/devices.js';
 import { isSessionThread, isThinkingThread } from './lib/sessionIds.js';
+import { useFileDrag } from './lib/useFileDrag.js';
 import { isAgentThread } from './lib/agentPhrase.js';
 import { commitCount } from './lib/sessionStanding.js';
 import { linkResend, markSent, clearLink, chatOutcome, roundOutcome, retire } from './lib/resendLink.js';
@@ -124,7 +125,9 @@ export default function App() {
   const [keyAlarm, setKeyAlarm] = useState(null);
   const [authFailures, setAuthFailures] = useState({});
   const [firstRun, setFirstRun] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
+  // The file-drop sheet. Held up by the drag itself rather than switched on and
+  // off, so no way of ending a drag can leave it stranded — see useFileDrag.js.
+  const { dragging: dragOver, hold: dragHold, release: dragRelease, stop: dragStop } = useFileDrag();
   const [call, setCall] = useState({ status: 'idle' });
   const [linkStats, setLinkStats] = useState({}); // peerId -> stats
   const [callFullscreen, setCallFullscreen] = useState(false);
@@ -1848,13 +1851,22 @@ export default function App() {
 
   // --- Drag & drop files ---
   //
+  // Files only, and only into a conversation that can take them. Everything
+  // dragged anywhere in the window reaches the app root, including a sidebar
+  // category on its way to a new place in the list, and the sheet that says
+  // "drop to send" has nothing to do with that. One guard rather than one per
+  // handler: `dragenter` and `dragover` both raise the sheet, and two copies of
+  // a condition are two chances to answer a category drag.
+  const dragCarriesFiles = (e) =>
+    Boolean(selectedId) && Array.from(e.dataTransfer?.types || []).includes('Files');
+
   // Where a dropped file goes depends on who is on the other side. A person
   // receives it: same file transfer as the paperclip. An agent reads it: the
   // drop stages it as a document, so you can say what you want done with it
   // before it goes, rather than handing over a file with no question attached.
   async function onDrop(e) {
     e.preventDefault();
-    setDragOver(false);
+    dragStop();
     if (!selectedId) return;
     // `file.path` was removed in Electron 32; main resolves it now. The old
     // property is still read as a fallback so a drop cannot silently do
@@ -2006,16 +2018,22 @@ export default function App() {
   return (
     <div
       className="app"
+      // A crossing into any element under the root, and the heartbeat while the
+      // drag rests over one. Either says the drag is still here.
+      onDragEnter={(e) => {
+        if (dragCarriesFiles(e)) dragHold();
+      }}
       onDragOver={(e) => {
+        // Unconditionally, or the window refuses the drop and the OS animates
+        // the file back to where it came from.
         e.preventDefault();
-        // Files only. Everything dragged anywhere in the window arrives here,
-        // including a sidebar category on its way to a new place in the list,
-        // and the sheet that says "drop to send" has nothing to do with that.
-        if (selectedId && Array.from(e.dataTransfer?.types || []).includes('Files')) setDragOver(true);
+        if (dragCarriesFiles(e)) dragHold();
       }}
-      onDragLeave={(e) => {
-        if (e.currentTarget === e.target) setDragOver(false);
-      }}
+      // Only a proposal to put the sheet away: leaving one element for the next
+      // one along fires this too, and the `dragenter` in the same burst takes it
+      // back. What it is really for is the file carried out of the window again,
+      // where nothing follows to say so.
+      onDragLeave={dragRelease}
       onDrop={onDrop}
     >
       <Sidebar
@@ -2129,7 +2147,7 @@ export default function App() {
             onVideoCall={() => startCall(true)}
           />
         )}
-        {dragOver && (
+        {dragOver && selectedId && (
           <div className="drop-overlay">
             {isThinkingThread(selectedId)
               ? `Drop to give ${selectedPeer?.name || 'the agent'} a document`
