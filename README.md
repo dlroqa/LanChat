@@ -339,6 +339,7 @@ An agent is an AI assistant that appears in LanChat as an ordinary chat thread �
 | **ACP** | Agent Client Protocol over stdio. Keeps conversation context across messages. | Command to run, arguments, working directory |
 | **Local command** | Runs a CLI on this machine, once per message. | Command, arguments (use `{prompt}` where the message goes), working directory |
 | **SSH command** | Runs the agent on another host over SSH. | Host, user, port, identity file, remote command. The host must already be in your `known_hosts` |
+| **A2A** | An agent that speaks the [Agent2Agent protocol](https://a2a-protocol.org). LanChat reads its Agent Card for its name, skills and endpoint, then talks JSON-RPC to it. | Base URL, and a bearer token if the server wants one |
 
 The on/off toggle is a full kill switch: it stops the transport but keeps the configuration, so you can turn an agent back on without re-entering a key. Removing an agent deletes the record outright.
 
@@ -463,40 +464,67 @@ There are three ways to put the question:
 |---|---|
 | **All at once** | Everybody gets it together and each answers independently. Use this when you want opinions that have not influenced each other. |
 | **In turn** | They answer one after another, each shown what has already been said. Use this when you want them building on each other. |
-| **Between themselves** | Two agents discuss it, replying to each other for a set number of turns. Use this when the disagreement is the useful part. |
+| **Between themselves** | They discuss it, replying to each other for a set number of turns. Two is the usual number and any number works. Use this when the disagreement is the useful part. |
 
 The composer tells you which it will do before you type. Every answer carries the name of the
-agent that gave it, so three replies read as three contributions rather than one wall of text.
+agent that gave it and its own colour, so four replies read as four contributions rather than one
+wall of text. The colour comes from the agent's identity rather than from where it happens to sit
+in the list, so it is the same colour every time and two agents with the same name are still two
+colours.
 
-### Letting two agents talk
+### Letting agents talk
 
 **Between themselves** is the only mode that keeps going after the first lap. One agent answers,
-the second is shown what the first said and replies to it, the first is shown that and replies
-back, and so on. It is one question in the transcript however long the discussion runs.
+the next is shown the discussion so far and replies to it, and so on round the room. It is one
+question in the transcript however long the discussion runs.
 
-Agents do not talk to each other directly — there is no protocol for that, and there is no
-connection between them. LanChat is the client to both of them and carries what each says to the
-other, exactly as it carries your own questions. That is also why the two can be on different
-machines: one of yours and one a peer shared works the same way, with the discussion brokered here.
+Everybody sees everybody. Each agent's turn carries the whole discussion up to that point, not
+just the reply before it, and each is told who else is in the room and the order they speak in —
+so a discussion of four is genuinely between four rather than four agents each answering whoever
+went immediately before them. They can and do address each other by name.
+
+Agents do not talk to each other directly — there is no connection between them. LanChat is the
+client to all of them and carries what each says to the others, exactly as it carries your own
+questions. That is also why they can be on different machines: yours and ones peers shared work the
+same way, with the discussion brokered here.
 
 Because this is the one thing in LanChat that goes on spending an agent's time without you typing,
-there are four ways it stops:
+there are five ways it stops:
 
 - **The turn budget.** Set with the stepper under the mode, between 2 and 12, and 6 by default.
-  A discussion runs for the budget it started with — changing the number does not extend one
-  already under way.
+  One turn is one agent speaking, so a discussion of four gets three laps out of twelve. A
+  discussion runs for the budget it started with — changing the number does not extend one already
+  under way.
 - **Stop.** A button beside the turn count while it runs, for a discussion that is going nowhere.
-- **Silence or failure.** An agent that finishes with nothing to say, or cannot answer, ends it.
-  There is nothing for the other one to reply to.
+- **Everybody leaving.** An agent that signs off, goes quiet or cannot answer leaves the
+  discussion; the rest carry on without it, and the session says so as it happens. The discussion
+  ends when fewer than two are left, because one agent cannot discuss anything.
 - **Agreement.** Each agent is invited to end its reply with `nothing further.` when it has
-  nothing to add. One that does stops the discussion there, with the rest of the budget unspent.
+  nothing to add. In a discussion of two that ends it. In a discussion of four it is one agent
+  bowing out and the other three keep talking.
 
 Whichever it was, the session says so when it finishes.
 
+### Interrupting one, and picking it back up
+
+A discussion runs for turns at a time without you typing, so there is a way into it:
+
+- **Say something.** Type into a running discussion and your words join it. They are not a new
+  question — the discussion carries on — and the next agent to speak is shown them, marked as
+  coming from you rather than from another agent, and told to take them as direction. Your turn
+  costs nothing from the budget.
+- **Hold.** Beside Stop while it runs. The agent mid-answer finishes — its reply is worth having —
+  and the turn after that is worked out and not taken. A held discussion keeps every turn it has
+  not spent, however long you leave it.
+- **Resume.** Give the turn back. Saying something into a held discussion resumes it too, which is
+  usually what you meant by holding it.
+
+Stop is still there and still final: it closes the round and the remaining budget goes with it.
+
 One caveat for a discussion with an agent a peer shared: their agent is on the shared-agent turn
-queue like everybody else's, so a long discussion can use up its quota. When it does, the turn is
-held and the discussion ends with a note rather than hanging. Keeping the budget at 6 or below
-leaves room for it.
+queue like everybody else's, so a long discussion can use up its quota. When it does that agent
+leaves the discussion with a note saying so, and the others carry on without it. Keeping the budget
+at 6 or below leaves room for it.
 
 ---
 
