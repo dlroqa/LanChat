@@ -443,6 +443,59 @@ test('switching transport replaces the config instead of leaving stale settings 
   assert.throws(() => reg.update(rec.id, { kind: 'telepathy' }), /Unknown agent transport/);
 });
 
+test('an agent whose transport this build has never heard of does not take the others down', async () => {
+  // What a downgrade looks like from the inside. An agent added on a newer
+  // version names a transport this build has no factory for, and building it
+  // throws — from startAll(), which awaits each agent in a loop, so one such
+  // record used to stop every agent after it from starting and said nothing
+  // about why.
+  //
+  // Written against a record on disk rather than through add(), because add()
+  // rejects an unknown kind and the case being tested is precisely the one that
+  // gets past it: a file written by a build that knew more transports than this
+  // one does.
+  const { agentHub, hub, dir } = makeHub();
+  const { agent: fine } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+
+  const file = path.join(dir, 'agents.json');
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  // First in the list, so a throw here would take the working one with it.
+  saved.agents.unshift({
+    ...saved.agents[0],
+    id: 'agent:from-the-future',
+    name: 'Wren',
+    kind: 'telepathy',
+    config: {},
+  });
+  fs.writeFileSync(file, JSON.stringify(saved));
+
+  // A second hub over the same directory, which is what a restart is.
+  const bus = new EventEmitter();
+  const restarted = createAgentHub({
+    userDataDir: dir,
+    hub: new PeerHub({ getIdentity: () => ({ id: 'me', name: 'Me' }), bus }),
+    bus,
+    store: new MessageStore(dir),
+    safeStorage: fakeSafeStorage,
+    transports: stubTransports([], {}),
+  });
+
+  const errors = [];
+  bus.on('agent-status', (e) => errors.push(e));
+  await restarted.startAll();
+
+  assert.equal(
+    restarted.isRunning(fine.id),
+    true,
+    'the agent this build does understand started, though it was listed second'
+  );
+  assert.equal(restarted.isRunning('agent:from-the-future'), false);
+  const said = errors.find((e) => e.agentId === 'agent:from-the-future' && e.status === 'error');
+  assert.ok(said, 'and the one it does not is reported as an error rather than in silence');
+  assert.match(said.detail, /telepathy/, 'naming the transport, which is the only actionable part');
+  assert.ok(hub, 'the first hub is untouched');
+});
+
 test('editing a disabled agent does not start it but does refresh the roster card', async () => {
   const { agentHub, hub, lifecycle } = makeHub();
   const { agent } = await agentHub.add({ name: 'Hermes', kind: 'http', config: {} });

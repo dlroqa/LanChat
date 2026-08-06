@@ -1045,7 +1045,23 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
 
   async function startAgent(record) {
     if (live.has(record.id)) await stopAgent(record.id);
-    const transport = buildTransport(record);
+    // Building the transport is the one step here that used to be able to throw
+    // past every caller. It does that for exactly one reason — a record naming a
+    // transport this build has never heard of — and that is not a hypothetical:
+    // it is what an agent added on a newer version looks like after a downgrade.
+    // Thrown from startAll(), which awaits this in a loop, it took every agent
+    // after it down with it, so one unknown record could leave somebody with no
+    // agents at all and nothing on screen to say why.
+    //
+    // Reported as what it is instead: that agent is in error, the rest start.
+    let transport;
+    try {
+      transport = buildTransport(record);
+    } catch (err) {
+      hub.setIdentity(record.id, identityFor(record));
+      emitStatus(record.id, 'error', describeError(err));
+      return { ok: false, detail: describeError(err) };
+    }
     const socket = createVirtualSocket((frame) => {
       // Frames arrive here exactly as PeerHub.send() serialised them.
       if (frame.type === 'chat' && frame.text) deliver(record.id, frame.text, null);
