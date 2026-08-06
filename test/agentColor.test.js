@@ -202,9 +202,11 @@ test('mounted in a browser: four agents, four opaque colours, all of them readab
 
   assert.ok(result.painted, 'a screenshot was taken and read back');
   result.rows.forEach((r, i) => {
+    const px = result.painted[i];
+    assert.ok(px, `${r.who}: its bubble was not in the screenshot, so nothing was measured`);
     const want = [1, 3, 5].map((k) => parseInt(r.fill.slice(k, k + 2), 16));
-    const off = Math.max(...result.painted[i].map((v, k) => Math.abs(v - want[k])));
-    assert.ok(off <= 3, `${r.who}: painted pixels are ${off} off the computed fill`);
+    const off = Math.max(...px.map((v, k) => Math.abs(v - want[k])));
+    assert.ok(off <= 3, `${r.who}: the colour most of its bubble is painted in is ${off} off the fill`);
   });
 
   // The same numbers a person would read, for when this fails on somebody's

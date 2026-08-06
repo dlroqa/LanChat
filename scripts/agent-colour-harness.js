@@ -165,11 +165,30 @@ const hex = (c) => '#' + c.map((v) => Math.round(v).toString(16).padStart(2, '0'
       bodyOnFill: Number(ratio(body, fill).toFixed(2)),
       nameOnFill: name ? Number(ratio(name, fill).toFixed(2)) : null,
       alpha: seeThrough(cs.backgroundColor) ? cs.backgroundColor : 'opaque',
-      // Where to sample the screenshot, well inside the bubble and clear of text.
-      probe: [Math.round(box.left + box.width - 12), Math.round(box.top + 6)],
+      // The area of the screenshot this bubble occupies, inset far enough to
+      // clear the rounded corners and the coloured edge.
+      //
+      // A rectangle rather than a point, because a point is a guess about where
+      // there is no text — and a guess that held on one machine and picked out a
+      // glyph on another, which is precisely the kind of assumption this harness
+      // exists to avoid. What is read back from it is the *most common* colour,
+      // which is the fill by definition: whatever else a bubble contains, most
+      // of it is background.
+      area: [
+        Math.round(box.left + 6),
+        Math.round(box.top + 4),
+        Math.round(box.width - 10),
+        Math.round(box.height - 8),
+      ],
       borderWidth: cs.borderLeftWidth,
     });
   }
+
+  // What the screenshot is scaled by. Read rather than assumed: a runner with a
+  // different device pixel ratio produces a PNG larger than the CSS pixels these
+  // rectangles are measured in, and every coordinate would be wrong by that
+  // factor with nothing to say so.
+  out.viewport = [window.innerWidth, window.innerHeight];
 
   // The question somebody typed must not be one of them.
   out.outRows = document.querySelectorAll('.bubble-row.out.agent').length;
@@ -202,16 +221,49 @@ async function runAgentColourHarness(outDir) {
     // scratch dir is deleted on the way out, and a path handed back would point
     // at nothing by the time anybody looked.
     const png = fs.existsSync(shot) ? readPng(shot) : null;
-    const painted = png
-      ? result.rows.map((r) => {
-          const [x, y] = r.probe;
-          const i = (y * png.width + x) * 4;
-          return [png.data[i], png.data[i + 1], png.data[i + 2]];
-        })
-      : null;
+    const painted = png ? result.rows.map((r) => modalColour(png, r.area, result.viewport)) : null;
 
     return { ...result, painted, shot: keep ? shot : null, dir: keep ? dir : null };
   });
+}
+
+// The colour a rectangle of the screenshot is mostly painted in.
+//
+// The fill, by definition — a bubble contains a name and some words, and the
+// rest of it is background. Reading the mode rather than one chosen pixel is
+// what makes this independent of where the text happens to fall, which varies
+// with the fonts a machine has.
+//
+// `viewport` is the page's own width in CSS pixels; the PNG may be a multiple of
+// it on a runner with a device pixel ratio above one, and every rectangle here
+// is measured in CSS pixels. The scale is derived rather than assumed.
+function modalColour(png, area, viewport) {
+  const scale = viewport && viewport[0] ? png.width / viewport[0] : 1;
+  const [x0, y0, w, h] = area.map((v) => Math.round(v * scale));
+  const seen = new Map();
+  for (let y = y0; y < y0 + h; y += 1) {
+    if (y < 0 || y >= png.height) continue;
+    for (let x = x0; x < x0 + w; x += 1) {
+      if (x < 0 || x >= png.width) continue;
+      const i = (y * png.width + x) * 4;
+      const key = (png.data[i] << 16) | (png.data[i + 1] << 8) | png.data[i + 2];
+      seen.set(key, (seen.get(key) || 0) + 1);
+    }
+  }
+  // Nothing sampled at all — a bubble scrolled out of the shot, or a rectangle
+  // outside the image. Null rather than a colour, because returning black here
+  // would report a layout problem as a wrong fill and send somebody looking in
+  // the stylesheet for a fault that is not in it.
+  if (seen.size === 0) return null;
+  let best = 0;
+  let count = -1;
+  for (const [key, n] of seen) {
+    if (n > count) {
+      count = n;
+      best = key;
+    }
+  }
+  return [(best >> 16) & 255, (best >> 8) & 255, best & 255];
 }
 
 // What was measured, and whether it is good enough to ship.
@@ -244,6 +296,11 @@ function report(result) {
   if (result.painted) {
     result.rows.forEach((r, n) => {
       const px = result.painted[n];
+      if (!px) {
+        console.log(`  ${String(r.who).padEnd(8)} nothing to sample — its bubble was not in the shot`);
+        fails.push(`${r.who}: its bubble was not in the screenshot, so nothing was measured`);
+        return;
+      }
       const seen = `#${px.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
       const want = [1, 3, 5].map((k) => parseInt(r.fill.slice(k, k + 2), 16));
       // A couple of levels of slack for the screenshot's own rounding, and no
