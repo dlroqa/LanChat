@@ -177,6 +177,14 @@ export default function App() {
   // bookkeeping — wrong in exactly the moments that matter, which is three
   // agents thinking at once and one of them going quiet.
   const [rounds, setRounds] = useState({}); // sessionId -> round view
+  // The round that just finished, kept until the next question replaces it.
+  //
+  // Its closing view is the only one that carries why a discussion stopped, and
+  // for a long time that view was deleted the instant it arrived — main worked
+  // the sentence out, the tests asserted it, and nobody could read it. A
+  // discussion that stops for no stated reason is the thing somebody watching it
+  // most wants explained.
+  const [lastRounds, setLastRounds] = useState({}); // sessionId -> closed round view
   // Live output while it is being written, per thread and then per agent.
   //
   // One string per thread was enough while one agent answered at a time. A
@@ -1021,6 +1029,18 @@ export default function App() {
             }
             return { ...r, [payload.sessionId]: payload };
           });
+          // What is left of it once it is over. Set from the closing view and
+          // cleared by the next question's first view, so the reason a
+          // discussion stopped stands under it until there is a new one — and
+          // never above a question it is not about.
+          setLastRounds((r) => {
+            if (payload.open) {
+              if (!r[payload.sessionId]) return r;
+              const { [payload.sessionId]: _stale, ...rest } = r;
+              return rest;
+            }
+            return { ...r, [payload.sessionId]: payload };
+          });
           if (!payload.open) {
             setAwaiting((a) => (a[payload.sessionId] ? { ...a, [payload.sessionId]: false } : a));
             setStreams((s) => (s[payload.sessionId] ? { ...s, [payload.sessionId]: {} } : s));
@@ -1588,6 +1608,17 @@ export default function App() {
     await api.stopSessionRound(id);
   }
 
+  // Holding a discussion, and giving the turn back. Nothing is updated here
+  // either, for the same reason: main owns the round, and the paused view comes
+  // down the same channel every other change to it does.
+  async function pauseSessionRound(id) {
+    await api.pauseSessionRound(id);
+  }
+
+  async function resumeSessionRound(id) {
+    await api.resumeSessionRound(id);
+  }
+
   // Loading a saved conversation in. The messages are written in main, so the
   // thread is re-read rather than patched here — one source for what is in it,
   // whether it arrived by import or by being said.
@@ -2136,6 +2167,7 @@ export default function App() {
             approval={approvals[selectedId]}
             agentStreams={selectedStreams}
             round={rounds[selectedId] || null}
+            lastRound={lastRounds[selectedId] || null}
             flash={flash[selectedId]}
             onFlashDone={() => clearFlash(selectedId)}
             onApprove={(choice) => {
@@ -2163,6 +2195,8 @@ export default function App() {
             onRenameSession={renameSession}
             onSetCounsel={setSessionCounsel}
             onStopRound={stopSessionRound}
+            onPauseRound={pauseSessionRound}
+            onResumeRound={resumeSessionRound}
             onImportText={() => importSessionText(selectedId)}
             // Branching is offered where a question can be asked from: inside a
             // session, and in the agent threads a session can be started from.

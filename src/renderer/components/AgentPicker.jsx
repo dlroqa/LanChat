@@ -1,6 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Dot, Minus, Plus } from '../lib/icons.jsx';
 import { agentNote, chipLabel } from '../lib/counselCopy.js';
+import { paletteFor } from '../lib/agentColor.js';
 
 // Who a session asks.
 //
@@ -58,6 +59,14 @@ export default function AgentPicker({
   const missing = agentIds.filter((id) => !agents.some((a) => a.id === id));
 
   const chosen = (id) => allAgents || agentIds.includes(id);
+
+  // The colours this counsel's answers will arrive in. Built from exactly who is
+  // being asked — the same set ChatPane builds its palette from — so the dot
+  // beside a name here and that agent's bubbles over there are the same colour.
+  const palette = useMemo(
+    () => paletteFor(allAgents ? agents.map((a) => a.id) : agentIds),
+    [allAgents, agents, agentIds]
+  );
   const names = agents.filter((a) => chosen(a.id)).map((a) => a.name);
   const label = chipLabel({ allAgents, names: allAgents ? agents.map((a) => a.name) : names });
 
@@ -85,7 +94,7 @@ export default function AgentPicker({
     }
   };
 
-  const row = (key, { checked, disabled, onPick, title, name, note, tone }) => (
+  const row = (key, { checked, disabled, onPick, title, name, note, tone, colour }) => (
     <li key={key} role="none">
       <button
         type="button"
@@ -104,6 +113,11 @@ export default function AgentPicker({
           <span className="agent-pick-name">{name}</span>
           {note && <span className="agent-pick-note">{note}</span>}
         </span>
+        {/* The colour this agent's answers will arrive in. Beside the name where
+            the counsel is put together, so the association is made once, here,
+            rather than worked out later from a transcript. Decorative: the name
+            is right next to it, so nothing is ever carried by colour alone. */}
+        {colour && <span className="agent-pick-dot" style={{ '--agent-color': colour }} aria-hidden="true" />}
       </button>
     </li>
   );
@@ -253,6 +267,11 @@ export default function AgentPicker({
               tone: a.ready === false ? 'off' : '',
               title:
                 a.ready === false ? 'It stays in the counsel and is skipped until it can answer again.' : '',
+              // Only for agents this session actually asks. Colouring the ones
+              // that are merely available would promise a colour to an agent
+              // that has none yet, and change every other agent's the moment one
+              // more was ticked.
+              colour: chosen(a.id) ? palette.get(a.id) : null,
             })
           )}
           {missing.map((id) =>

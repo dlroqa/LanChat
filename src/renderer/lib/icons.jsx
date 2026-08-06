@@ -174,6 +174,15 @@ export const Stop = (p) => (
     <rect x="6" y="6" width="12" height="12" rx="1.5" />
   </S>
 );
+// Pause: holding a discussion rather than ending it. Two bars against Stop's one
+// square, because the difference between them is the whole point — one gives the
+// turn back afterwards and the other does not.
+export const Pause = (p) => (
+  <S {...p}>
+    <rect x="7" y="6" width="3.5" height="12" rx="1" />
+    <rect x="13.5" y="6" width="3.5" height="12" rx="1" />
+  </S>
+);
 // Walkie-talkie: body, speaker grille, and antenna.
 export const Radio = (p) => (
   <S {...p}>

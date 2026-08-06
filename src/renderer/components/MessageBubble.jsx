@@ -16,6 +16,13 @@ const ERROR_TTL_S = 10;
 // previewUrl builds a localhost URL the main-process server streams the file from.
 export default function MessageBubble({
   msg,
+  // Which agent said it, as a colour. Null everywhere but a session, and null in
+  // a session for anything a person wrote — the colour is how one agent's
+  // answers are told from another's, and there is nothing to tell apart in a
+  // thread with one voice in it. Handed down rather than worked out here: the
+  // colours are decided for the conversation as a whole, because being distinct
+  // is a property of the room and not of any one message in it.
+  color = null,
   grouped,
   previewUrl,
   previewFallback,
@@ -135,7 +142,12 @@ export default function MessageBubble({
     <div
       className={`bubble-row ${out ? 'out' : 'in'} ${grouped ? 'grouped' : ''} ${
         going ? 'erasing' : ''
-      } ${dissolving ? 'dissolving' : ''}`}
+      } ${dissolving ? 'dissolving' : ''} ${color && !out ? 'agent' : ''}`}
+      // The one place the colour is named. Everything that uses it — the fill,
+      // the edge, the speaker's name — reads it back out of this variable, so an
+      // agent's colour reaches all three from a single source and a bubble with
+      // no agent behind it keeps the ordinary surface.
+      style={color && !out ? { '--agent-color': color } : undefined}
     >
       <div
         className={`bubble ${queued ? 'queued' : ''} ${rejected ? 'rejected' : ''} ${

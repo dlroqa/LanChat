@@ -5,7 +5,16 @@ const { SessionRegistry, isSessionId, DEFAULT_TITLE } = require('./registry.js')
 const { parseTranscript } = require('./transcript.js');
 const { composeContext, contextRecord } = require('./prompt.js');
 const { resolveCounsel, missedNotice, unreachableNotice, soloNotice, relayPrompt } = require('./counsel.js');
-const { dialoguePrompt, converged, nextSpeaker, endedNotice } = require('./dialogue.js');
+const {
+  dialoguePrompt,
+  converged,
+  nextSpeaker,
+  remaining,
+  endedNotice,
+  leftNotice,
+  finalLeftNotice,
+} = require('./dialogue.js');
+const { userMessage, agentMessage, turnsOf, taskState } = require('./a2a.js');
 const { PEER_MIN_INTERVAL_MS } = require('../agents/index.js');
 
 // Sessions: a titled workspace with a conversation in it.
@@ -191,6 +200,18 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
         cap: round.cap,
         ended: round.ended,
         speaking: round.speaking,
+        // Who has stopped taking turns while the rest carry on, and the sentence
+        // said about each as it happened. A discussion of four that finishes with
+        // two talking is not the same event as one that ran to its budget with
+        // everybody in it, and the roster alone cannot tell them apart.
+        left: [...round.left],
+        notices: round.notices.slice(),
+        paused: round.paused,
+        // Where the discussion stands, in the one vocabulary the round, the
+        // window and an A2A agent all share — see a2a.js. `ended` above is
+        // LanChat's reason and stays; this is the same fact in the words
+        // anything speaking the protocol already understands.
+        state: taskState(round),
       }),
     };
   }
@@ -203,8 +224,13 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
   // transport thinks. Checked lazily, when the next question is asked, because
   // that is the only moment anybody is inconvenienced by it — a timer would burn
   // a wakeup every minute to notice something nobody is waiting on.
+  // A paused discussion is never stale. It is idle because somebody stopped it
+  // to think, which is the one kind of waiting this rule is not about: the point
+  // of the timeout is a transport that hung, and holding the floor deliberately
+  // is not that. Without this, walking away mid-discussion for ten minutes would
+  // quietly forfeit the rest of the budget.
   function stale(round) {
-    return round.open && Date.now() - round.lastAt > ROUND_IDLE_MS;
+    return round.open && !round.paused && Date.now() - round.lastAt > ROUND_IDLE_MS;
   }
 
   // The end of a round. `ended` is why, and only a dialogue has one: the other
@@ -215,6 +241,10 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
     round.open = false;
     if (ended) round.ended = ended;
     round.speaking = null;
+    // Nobody is waiting to speak into a round that is over, and a discussion put
+    // back into the Trash and restored must not find a turn still queued.
+    round.nextUp = null;
+    round.paused = false;
     // A turn that was waiting its slot with a peer's agent is not taken. The
     // question was never sent, so cancelling it costs nobody an answer — and
     // leaving it armed would have a stopped discussion speak once more, into a
@@ -393,6 +423,13 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
     // treated as over rather than allowed to wedge the workspace shut.
     const open = rounds.get(sessionId);
     if (open && !stale(open)) {
+      // A discussion is the one round somebody can speak into rather than only
+      // wait out. It carries on for turns at a time without anybody typing, and
+      // the whole reason for watching one is to be able to say "not that" while
+      // it still matters — so words typed into a live discussion join it instead
+      // of being handed back with a refusal. Every other mode is one lap and is
+      // over by the time a second question could sensibly be asked.
+      if (open.mode === 'dialogue') return interject(open, text, docs, context);
       return refuse(sessionId, text, docs, 'The agents are still answering the last question asked here.');
     }
     if (open) closeRound(open);
@@ -481,9 +518,43 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
       cap: dialogue ? record.turns : 0,
       speaking: null,
       ended: null,
+      // Agents that have stopped taking turns: signed off, went quiet, or could
+      // not answer. They stay in `order` — the rota is a record of how the
+      // discussion was arranged, and their words are still in the transcript —
+      // and are skipped on the way round. See noteOutcome for why one agent
+      // leaving is not the end of a discussion between four.
+      left: new Set(),
+      // What was said about each of them as they went, in order.
+      notices: [],
+      // Whether the person has the floor. A paused discussion is still open and
+      // still has its budget; what it does not have is a turn in flight — see
+      // pauseRound.
+      paused: false,
+      // Who speaks when it starts again. Worked out when the previous speaker
+      // reports and held here until the turn is actually taken, so a pause never
+      // loses whose go it was.
+      nextUp: null,
+      // The discussion itself, as A2A messages — see a2a.js.
+      //
+      // This is the record every turn is rendered from, and it is one list
+      // rather than two: the question that started it, every agent's reply, and
+      // (once there is a way to make one) anything the person says into the
+      // middle of it, all in the order they happened. Keeping the person in the
+      // same list as the agents is the whole reason for the shape — an
+      // interjection is then a turn like any other rather than a special case
+      // threaded through the loop.
+      //
+      // Filled in below, because the messages carry the round's own id and it
+      // does not exist until this object does.
+      history: [],
       // A turn waiting its slot with a peer's agent — see bookRemote below.
       timer: null,
     };
+    // The opening question, and the only entry that is not quoted back to
+    // anybody: it is rendered last in every prompt, on its own, because the
+    // question is the thing to act on and belongs nearest the reply. Everything
+    // after it is the discussion — see questionFor.
+    round.history.push(userMessage({ text: composed, contextId: sessionId, taskId: round.id, turn: 0 }));
     rounds.set(sessionId, round);
 
     if (round.mode === 'dialogue') {
@@ -547,7 +618,18 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
       return dialoguePrompt({
         question: round.composed,
         speaker: target,
-        said: round.answers.length ? round.answers[round.answers.length - 1] : null,
+        // Who is still in the room, in the order they speak. The ones who have
+        // left are not on it — an agent told to expect Beacon after Tessie, when
+        // Beacon signed off two turns ago, has been told something untrue.
+        roster: remaining(round.order, round.left),
+        // And everything said so far, by everybody. Not the last answer: that is
+        // what made a discussion of three into three agents each replying to
+        // whoever went immediately before them.
+        //
+        // From the first turn onwards, because history[0] is the question and
+        // the question is rendered on its own, at the end. Quoting it here as
+        // well would show every agent the question twice.
+        history: turnsOf(round.history.slice(1)),
         turn: round.turn,
         cap: round.cap,
       });
@@ -571,10 +653,29 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
   //
   // The slot is reserved rather than merely read, so two turns booked in the same
   // millisecond come out one interval apart rather than both taking the same one.
+  // Headroom on top of the interval, and it is load-bearing rather than
+  // superstition.
+  //
+  // The two ends measure different moments. This one books from when it decided
+  // to send; the owner measures from when it *accepted* the last question, which
+  // is later by a frame in flight and whatever it was doing when it arrived. Two
+  // turns booked exactly PEER_MIN_INTERVAL_MS apart therefore arrive a hair under
+  // it whenever the first question took longer to accept than the second — and
+  // the owner's rule is a strict `<`, so the question is swallowed in silence and
+  // the discussion waits for an answer that was never going to come.
+  //
+  // A quarter-second is far more than the difference in practice and far less
+  // than anybody can perceive in a discussion that already paces itself in
+  // seconds. Being early is the only failure mode with no way back, so this end
+  // is deliberately late.
+  const PEER_PACE_MARGIN_MS = 250;
+
   const lastAsked = new Map();
   function bookRemote(threadId, pace) {
     const now = Date.now();
-    const at = pace ? Math.max(now, (lastAsked.get(threadId) || 0) + PEER_MIN_INTERVAL_MS) : now;
+    const at = pace
+      ? Math.max(now, (lastAsked.get(threadId) || 0) + PEER_MIN_INTERVAL_MS + PEER_PACE_MARGIN_MS)
+      : now;
     lastAsked.set(threadId, at);
     return at - now;
   }
@@ -594,7 +695,6 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
   }
 
   function dispatch(round, target) {
-    const question = questionFor(round, target);
     round.running.add(target.agentId);
     // An agent a peer shared with us. The question travels to its owner, and the
     // answer is routed back to this session rather than to the agent's own
@@ -610,18 +710,41 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
         round.timer = setTimeout(() => {
           round.timer = null;
           // Stopped, trashed, or already over while we waited.
-          if (round.open) sendRemote(round, target, remote, question);
+          //
+          // Composed here rather than three seconds ago, which is the whole
+          // reason this is inside the timer: a person can say something into a
+          // discussion while it waits its turn with a peer's agent, and a
+          // question written before they spoke would be the one turn in the room
+          // that had not heard them.
+          if (round.open) sendRemote(round, target, remote, questionFor(round, target));
         }, wait);
         if (round.timer.unref) round.timer.unref();
         return true;
       }
-      return sendRemote(round, target, remote, question);
+      return sendRemote(round, target, remote, questionFor(round, target));
     }
+    const question = questionFor(round, target);
     // `ref` is what makes a failure attributable: if this run errors, the error
     // comes back naming this message, and this message stops counting as a
     // question that was answered — once the whole round is in, and not before.
     const ok = agentHub
-      ? agentHub.ask(target.agentId, question, { thread: round.sessionId, ref: round.messageId })
+      ? agentHub.ask(target.agentId, question, {
+          thread: round.sessionId,
+          ref: round.messageId,
+          // The same turn in A2A's shape, for the one transport that speaks it.
+          // Every other transport is handed `question` and never looks at this —
+          // see the note on ask() in agents/index.js.
+          a2a: {
+            a2aMessage: userMessage({
+              text: question,
+              contextId: round.sessionId,
+              taskId: round.id,
+              turn: round.turn,
+            }),
+            taskId: round.id,
+            contextId: round.sessionId,
+          },
+        })
       : false;
     // Refused at the door. Everything that could be checked in advance already
     // was, so this is a race — an agent switched off between resolving the
@@ -642,6 +765,29 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
     if (round.open) publish(round);
   }
 
+  // Hands the floor to whoever is next in a discussion.
+  //
+  // The one place a turn is actually spent, so the budget cannot be worn down by
+  // a path that forgot to count. Reached from noteOutcome when the previous
+  // speaker reports, and from resumeRound when the person gives the floor back.
+  function takeTurn(round) {
+    const next = round.nextUp;
+    if (!next) return null;
+    round.nextUp = null;
+    round.turn += 1;
+    round.speaking = next.agentId;
+    // Dispatched before the window is told, and in that order: dispatch() is what
+    // puts the next agent into `running`, so publishing first would send a view
+    // with nobody thinking in it — for the whole discussion, since every turn
+    // passes through here. It may also close the round from underneath us if that
+    // agent is refused at the door, which is why the publish below is guarded
+    // rather than unconditional.
+    dispatch(round, next);
+    if (!round.open) return null;
+    publish(round);
+    return view(round);
+  }
+
   // One agent's run is over: it answered, it failed, or it finished with nothing
   // in it.
   //
@@ -659,53 +805,97 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
     const who = round.asked.find((t) => t.agentId === agentId);
     round.running.delete(agentId);
     round.lastAt = Date.now();
-    if (kind === 'answer')
+    if (kind === 'answer') {
       round.answers.push({ agentId, name: (who && who.name) || 'an agent', text, ts: Date.now() });
-    else if (kind === 'empty') round.empty.add(agentId);
+      // And into the discussion proper. Only what was actually said: a run that
+      // failed or came back empty is an outcome, recorded above, but it is not a
+      // turn anybody can reply to and quoting an absence to the next speaker
+      // would be inventing one.
+      round.history.push(
+        agentMessage({
+          text,
+          contextId: round.sessionId,
+          taskId: round.id,
+          agentId,
+          agentName: (who && who.name) || null,
+          turn: round.turn,
+        })
+      );
+    } else if (kind === 'empty') round.empty.add(agentId);
     else round.failed.add(agentId);
 
-    // A discussion decides here whether there is another turn in it. Four ways
-    // it can be over, and they are checked in this order on purpose: an agent
-    // that could not answer ends it however many turns were left, and a turn
-    // budget is spent whether or not the last thing said invited a reply.
+    // A discussion decides here whether there is another turn in it, and who
+    // takes it.
+    //
+    // One invariant, and everything below is it: **a discussion runs while at
+    // least two agents are still in it and the budget is unspent.**
+    //
+    // It used to be that any one agent signing off, going quiet or failing ended
+    // the round outright. For two that is the same rule — drop one of two and
+    // nobody is left to talk to — but for four it threw away a conversation
+    // three agents were still having. So an agent that stops now leaves, the
+    // rest carry on, and the round ends when the room does.
     if (round.mode === 'dialogue') {
       round.speaking = null;
-      // Nothing came back. A discussion is two agents replying to each other, so
-      // one of them going quiet is the end of it — there is nothing for the
-      // other to reply to, and asking it to carry on alone would be handing it
-      // its own last answer and calling that a conversation. An agent refused at
-      // the door arrives here too, which is how a peer's fair-share quota
-      // running out ends a cross-machine discussion rather than stalling it.
-      if (kind !== 'answer') {
-        closeRound(round, kind === 'empty' ? 'silence' : 'error');
-        return null;
+      // What this agent just did, if it means it is finished. Nothing came back
+      // (silence, or a failure — including an agent refused at the door, which is
+      // how a peer's fair-share quota running out leaves a cross-machine
+      // discussion rather than stalling it), or it said it was done and is taken
+      // at its word: the whole reason the closing line is asked for is so an
+      // agent with nothing to add stops spending turns on saying so.
+      const departed =
+        kind !== 'answer' ? (kind === 'empty' ? 'silence' : 'error') : converged(text) ? 'converged' : null;
+
+      if (departed) {
+        round.left.add(agentId);
+        const still = remaining(round.order, round.left);
+        if (still.length < 2) {
+          // Nobody left to have a discussion with. Which sentence to end on: if
+          // this is the only agent that ever left, it is that agent's doing and
+          // is named as such — which is exactly what a discussion of two has
+          // always said. If others went before it, the discussion emptied out
+          // rather than being ended by anybody, and says so.
+          const emptied = round.left.size > 1;
+          // Either way, what this last one did is still worth recording. The
+          // ending says the room emptied; only this says why the one that
+          // emptied it went.
+          if (emptied) {
+            const last = finalLeftNotice((who && who.name) || null, departed);
+            if (last) round.notices.push(last);
+          }
+          closeRound(round, emptied ? 'dwindled' : departed);
+          return null;
+        }
+        // The rest have the floor. Said once, now, while it is true — never
+        // stored, like every other notice a session produces.
+        const notice = leftNotice((who && who.name) || null, departed, still.length);
+        if (notice) round.notices.push(notice);
       }
-      // Somebody said they were done. Taken at their word: the whole reason the
-      // closing line is asked for is so a discussion that has reached agreement
-      // stops there instead of spending the rest of the budget on it.
-      if (converged(text)) {
-        closeRound(round, 'converged');
-        return null;
-      }
+
       // The budget. The one ending that is not a judgement about the discussion,
       // and the only one that cannot be talked out of.
       if (round.turn >= round.cap) {
         closeRound(round, 'spent');
         return null;
       }
-      const next = nextSpeaker(round.order, agentId);
-      round.turn += 1;
-      round.speaking = next.agentId;
-      // Dispatched before the window is told, and in that order: dispatch() is
-      // what puts the next agent into `running`, so publishing first would send
-      // a view with nobody thinking in it — for the whole discussion, since
-      // every turn passes through here. May also close the round from underneath
-      // us if that agent is refused at the door, which is why the publish below
-      // is guarded rather than unconditional.
-      dispatch(round, next);
-      if (!round.open) return null;
-      publish(round);
-      return view(round);
+      const next = nextSpeaker(round.order, agentId, round.left);
+      // Unreachable by the check above — an agent that did not depart is still on
+      // the rota, so there is always somebody to hand the floor to. Guarded
+      // anyway, because the alternative to a wrong answer here is a crash in
+      // dispatch(), and a discussion that quietly ends is the better of the two.
+      if (!next) {
+        closeRound(round, 'dwindled');
+        return null;
+      }
+      // Whose turn it is. Recorded before it is taken, because it may not be
+      // taken yet: a paused discussion has worked out who speaks next and is
+      // waiting for the person to finish saying whatever made them pause it.
+      round.nextUp = next;
+      if (round.paused) {
+        publish(round);
+        return view(round);
+      }
+      return takeTurn(round);
     }
 
     if (round.queue.length) {
@@ -747,6 +937,95 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
     }
     closeRound(round, 'stopped');
     return true;
+  }
+
+  // ---- speaking into a discussion, and picking it back up ----
+  //
+  // Stop is final: the round closes and whatever budget was left is gone. That
+  // is the right answer to "this is going nowhere" and the wrong one to "wait —
+  // not that", which is the far commoner thing to want while watching four
+  // agents talk. These three are that second thing.
+  //
+  // Only a dialogue has any of it. Every other mode is one lap and is finished
+  // by the time somebody could sensibly interrupt it; a discussion runs for a
+  // dozen turns without anybody typing, which is precisely why it needs a way in.
+
+  // Hold the floor. The agent mid-answer is left to finish — its reply is worth
+  // having and cutting it off would lose it — and the turn after that one is
+  // worked out and not taken.
+  function pauseRound(sessionId) {
+    const round = rounds.get(sessionId);
+    if (!round || !round.open || round.mode !== 'dialogue' || round.paused) return false;
+    round.paused = true;
+    round.lastAt = Date.now();
+    publish(round);
+    return true;
+  }
+
+  // And give it back. The budget is untouched — pausing is not a turn, and a
+  // discussion resumed is the same discussion rather than a shorter one.
+  function resumeRound(sessionId) {
+    const round = rounds.get(sessionId);
+    if (!round || !round.open || !round.paused) return false;
+    round.paused = false;
+    round.lastAt = Date.now();
+    // Nobody is waiting to speak if the pause landed while an agent was still
+    // answering: that agent reports in the ordinary way and the discussion picks
+    // itself up from there.
+    if (round.nextUp) takeTurn(round);
+    else publish(round);
+    return true;
+  }
+
+  // Something the person said into the middle of a discussion.
+  //
+  // Written into the transcript as an ordinary message of theirs, because that
+  // is what it is, and added to the discussion record as a turn with the `user`
+  // role — which is the whole reason the record is A2A-shaped. The next speaker
+  // is shown it the same way it is shown everything else, so nothing here has to
+  // reach into the prompt builder and no path exists for the person's words to
+  // be shown to one agent and not another.
+  //
+  // It does not spend a turn. The budget counts what the agents say; a person
+  // saying "not that" has not used one of their replies up.
+  function interject(round, text, docs, context) {
+    const quoted = contextRecord(context);
+    const message = {
+      id: crypto.randomUUID(),
+      peerId: round.sessionId,
+      direction: 'out',
+      kind: 'text',
+      text,
+      ts: Date.now(),
+      ...(docs.length && { docs: docs.map((d) => ({ name: d.name, bytes: d.bytes })) }),
+      ...(quoted && { context: quoted }),
+    };
+    store.append(round.sessionId, message);
+    sessions.touch(round.sessionId);
+
+    // Documents handed over mid-discussion join the ones the round was started
+    // with, so every turn from here on carries them. An attachment shown to the
+    // next agent and not the one after would be a discussion where two agents
+    // read different papers.
+    if (docs.length) round.docs = [...round.docs, ...docs];
+
+    round.history.push(
+      userMessage({
+        text: composeContext(quoted, text),
+        contextId: round.sessionId,
+        taskId: round.id,
+        turn: round.turn,
+      })
+    );
+    round.lastAt = Date.now();
+
+    // Speaking into a paused discussion is how you start it again. Anything else
+    // would leave somebody who had paused it, said their piece, and expected it
+    // to carry on staring at a discussion that never moved.
+    if (round.paused) resumeRound(round.sessionId);
+    else publish(round);
+
+    return { ...message, delivered: true };
   }
 
   // The round a session currently has out, for anything that needs to know
@@ -822,6 +1101,8 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
     send,
     noteOutcome,
     stopRound,
+    pauseRound,
+    resumeRound,
     roundFor,
     askable,
     importText,

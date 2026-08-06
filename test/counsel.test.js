@@ -222,6 +222,20 @@ test('a finished round says what came of it', () => {
   assert.equal(copy.roundSummary({ open: false, answered: [], empty: [], failed: ['a1'] }), '1 failed');
 });
 
+test('the composer says what typing will do while a discussion is running', () => {
+  // A box that looks like it starts something new, and instead joins a
+  // conversation already in progress, is the kind of thing somebody only finds
+  // out by losing a sentence to it.
+  const counsel = { names: ['Hermes', 'Tessie'], mode: 'dialogue' };
+  assert.match(copy.askPlaceholder(counsel), /Give Hermes and Tessie something to discuss/);
+  assert.match(copy.askPlaceholder({ ...counsel, discussing: true }), /Say something into the discussion/);
+  assert.match(
+    copy.askPlaceholder({ ...counsel, discussing: true, held: true }),
+    /picks up from there/,
+    'and that saying it is what starts a held one again'
+  );
+});
+
 // ------------------------------------------------------------------ the picker
 
 test('mounted in a browser: ticking a counsel together, and nothing lost on the way', async () => {

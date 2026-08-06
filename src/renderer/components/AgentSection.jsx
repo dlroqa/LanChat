@@ -30,7 +30,17 @@ const KINDS = [
     label: 'SSH command',
     hint: 'Runs the agent on another host. The host must already be in your known_hosts.',
   },
+  {
+    id: 'a2a',
+    label: 'A2A',
+    hint: 'Agent2Agent over JSON-RPC. Reads the agent’s own card for its name and skills.',
+  },
 ];
+
+// Transports reached over a network, which therefore have something to
+// authenticate with. The others start a program on a machine that already
+// trusts you, so a key field on their form would be a box with nowhere to go.
+const KEYED = new Set(['http', 'a2a']);
 
 const BLANK = {
   id: null, // set once the record exists — the form doubles as the edit form
@@ -100,31 +110,32 @@ export default function AgentSection({ peers = [] }) {
     const config =
       d.kind === 'http'
         ? { baseUrl: c.baseUrl, model: c.model || undefined, profile: c.profile || undefined }
-        : d.kind === 'command'
-          ? { command: c.command, args, cwd: c.cwd || undefined }
-          : d.kind === 'acp'
+        : d.kind === 'a2a'
+          ? { baseUrl: c.baseUrl }
+          : d.kind === 'command'
             ? { command: c.command, args, cwd: c.cwd || undefined }
-            : {
-                host: c.host,
-                user: c.user,
-                identityFile: c.identityFile || undefined,
-                port: c.port || undefined,
-                remoteCommand: c.remoteCommand,
-                args,
-              };
-    const secret =
-      d.kind !== 'http'
-        ? { mode: 'none' }
-        : d.secretMode === 'env'
-          ? { mode: 'env', name: d.secretEnv }
-          : d.secretValue
-            ? { mode: 'sealed', value: d.secretValue }
-            : { mode: 'none' };
+            : d.kind === 'acp'
+              ? { command: c.command, args, cwd: c.cwd || undefined }
+              : {
+                  host: c.host,
+                  user: c.user,
+                  identityFile: c.identityFile || undefined,
+                  port: c.port || undefined,
+                  remoteCommand: c.remoteCommand,
+                  args,
+                };
+    const secret = !KEYED.has(d.kind)
+      ? { mode: 'none' }
+      : d.secretMode === 'env'
+        ? { mode: 'env', name: d.secretEnv }
+        : d.secretValue
+          ? { mode: 'sealed', value: d.secretValue }
+          : { mode: 'none' };
     const payload = { name: d.name, kind: d.kind, config, secret };
-    // Editing an HTTP agent that already has a sealed key, without typing a new
-    // one, must not wipe it. Omitting `secret` entirely is what tells the
-    // registry to leave the stored key alone.
-    if (d.id && d.kind === 'http' && d.secretMode === 'sealed' && !d.secretValue && d.hasSecret) {
+    // Editing an agent that already has a sealed key, without typing a new one,
+    // must not wipe it. Omitting `secret` entirely is what tells the registry to
+    // leave the stored key alone.
+    if (d.id && KEYED.has(d.kind) && d.secretMode === 'sealed' && !d.secretValue && d.hasSecret) {
       delete payload.secret;
     }
     return payload;
@@ -323,44 +334,20 @@ export default function AgentSection({ peers = [] }) {
                 value={draft.config.model}
                 onChange={(v) => setCfg({ model: v })}
               />
-              <div className="field">
-                <label htmlFor="agent-secret-mode">API key</label>
-                <select
-                  id="agent-secret-mode"
-                  value={draft.secretMode}
-                  onChange={(e) => setDraft((d) => ({ ...d, secretMode: e.target.value }))}
-                >
-                  <option value="sealed">Store it encrypted on this device</option>
-                  <option value="env">Read it from an environment variable</option>
-                </select>
-                {draft.secretMode === 'sealed' ? (
-                  <>
-                    <input
-                      type="password"
-                      value={draft.secretValue}
-                      autoComplete="off"
-                      placeholder={draft.hasSecret ? 'Leave blank to keep the stored key' : 'Paste the key'}
-                      onChange={(e) => setDraft((d) => ({ ...d, secretValue: e.target.value }))}
-                    />
-                    <div className="hint">
-                      {draft.hasSecret
-                        ? 'A key is already stored for this agent. Leave this blank to keep it, or paste a new one to replace it.'
-                        : "Encrypted with your operating system's keychain. It is never shown again and never leaves this device."}
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <input
-                      value={draft.secretEnv}
-                      placeholder="HERMES_API_KEY"
-                      onChange={(e) => setDraft((d) => ({ ...d, secretEnv: e.target.value }))}
-                    />
-                    <div className="hint">
-                      Only the variable name is stored; the key itself is never written to disk.
-                    </div>
-                  </>
-                )}
-              </div>
+              <SecretField draft={draft} setDraft={setDraft} envExample="HERMES_API_KEY" />
+            </>
+          )}
+
+          {draft.kind === 'a2a' && (
+            <>
+              <Field
+                label="Base URL"
+                value={draft.config.baseUrl}
+                placeholder="https://agent.example.com"
+                hint="Where the agent’s card lives. Its name, skills and service endpoint are read from /.well-known/agent-card.json when the agent starts."
+                onChange={(v) => setCfg({ baseUrl: v })}
+              />
+              <SecretField draft={draft} setDraft={setDraft} label="Bearer token" envExample="A2A_TOKEN" />
             </>
           )}
 
@@ -522,6 +509,60 @@ function AgentTag({ agent }) {
         </>
       )}
     </span>
+  );
+}
+
+// The credential a network transport authenticates with.
+//
+// One component rather than a block per transport: HTTP and A2A both reach a
+// service over a socket and both have to prove who they are, and the rules about
+// how a key is kept — sealed with the operating system's keychain, or read from
+// an environment variable and never written down — are a property of this app
+// rather than of either protocol. Two copies would be two places for those rules
+// to drift apart.
+//
+// Only the label and the example variable name differ, which is exactly the
+// amount a caller should be able to change.
+function SecretField({ draft, setDraft, label = 'API key', envExample }) {
+  return (
+    <div className="field">
+      <label htmlFor="agent-secret-mode">{label}</label>
+      <select
+        id="agent-secret-mode"
+        value={draft.secretMode}
+        onChange={(e) => setDraft((d) => ({ ...d, secretMode: e.target.value }))}
+      >
+        <option value="sealed">Store it encrypted on this device</option>
+        <option value="env">Read it from an environment variable</option>
+      </select>
+      {draft.secretMode === 'sealed' ? (
+        <>
+          <input
+            type="password"
+            value={draft.secretValue}
+            autoComplete="off"
+            placeholder={draft.hasSecret ? 'Leave blank to keep the stored key' : 'Paste the key'}
+            onChange={(e) => setDraft((d) => ({ ...d, secretValue: e.target.value }))}
+          />
+          <div className="hint">
+            {draft.hasSecret
+              ? 'A key is already stored for this agent. Leave this blank to keep it, or paste a new one to replace it.'
+              : "Encrypted with your operating system's keychain. It is never shown again and never leaves this device."}
+          </div>
+        </>
+      ) : (
+        <>
+          <input
+            value={draft.secretEnv}
+            placeholder={envExample}
+            onChange={(e) => setDraft((d) => ({ ...d, secretEnv: e.target.value }))}
+          />
+          <div className="hint">
+            Only the variable name is stored; the key itself is never written to disk.
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 

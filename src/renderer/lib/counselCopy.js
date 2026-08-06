@@ -80,9 +80,19 @@ export function sessionSubLine({ allAgents, names, available } = {}) {
 // What the composer invites you to do. In relay mode it says the order, because
 // the order is the whole difference between the two modes and choosing it in a
 // menu that is shut by the time you type is otherwise invisible.
-export function askPlaceholder({ allAgents, names, mode } = {}) {
+export function askPlaceholder({ allAgents, names, mode, discussing, held } = {}) {
   const keys = '  (Enter to send, Shift+Enter for newline)';
   const list = (names || []).filter(Boolean);
+  // A discussion already under way is the one case where typing does something
+  // other than ask a new question: the words join the discussion, and the next
+  // agent to speak is shown them. Said here because a box that looks like it
+  // starts something new, and does not, is the kind of thing somebody only
+  // discovers by losing a sentence to it.
+  if (discussing) {
+    return held
+      ? `Say something, and the discussion picks up from there…${keys}`
+      : `Say something into the discussion…${keys}`;
+  }
   if (allAgents) return `Ask all agents…${keys}`;
   if (list.length === 0) return 'Choose agents above to ask something';
   if (list.length === 1) return `Ask ${list[0]}…${keys}`;

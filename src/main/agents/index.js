@@ -19,6 +19,7 @@ const { discoverProfiles, hermesLaunchArgs } = require('./profiles');
 const { createCommandTransport } = require('./transports/command');
 const { createAcpTransport } = require('./transports/acp');
 const { createSshTransport } = require('./transports/ssh');
+const { createA2aTransport } = require('./transports/a2a');
 const { heldLine, rotatedLine, busyLine } = require('./turnCopy');
 const { resolveMedia } = require('../media');
 
@@ -55,6 +56,7 @@ const TRANSPORTS = {
   command: createCommandTransport,
   acp: createAcpTransport,
   ssh: createSshTransport,
+  a2a: createA2aTransport,
 };
 
 // Per-peer throttle. The agent runs one job at a time, and a busy refusal is
@@ -767,7 +769,7 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   // reconstructed as "the last thing asked" — that would be true today, because
   // only one question is ever outstanding, and silently wrong the moment that
   // stops being true.
-  async function deliver(agentId, text, origin = null, { thread = null, ref = null } = {}) {
+  async function deliver(agentId, text, origin = null, { thread = null, ref = null, a2a = null } = {}) {
     const entry = live.get(agentId);
     const record = registry.get(agentId);
     if (!record || !entry) return;
@@ -798,7 +800,10 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
 
     let streamed = '';
     await entry.transport.send(
-      { text },
+      // `text` is what every transport has always been given. The A2A fields ride
+      // alongside it rather than replacing it, so a transport that has never
+      // heard of them is handed exactly what it was handed before.
+      { text, ...(a2a || {}) },
       {
         onDelta: (delta) => {
           streamed += delta;
@@ -828,6 +833,21 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
         // already been told; this is only the bookkeeping.
         onApprovalClosed: ({ runId, reason }) => {
           closeApproval(agentId, runId, { reason });
+        },
+        // An agent that has asked the person something rather than answered them.
+        //
+        // Only A2A produces this — it is the protocol's `input-required` — and it
+        // is deliberately not an approval: an approval is a yes-or-no about a
+        // tool call with a card and a timeout, and this is a question in the
+        // agent's own words with a person free to answer it or not. The answer
+        // it needs is the ordinary way in: somebody typing into the thread.
+        //
+        // The run itself still ends, with the question as its turn, so the round
+        // is not left waiting on an answer that is not coming. What this adds is
+        // the round holding the floor afterwards instead of moving on, which is
+        // exactly what pausing already means.
+        onInput: ({ question, taskId }) => {
+          bus.emit('agent-input-required', { agentId, threadId: liveId, question, taskId });
         },
         onDone: ({ text: output }) => {
           entry.busy = false;
@@ -1615,9 +1635,15 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     // answer. Everything a peer can reach still goes through the routers below,
     // which is where the sharing gates live; this path is local-only by
     // construction and reaches no further than `deliver`.
-    ask: (agentId, text, { thread = null, ref = null } = {}) => {
+    // `a2a` is the same question already in Agent2Agent's shape — the round's own
+    // message, its task and its context. Every transport but one ignores it and
+    // is handed the rendered `text`; the A2A transport sends the objects
+    // themselves, which is the whole reason the discussion record is kept in
+    // that shape. Absent for anything asked outside a discussion, and absent is
+    // the ordinary case.
+    ask: (agentId, text, { thread = null, ref = null, a2a = null } = {}) => {
       if (!live.has(agentId)) return false;
-      deliver(agentId, text, null, { thread, ref });
+      deliver(agentId, text, null, { thread, ref, a2a });
       return true;
     },
     // Whether there is anything there to ask. Asked separately from ask() so a

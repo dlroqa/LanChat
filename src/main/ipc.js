@@ -268,6 +268,20 @@ function createIpc({
   // delegate thread, and that is the thread the window has to answer in.
   // Named as well as addressed, because a session may have put one question to
   // several agents and has to say which of them came back with nothing.
+  // An A2A agent has asked the person a question rather than answered them.
+  //
+  // The discussion holds rather than moving on: the next speaker would otherwise
+  // be handed "which of the two do you mean?" and left to guess on the person's
+  // behalf, which is the one thing an agent asking cannot be helped with.
+  //
+  // Nothing is sent to the window. It needs nothing: the question arrives in the
+  // transcript as that agent's turn, because it is one, and the paused round
+  // comes down the channel every other change to a round does — which is already
+  // the thing that says whose move it is. Typing an answer resumes it, exactly
+  // as saying anything into a held discussion does.
+  bus.on('agent-input-required', ({ threadId }) => {
+    if (isSessionId(threadId)) sessions.pauseRound(threadId);
+  });
   bus.on('agent-empty', ({ threadId, agentId, agentName }) => {
     emit('agent-empty', { peerId: threadId, agentId, agentName });
     if (isSessionId(threadId)) sessions.noteOutcome({ threadId, agentId, kind: 'empty' });
@@ -901,6 +915,15 @@ function createIpc({
   // but it works on any open round: a run that has stopped being worth waiting
   // for is a run that has stopped being worth waiting for.
   ipcMain.handle('lanchat:stopSessionRound', (_e, { id }) => ({ ok: sessions.stopRound(id) }));
+
+  // Holding the floor in a discussion, and giving it back. Distinct from stopping
+  // one: the round stays open and keeps its budget, so a person can say something
+  // into it and let it carry on — see the note above pauseRound in sessions.
+  // Interjecting is not here because it is not a separate channel: words typed
+  // into a live discussion go down sendChat like every other message, and
+  // sessions.send routes them.
+  ipcMain.handle('lanchat:pauseSessionRound', (_e, { id }) => ({ ok: sessions.pauseRound(id) }));
+  ipcMain.handle('lanchat:resumeSessionRound', (_e, { id }) => ({ ok: sessions.resumeRound(id) }));
 
   // Deleting a session puts it in the Trash. Same channel it has always been,
   // and the same `{ ok }` back: what changed is that the transcript stays on

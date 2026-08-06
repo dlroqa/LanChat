@@ -56,6 +56,12 @@ contextBridge.exposeInMainWorld('lanchat', {
   askableAgents: () => invoke('lanchat:askableAgents'),
   sessionRound: (id) => invoke('lanchat:sessionRound', { id }),
   stopSessionRound: (id) => invoke('lanchat:stopSessionRound', { id }),
+  // A discussion held and picked back up. Not the same as stopping one: the
+  // round keeps its budget, and anything typed while it is paused joins the
+  // discussion and starts it again — that travels on sendChat, like every other
+  // message, rather than on a channel of its own.
+  pauseSessionRound: (id) => invoke('lanchat:pauseSessionRound', { id }),
+  resumeSessionRound: (id) => invoke('lanchat:resumeSessionRound', { id }),
   deleteSession: (id) => invoke('lanchat:deleteSession', { id }),
   importSessionText: (id) => invoke('lanchat:importSessionText', { id }),
 

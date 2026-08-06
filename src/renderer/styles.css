@@ -2504,6 +2504,80 @@ mark.find-hit.current {
   letter-spacing: 0.01em;
   color: color-mix(in srgb, var(--primary) 78%, currentColor);
 }
+
+/* ---- one colour per agent -------------------------------------------------
+   Which agent said a thing, found without reading.
+
+   A name above an answer is a word among words: picking Beacon's three
+   contributions out of a twelve-turn discussion means reading twelve labels.
+   The colour does that job at a glance, and it is keyed on the agent's id — see
+   lib/agentColor.js — so it is the same colour every time and two agents with
+   the same name are still two colours.
+
+   `--agent-color` is set on the row by the bubble itself. Everything here reads
+   it, so an agent's colour reaches its fill, its edge and its name from one
+   place, and a bubble with no agent behind it is untouched: without the class
+   these rules do not apply and the ordinary surface shows through.
+
+   The two percentages below are load-bearing and measured, not chosen. 26% is
+   the strongest fill that still carries --fg body text at 4.5:1 for every hue in
+   the ring (worst 6.93:1), and 68% is the least the name can be pushed toward
+   --fg and stay readable on a fill made of its own hue (worst 4.88:1). Both are
+   recomputed from this file in test/agentColor.test.js, so changing either
+   number here fails there rather than shipping an unreadable name. */
+.bubble-row.agent .bubble {
+  background: color-mix(in srgb, var(--agent-color) 26%, var(--surface));
+  /* The edge, at full strength. A fill has to stay dark enough to read on; a
+     2px line does not, so this is where the colour is actually itself. */
+  border-left: 2px solid var(--agent-color);
+  border-top-left-radius: 6px;
+  border-bottom-left-radius: 6px;
+}
+.bubble-row.agent .bubble-speaker {
+  color: color-mix(in srgb, var(--agent-color) 68%, var(--fg));
+}
+/* The same colour on live output, so an agent that is still typing is already
+   identifiable as itself rather than becoming so once it finishes. */
+.agent-stream.agent .bubble-speaker {
+  color: color-mix(in srgb, var(--agent-color) 68%, var(--fg));
+}
+/* And in the picker, where the counsel is assembled: the dot beside a name is
+   the same colour that name's answers will arrive in. */
+.agent-pick-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--agent-color);
+}
+
+/* ---- what a round had to say about itself ---------------------------------
+   An agent dropping out of a discussion the others are carrying on with, and
+   the reason the discussion eventually stopped.
+
+   Centred and quiet, because these are not messages: nothing here is written
+   down, nobody said it, and it is true about one round only. That is also why
+   they are not bubbles — a bubble is somebody's words, and giving these one
+   would put LanChat's own bookkeeping into the conversation as a participant. */
+.round-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: center;
+  margin: 8px 0 2px;
+}
+.round-note {
+  max-width: min(460px, 80%);
+  text-align: center;
+  font-size: 11.5px;
+  line-height: 1.45;
+  /* --fg-muted rather than --fg-faint, for the reason .panel-title gives: at
+     11.5px this is small text and needs 4.5:1, and --fg-faint clears that on
+     none of the backgrounds a conversation is drawn on — 4.03:1 on --bg, 3.78:1
+     on --bg-2. --fg-muted is 7.54:1 and 7.07:1. Quiet is a matter of size and
+     placement here, not of a colour nobody can read. */
+  color: var(--fg-muted);
+}
 .bubble-quote {
   display: flex;
   gap: 6px;

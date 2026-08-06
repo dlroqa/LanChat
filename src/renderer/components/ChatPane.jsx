@@ -8,11 +8,24 @@ import AgentFlash from './AgentFlash.jsx';
 import SessionTitle from './SessionTitle.jsx';
 import FindBar from './FindBar.jsx';
 import AgentPicker from './AgentPicker.jsx';
-import { Phone, Video, Trash, Download, Upload, Sessions, Alert, Search, Stop } from '../lib/icons.jsx';
+import {
+  Phone,
+  Video,
+  Trash,
+  Download,
+  Upload,
+  Sessions,
+  Alert,
+  Search,
+  Stop,
+  Pause,
+  Play,
+} from '../lib/icons.jsx';
 import { useQueueLabel } from './QueueBadge.jsx';
 import { useAgentPhrase } from '../lib/agentPhrase.js';
 import { threadHits } from '../lib/findInThread.js';
-import { askPlaceholder, thinkingLine } from '../lib/counselCopy.js';
+import { askPlaceholder, thinkingLine, roundSummary } from '../lib/counselCopy.js';
+import { paletteFor } from '../lib/agentColor.js';
 import { formatDay, platformLabel } from '../lib/util.js';
 
 const GROUP_WINDOW = 4 * 60 * 1000; // group consecutive messages within 4 min
@@ -77,9 +90,19 @@ export default function ChatPane({
   // What the session currently has out with its agents: who was asked, who is
   // still thinking, and who is yet to be asked. Null when nothing is in flight.
   round = null,
+  // The one that just finished, until the next question replaces it. Separate
+  // from `round` because they are different moments and only one is ever set:
+  // this is the only view that carries why a discussion stopped, and a round
+  // still running has not stopped.
+  lastRound = null,
   // Calling off what a session has out. Mainly for a discussion between agents,
   // which is the one thing here that carries on without anybody typing.
   onStopRound,
+  // Holding one, and giving the turn back. Different from stopping in the way
+  // that matters: the round stays open and keeps the turns it has not spent, so
+  // a person can say something into it and let it carry on.
+  onPauseRound,
+  onResumeRound,
   onApprove,
   // The connection light: `{ nonce, mode, ms }` while one should be playing, and
   // null the rest of the time. The nonce is what makes a second summon restart it
@@ -124,6 +147,46 @@ export default function ChatPane({
   }, [isSession, peer, agents]);
   const counselNamesList = counsel.map((a) => a.name);
   const thinkerName = isSession ? counselNamesList[0] || 'The agent' : peer?.name || 'The agent';
+
+  // A discussion, and whether it is standing still. Both read off the round main
+  // publishes rather than worked out here — the round is the only thing that
+  // knows, and a window keeping its own answer would disagree with it on exactly
+  // the turn where it mattered.
+  const discussing = Boolean(round && round.mode === 'dialogue');
+  const held = Boolean(discussing && round.paused);
+
+  // A colour for each agent that speaks in this conversation.
+  //
+  // Built from the counsel *and* from whoever actually answered, because the two
+  // are not the same set: an agent taken out of a session, or a peer's that
+  // stopped being shared, is no longer in the counsel but its words are still in
+  // the transcript, and a reply that loses its colour when its agent leaves is a
+  // reply that changes appearance for a reason the reader cannot see.
+  //
+  // Only in a session. An agent's own thread is one agent's answers, and
+  // colouring them says nothing that the thread does not already say.
+  const palette = useMemo(() => {
+    if (!isSession) return new Map();
+    const ids = counsel.map((a) => a.id);
+    for (const m of messages) if (m.agentId && !ids.includes(m.agentId)) ids.push(m.agentId);
+    return paletteFor(ids);
+  }, [isSession, counsel, messages]);
+
+  // What the round has to say about itself, in the order it said it.
+  //
+  // While one is running that is only the agents who have dropped out of it —
+  // said as they go, because three agents carrying on without a fourth is
+  // something to see happen rather than to be told about afterwards. Once it is
+  // over, the same lines plus the reason it ended.
+  //
+  // Only one of the two is ever set: `round` is cleared the moment it closes and
+  // `lastRound` is set by the same event, so this never shows a live round's
+  // notices above a finished round's ending.
+  const roundNotes = useMemo(() => {
+    if (round) return (round.notices || []).filter(Boolean);
+    if (!lastRound) return [];
+    return [...(lastRound.notices || []), roundSummary(lastRound)].filter(Boolean);
+  }, [round, lastRound]);
 
   // ---- find in this conversation ----
   // What is being looked for, and which occurrence of it is being pointed at.
@@ -454,6 +517,7 @@ export default function ChatPane({
                 {newDay && <div className="day-sep">{formatDay(m.ts)}</div>}
                 <MessageBubble
                   msg={m}
+                  color={palette.get(m.agentId) || null}
                   grouped={grouped}
                   previewUrl={previewUrl}
                   previewFallback={previewFallback}
@@ -481,12 +545,39 @@ export default function ChatPane({
               One block per agent, each labelled the way its finished answer will
               be, so a counsel thinking out loud does not arrive as one paragraph
               written by three hands. */}
-          {agentStreams.map((s) => (
-            <div className="agent-stream" key={s.agentId}>
-              {agentStreams.length > 1 && <div className="bubble-speaker">{s.name}</div>}
-              {s.text}
+          {agentStreams.map((s) => {
+            // The colour it will finish in, so an agent that is still typing is
+            // already identifiable as itself rather than becoming so at the end.
+            const colour = palette.get(s.agentId) || null;
+            return (
+              <div
+                className={`agent-stream ${colour ? 'agent' : ''}`}
+                key={s.agentId}
+                style={colour ? { '--agent-color': colour } : undefined}
+              >
+                {agentStreams.length > 1 && <div className="bubble-speaker">{s.name}</div>}
+                {s.text}
+              </div>
+            );
+          })}
+
+          {/* What the round said about itself: who dropped out of a discussion
+              while it ran, and why the whole thing stopped once it had.
+
+              Not messages. Nothing here is written down — it is true about this
+              round and noise above the next question — which is the same rule
+              the missed-agent notice has always followed. They sit at the foot of
+              the conversation because that is where the thing they describe just
+              happened. */}
+          {roundNotes.length > 0 && (
+            <div className="round-notes">
+              {roundNotes.map((note, i) => (
+                <div className="round-note" key={i}>
+                  {note}
+                </div>
+              ))}
             </div>
-          ))}
+          )}
 
           <AgentApproval request={approval} agentName={thinkerName} onAnswer={onApprove} />
         </div>
@@ -498,26 +589,53 @@ export default function ChatPane({
         <div className="typing">
           {working && (
             <>
-              {thinks
-                ? // Who is thinking, which in a session may be several at once
-                  // and, in relay mode, several more still to be asked. The verb
-                  // is the rotating one either way — both this and the round read
-                  // the same clock, so they never disagree.
-                  thinkingLine(round, phrase.toLowerCase(), thinkerName)
-                : `${peer.name || 'Peer'} is typing`}
+              {held
+                ? // Held. Nobody is thinking, so saying they are would be the one
+                  // thing this row must never do — and the sentence says whose
+                  // move it is, because a discussion that stopped with no
+                  // explanation is what this whole seam was rebuilt to avoid.
+                  'The discussion is holding — say something, or pick it back up'
+                : thinks
+                  ? // Who is thinking, which in a session may be several at once
+                    // and, in relay mode, several more still to be asked. The verb
+                    // is the rotating one either way — both this and the round read
+                    // the same clock, so they never disagree.
+                    thinkingLine(round, phrase.toLowerCase(), thinkerName)
+                  : `${peer.name || 'Peer'} is typing`}
               {/* Three staggered dots. The container keeps its height whether or
-                  not this is showing, so the message list never jumps. */}
-              <span className="typing-dots" aria-hidden="true">
-                <i />
-                <i />
-                <i />
-              </span>
-              {/* The way out of a discussion that is going nowhere.
+                  not this is showing, so the message list never jumps. Not while
+                  it is held: dots are the sign of something happening, and
+                  nothing is. */}
+              {!held && (
+                <span className="typing-dots" aria-hidden="true">
+                  <i />
+                  <i />
+                  <i />
+                </span>
+              )}
+              {/* Holding a discussion, and giving it back.
                   Only on a dialogue: it is the only mode that keeps asking after
                   the first lap, and so the only one where waiting is a decision
                   rather than simply what happens next. Subordinate to everything
-                  around it — this is an escape hatch, not the thing to do. */}
-              {round && round.mode === 'dialogue' && onStopRound && (
+                  around it — these are escape hatches, not the thing to do. */}
+              {discussing && (held ? onResumeRound : onPauseRound) && (
+                <button
+                  type="button"
+                  className="round-stop"
+                  onClick={() => (held ? onResumeRound : onPauseRound)(peer.id)}
+                  title={
+                    held
+                      ? 'Give the turn back to the agents'
+                      : 'Hold the discussion after this turn — its remaining turns are kept'
+                  }
+                >
+                  {held ? <Play size={11} /> : <Pause size={11} />}
+                  {held ? 'Resume' : 'Hold'}
+                </button>
+              )}
+              {/* And the way out of one that is going nowhere. Unlike holding,
+                  this spends whatever budget was left. */}
+              {discussing && onStopRound && (
                 <button
                   type="button"
                   className="round-stop"
@@ -565,7 +683,13 @@ export default function ChatPane({
         attachTitle={thinks ? 'Attach a document for the agent to read' : 'Send file, photo or video'}
         placeholder={
           isSession
-            ? askPlaceholder({ allAgents: peer.allAgents, names: counselNamesList, mode: peer.mode })
+            ? askPlaceholder({
+                allAgents: peer.allAgents,
+                names: counselNamesList,
+                mode: peer.mode,
+                discussing,
+                held,
+              })
             : isAgent
               ? 'Ask the agent…  (Enter to send, Shift+Enter for newline)'
               : undefined

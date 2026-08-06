@@ -13,7 +13,7 @@
 // socket or a clock, and every sentence it produces can be read in a test
 // instead of inferred from a screenshot.
 
-const { fence, clip } = require('./dialogue.js');
+const { fence, clip, nameList } = require('./dialogue.js');
 
 const MAX_RELAY_CHARS = 8000;
 
@@ -61,12 +61,11 @@ function resolveCounsel(record, { askable = [] } = {}) {
   return { targets, missed };
 }
 
-// The names of a counsel, as a person would say them.
+// The names of a counsel, as a person would say them. The joining is nameList's,
+// in dialogue.js, so a roster line inside a prompt and a notice about the same
+// agents outside one cannot disagree about where the commas go.
 function names(list) {
-  const said = list.map((m) => m.name || 'an agent that is no longer here');
-  if (said.length === 0) return '';
-  if (said.length === 1) return said[0];
-  return `${said.slice(0, -1).join(', ')} and ${said[said.length - 1]}`;
+  return nameList(list.map((m) => m.name || 'an agent that is no longer here'));
 }
 
 // What to say about the agents that were not asked.
@@ -83,7 +82,7 @@ function missedNotice(missed) {
     return `${one.name || 'One agent'} was not asked — ${REASONS[one.reason] || REASONS.off}.`;
   }
   const parts = missed.map((m) => `${m.name || 'an agent'} is ${REASONS[m.reason] || REASONS.off}`);
-  return `${missed.length} agents were not asked: ${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}.`;
+  return `${missed.length} agents were not asked: ${nameList(parts)}.`;
 }
 
 // Why nobody could be asked, for the refusal that comes back when a whole
@@ -96,8 +95,7 @@ function unreachableNotice(record, missed) {
       : 'Choose an agent for this session before asking it something.';
   }
   const parts = missed.map((m) => `${m.name || 'an agent'} is ${REASONS[m.reason] || REASONS.off}`);
-  const list =
-    parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+  const list = nameList(parts);
   return `Nobody in this session's counsel can be asked right now: ${list}.`;
 }
 
@@ -144,8 +142,7 @@ function soloNotice(targets, missed) {
     return `${here}, and a discussion needs two. Add another agent to this session, or ask them in parallel instead.`;
   }
   const parts = missed.map((m) => `${m.name || 'an agent'} is ${REASONS[m.reason] || REASONS.off}`);
-  const list =
-    parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+  const list = nameList(parts);
   return `${here}, and a discussion needs two: ${list}.`;
 }
 

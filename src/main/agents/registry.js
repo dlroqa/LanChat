@@ -16,7 +16,10 @@ const crypto = require('node:crypto');
 const AGENT_ID_PREFIX = 'agent:';
 const REMOTE_AGENT_ID_PREFIX = 'remote-agent:';
 const DELEGATE_SEPARATOR = '#';
-const KINDS = Object.freeze(['http', 'command', 'acp', 'ssh']);
+// The transports an agent can be reached over. `a2a` is the only one that is
+// somebody else's protocol rather than a program this machine starts or an API
+// shaped like Hermes' — see transports/a2a.js.
+const KINDS = Object.freeze(['http', 'command', 'acp', 'ssh', 'a2a']);
 
 // Who may answer this agent's approval prompts besides the owner, and when.
 // Every field is off or inert by default, so an agent that predates this — or
