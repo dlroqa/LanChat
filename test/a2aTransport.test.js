@@ -477,3 +477,125 @@ test('an unreachable server explains itself in the same words the HTTP transport
   });
   await assert.rejects(() => t.start(), /Nothing is listening|ECONNREFUSED/);
 });
+
+// ---- against Hermes' own bytes ----
+//
+// The server above is written from the spec, which is the right way to prove a
+// client speaks a protocol rather than merely agreeing with itself. These two
+// go one step further: the payloads are not written here at all. They were
+// captured off the wire from a running Hermes A2A server answering
+// `message/send` and `message/stream`, and pasted in unedited.
+//
+// Hermes serves the 1.0 binding and downgrades per request for peers that asked
+// in 0.3 — which LanChat does, by sending the 0.3 method names. That downgrade
+// is the thing under test here, from this side: if Hermes ever stops speaking
+// 0.3 to a 0.3 caller, or LanChat stops reading it, one of these fails.
+
+const HERMES_SEND_RESULT = {
+  id: 'task-c8094ef41bb0498f',
+  contextId: 'cap-1',
+  status: {
+    state: 'completed',
+    timestamp: '2026-08-06T21:44:00.767Z',
+    message: {
+      role: 'agent',
+      parts: [{ kind: 'text', text: 'ECHO: hello' }],
+      messageId: '19c0d78c27ec436981c3c56e0a3eaa59',
+      contextId: 'cap-1',
+      kind: 'message',
+    },
+  },
+  artifacts: [
+    { artifactId: '41458b02b6bb49eabef1dbe9815046b7', parts: [{ kind: 'text', text: 'ECHO: hello' }] },
+  ],
+  kind: 'task',
+};
+
+const HERMES_STREAM_FRAMES = [
+  {
+    id: 'task-0c3db8e29aa54d84',
+    contextId: 'cap-2',
+    status: { state: 'submitted', timestamp: '2026-08-06T21:44:00.785Z' },
+    kind: 'task',
+  },
+  {
+    taskId: 'task-0c3db8e29aa54d84',
+    contextId: 'cap-2',
+    status: { state: 'working', timestamp: '2026-08-06T21:44:00.785Z' },
+    kind: 'status-update',
+    final: false,
+  },
+  {
+    taskId: 'task-0c3db8e29aa54d84',
+    contextId: 'cap-2',
+    artifact: {
+      artifactId: '6d66c1337728439c945ac29b8ecaa502',
+      parts: [{ kind: 'text', text: 'ECHO: hello' }],
+    },
+    kind: 'artifact-update',
+  },
+  {
+    taskId: 'task-0c3db8e29aa54d84',
+    contextId: 'cap-2',
+    status: { state: 'completed', timestamp: '2026-08-06T21:44:00.787Z' },
+    kind: 'status-update',
+    final: true,
+  },
+];
+
+test("Hermes' own reply is read as a finished answer", async () => {
+  const { server, port } = await a2aServer({
+    script: (call, res) => rpcOk(res, call.id, HERMES_SEND_RESULT),
+  });
+  try {
+    const t = createA2aTransport({
+      id: 'agent:hermes',
+      name: 'Hermes',
+      config: { baseUrl: `http://127.0.0.1:${port}` },
+      getSecret: () => null,
+      timeoutMs: 5000,
+    });
+    await t.start();
+    const done = await new Promise((resolve, reject) => {
+      t.send({ text: 'hello', thread: 'ses-1' }, { onDone: resolve, onError: reject });
+    });
+    assert.equal(done.text, 'ECHO: hello');
+  } finally {
+    server.close();
+  }
+});
+
+test("Hermes' own stream is read as it is written", async () => {
+  const { server, port } = await a2aServer({
+    streaming: true,
+    script: (call, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      for (const frame of HERMES_STREAM_FRAMES) {
+        res.write(`data: ${JSON.stringify({ jsonrpc: '2.0', id: call.id, result: frame })}\n\n`);
+      }
+      res.end(': done\n\n');
+    },
+  });
+  try {
+    const t = createA2aTransport({
+      id: 'agent:hermes',
+      name: 'Hermes',
+      config: { baseUrl: `http://127.0.0.1:${port}` },
+      getSecret: () => null,
+      timeoutMs: 5000,
+    });
+    await t.start();
+    const deltas = [];
+    const done = await new Promise((resolve, reject) => {
+      t.send(
+        { text: 'hello', thread: 'ses-2' },
+        { onDelta: (d) => deltas.push(d), onDone: resolve, onError: reject }
+      );
+    });
+    // The words arrived as they were written, not only at the end.
+    assert.deepEqual(deltas, ['ECHO: hello']);
+    assert.equal(done.text, 'ECHO: hello');
+  } finally {
+    server.close();
+  }
+});
