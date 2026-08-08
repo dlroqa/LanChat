@@ -2225,25 +2225,38 @@ test('the profile list is enumerated the way Hermes enumerates it', () => {
 test('HERMES_HOME may name a profile rather than the root, and profiles are still found', () => {
   const { hermesRoot, localProfiles } = require('../src/main/agents/profiles.js');
   const old = process.env.HERMES_HOME;
-  const native = path.join(os.homedir(), '.hermes');
+  // Hermes does not keep its home in the same place on every platform: POSIX
+  // uses ~/.hermes, native Windows uses %LOCALAPPDATA%\hermes. Asserting the
+  // POSIX path everywhere is what this test did at first, and the Windows
+  // runner was right to reject it.
+  const native = path.resolve(
+    process.platform === 'win32' && process.env.LOCALAPPDATA
+      ? path.join(process.env.LOCALAPPDATA, 'hermes')
+      : path.join(os.homedir(), '.hermes')
+  );
+  // Somewhere that is deliberately not under the native root, so the out-of-tree
+  // branch is actually exercised. Built with path.join rather than written as a
+  // literal, because a POSIX-looking literal resolves onto the current drive on
+  // Windows and stops meaning what it says.
+  const away = tmpdir('hermesaway');
   try {
     // Hermes' own get_default_hermes_root(). Reading `$HERMES_HOME/profiles`
     // instead looked for profiles *inside* a profile, so the picker came back
     // empty for exactly the people already committed to one.
     delete process.env.HERMES_HOME;
-    assert.equal(hermesRoot(), path.resolve(native), 'unset means the native root');
+    assert.equal(hermesRoot(), native, 'unset means the native root');
 
     process.env.HERMES_HOME = path.join(native, 'profiles', 'zima');
-    assert.equal(hermesRoot(), path.resolve(native), 'a profile home inside the native root');
+    assert.equal(hermesRoot(), native, 'a profile home inside the native root');
 
     process.env.HERMES_HOME = native;
-    assert.equal(hermesRoot(), path.resolve(native), 'the root itself is left alone');
+    assert.equal(hermesRoot(), native, 'the root itself is left alone');
 
-    process.env.HERMES_HOME = '/opt/data/profiles/zima';
-    assert.equal(hermesRoot(), '/opt/data', 'a profile home out of tree climbs two levels');
+    process.env.HERMES_HOME = path.join(away, 'profiles', 'zima');
+    assert.equal(hermesRoot(), path.resolve(away), 'a profile home out of tree climbs two levels');
 
-    process.env.HERMES_HOME = '/opt/data';
-    assert.equal(hermesRoot(), '/opt/data', 'anything else is a root in its own right');
+    process.env.HERMES_HOME = away;
+    assert.equal(hermesRoot(), path.resolve(away), 'anything else is a root in its own right');
 
     // And the whole point of it: the names are reachable from inside a profile.
     const home = tmpdir('hermesnested');
