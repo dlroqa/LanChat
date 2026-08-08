@@ -41,15 +41,34 @@ export const PROFILE_COPY = {
     found: 'Found on this machine. A name the server does not know falls back to its default.',
     none: 'None found here — type a name, or leave blank for the default.',
   },
+  // Blank is not "the default profile" over ACP, and saying so was wrong on
+  // every machine where `hermes profile use` had ever been run: that writes a
+  // sticky choice which a bare `hermes acp` follows. Blank means *whatever
+  // Hermes is currently set to*, which is why the form reports that name rather
+  // than describing it. Picking `default` is the way to pin the root profile
+  // for this agent regardless of the sticky choice.
   acp: {
-    defaultOption: 'Default profile',
-    placeholder: 'Leave blank for the default profile',
-    unasked: 'Hermes can hold several profiles. Leave blank to use its default.',
+    defaultOption: 'Whatever Hermes is set to',
+    placeholder: 'Leave blank to follow Hermes’ own setting',
+    unasked: 'Hermes can hold several profiles. Leave blank to follow its current one.',
     found:
       'Read from the Hermes install on this machine. A name it does not know will stop the agent starting.',
-    none: 'None found here — type a name, or leave blank for the default.',
+    none: 'None found here — type a name, or leave blank to follow Hermes’ current one.',
+    // Shown in place of the above when the command is not Hermes at all.
+    notHermes:
+      '--profile is Hermes’ own flag, so it is not sent to this command. A wrapper made by “hermes profile alias” already selects its own profile.',
   },
 };
+
+// What leaving the field blank will actually run, once main has read Hermes'
+// sticky setting. A name rather than a description, because "the default" is
+// the exact word that made this confusing in the first place.
+export function stickyNote(active) {
+  const name = String(active || '').trim();
+  if (!name) return null;
+  if (name === 'default') return 'Blank runs Hermes’ default profile.';
+  return `Blank runs “${name}” — Hermes’ current profile on this machine.`;
+}
 
 export function profileCopy(kind) {
   return PROFILE_COPY[kind] || PROFILE_COPY.http;

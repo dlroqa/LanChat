@@ -20,6 +20,8 @@
 // has no JSX transform, and the section fetches its rows in an effect that
 // never runs under server rendering.
 
+import { isHermesCommand } from './agentCommand.js';
+
 // Hermes permits 64 characters. The row is not wide, so a long one is cut with
 // the whole value kept on the title — truncated visibly, never silently.
 export const PROFILE_MAX_CHARS = 24;
@@ -27,7 +29,13 @@ export const PROFILE_MAX_CHARS = 24;
 export function agentTag(agent) {
   const kind = String(agent?.kind || '');
   const profile = String(agent?.config?.profile || '').trim();
-  if (!profile) return { kind, profile: null, title: kind.toUpperCase() };
+  // A stored profile is not the same as a profile in effect. Over ACP the name
+  // only becomes `--profile` when the command is Hermes, so on any other
+  // command — including a wrapper script from `hermes profile alias`, which
+  // picks its own — the badge would be naming something that never reached the
+  // launch. Showing the transport alone is the honest version of that row.
+  const inEffect = kind !== 'acp' || isHermesCommand(agent?.config?.command);
+  if (!profile || !inEffect) return { kind, profile: null, title: kind.toUpperCase() };
   return {
     kind,
     profile,

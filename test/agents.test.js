@@ -36,6 +36,7 @@ const { createAgentHub, LOCAL_ORIGIN } = require('../src/main/agents/index.js');
 const { buildArgs } = require('../src/main/agents/transports/spawn.js');
 const { PeerHub } = require('../src/main/peers.js');
 const { MessageStore } = require('../src/main/store.js');
+const { load } = require('../scripts/lib/reactDrive.js');
 
 // Reversible stand-in for Electron's safeStorage.
 const fakeSafeStorage = {
@@ -2106,13 +2107,58 @@ test('a profile becomes a leading flag, and only for Hermes', () => {
 
 test('a profile name that could be read as another flag is refused', () => {
   const { hermesLaunchArgs } = require('../src/main/agents/profiles.js');
-  for (const bad of ['--yolo', '-p', 'has space', 'UPPER', '../etc', 'x'.repeat(65)]) {
+  for (const bad of ['--yolo', '-p', 'has space', '../etc', 'x'.repeat(65), 'a/b', 'a\\b']) {
     assert.throws(
       () => hermesLaunchArgs({ command: 'hermes', args: ['acp'], profile: bad }),
       /not a valid Hermes profile name/,
       `${bad} must not reach argv`
     );
   }
+  // Lowercasing cannot rescue any of them: the control is the character set
+  // that reaches argv, and case folding introduces no dash, space or separator.
+  for (const bad of ['--YOLO', 'HAS SPACE', '../ETC']) {
+    assert.throws(
+      () => hermesLaunchArgs({ command: 'hermes', args: ['acp'], profile: bad }),
+      /not a valid Hermes profile name/,
+      `${bad} must not reach argv either`
+    );
+  }
+});
+
+test('a profile name is normalised the way Hermes normalises it', () => {
+  const { hermesLaunchArgs } = require('../src/main/agents/profiles.js');
+  // Hermes' pre-parser tests the raw token against this same regex and, when it
+  // fails, abandons the override and leaves the flag in argv — so `-p Zima acp`
+  // dies on an unrecognised flag rather than on the name. Lowercasing first
+  // means LanChat can never hand it that shape.
+  assert.deepEqual(hermesLaunchArgs({ command: 'hermes', args: [], profile: 'Zima' }), [
+    '--profile',
+    'zima',
+    'acp',
+  ]);
+  assert.deepEqual(hermesLaunchArgs({ command: 'hermes', args: [], profile: '  iris  ' }), [
+    '--profile',
+    'iris',
+    'acp',
+  ]);
+});
+
+test('a name Hermes keeps for itself is refused before the launch, not after', () => {
+  const { hermesLaunchArgs, RESERVED_PROFILES } = require('../src/main/agents/profiles.js');
+  // These pass the regex but Hermes' own resolver refuses them, so without this
+  // the agent saves cleanly and fails later with a surprising error.
+  for (const name of RESERVED_PROFILES) {
+    assert.throws(
+      () => hermesLaunchArgs({ command: 'hermes', args: [], profile: name }),
+      /reserves/,
+      `${name} is Hermes' own`
+    );
+  }
+  assert.deepEqual(
+    hermesLaunchArgs({ command: 'hermes', args: [], profile: 'default' }),
+    ['--profile', 'default', 'acp'],
+    'but `default` is the deliberate exception — it names the root profile, and is how a sticky one is overridden'
+  );
 });
 
 test('ACP profiles are discovered from this machine, but only for Hermes', () => {
@@ -2123,7 +2169,9 @@ test('ACP profiles are discovered from this machine, but only for Hermes', () =>
   const old = process.env.HERMES_HOME;
   process.env.HERMES_HOME = home;
   try {
-    assert.deepEqual(discoverProfiles({ kind: 'acp', command: 'hermes' }), ['iris', 'tessie']);
+    // `default` leads: it is the root profile, which is not a directory under
+    // profiles/ and so has to be added rather than found.
+    assert.deepEqual(discoverProfiles({ kind: 'acp', command: 'hermes' }), ['default', 'iris', 'tessie']);
     assert.deepEqual(
       discoverProfiles({ kind: 'acp', command: 'claude-code-acp' }),
       [],
@@ -2131,25 +2179,220 @@ test('ACP profiles are discovered from this machine, but only for Hermes', () =>
     );
     // An ACP agent is a child process here, so no localhost question applies.
     assert.deepEqual(discoverProfiles({ kind: 'acp', command: 'hermes', baseUrl: undefined }), [
+      'default',
       'iris',
       'tessie',
     ]);
+    // Over HTTP a profile is a `/p/<name>` prefix, and there is no such name
+    // for the server's default — blank stays the only way to ask for it.
+    assert.deepEqual(
+      discoverProfiles({ kind: 'http', baseUrl: 'http://127.0.0.1:8642' }),
+      ['iris', 'tessie'],
+      'so `default` is not offered there'
+    );
   } finally {
     if (old === undefined) delete process.env.HERMES_HOME;
     else process.env.HERMES_HOME = old;
   }
 });
 
+test('the profile list is enumerated the way Hermes enumerates it', () => {
+  const { localProfiles, discoverProfiles } = require('../src/main/agents/profiles.js');
+  const home = tmpdir('hermeslist');
+  for (const name of ['a', 'b', 'default', '.hidden', 'Upper', 'has space']) {
+    fs.mkdirSync(path.join(home, 'profiles', name), { recursive: true });
+  }
+  fs.writeFileSync(path.join(home, 'profiles', 'loose-file'), 'not a profile');
+  const old = process.env.HERMES_HOME;
+  process.env.HERMES_HOME = home;
+  try {
+    assert.deepEqual(
+      localProfiles(),
+      ['a', 'b'],
+      'hidden entries, loose files, and names Hermes would refuse are all skipped'
+    );
+    assert.deepEqual(
+      discoverProfiles({ kind: 'acp', command: 'hermes' }),
+      ['default', 'a', 'b'],
+      'and a stray directory called `default` is not offered twice'
+    );
+  } finally {
+    if (old === undefined) delete process.env.HERMES_HOME;
+    else process.env.HERMES_HOME = old;
+  }
+});
+
+test('HERMES_HOME may name a profile rather than the root, and profiles are still found', () => {
+  const { hermesRoot, localProfiles } = require('../src/main/agents/profiles.js');
+  const old = process.env.HERMES_HOME;
+  const native = path.join(os.homedir(), '.hermes');
+  try {
+    // Hermes' own get_default_hermes_root(). Reading `$HERMES_HOME/profiles`
+    // instead looked for profiles *inside* a profile, so the picker came back
+    // empty for exactly the people already committed to one.
+    delete process.env.HERMES_HOME;
+    assert.equal(hermesRoot(), path.resolve(native), 'unset means the native root');
+
+    process.env.HERMES_HOME = path.join(native, 'profiles', 'zima');
+    assert.equal(hermesRoot(), path.resolve(native), 'a profile home inside the native root');
+
+    process.env.HERMES_HOME = native;
+    assert.equal(hermesRoot(), path.resolve(native), 'the root itself is left alone');
+
+    process.env.HERMES_HOME = '/opt/data/profiles/zima';
+    assert.equal(hermesRoot(), '/opt/data', 'a profile home out of tree climbs two levels');
+
+    process.env.HERMES_HOME = '/opt/data';
+    assert.equal(hermesRoot(), '/opt/data', 'anything else is a root in its own right');
+
+    // And the whole point of it: the names are reachable from inside a profile.
+    const home = tmpdir('hermesnested');
+    fs.mkdirSync(path.join(home, 'profiles', 'zima'), { recursive: true });
+    fs.mkdirSync(path.join(home, 'profiles', 'iris'), { recursive: true });
+    process.env.HERMES_HOME = path.join(home, 'profiles', 'zima');
+    assert.deepEqual(localProfiles(), ['iris', 'zima']);
+  } finally {
+    if (old === undefined) delete process.env.HERMES_HOME;
+    else process.env.HERMES_HOME = old;
+  }
+});
+
+test('which profile a blank field would actually run under is readable', () => {
+  const { activeProfile } = require('../src/main/agents/profiles.js');
+  const home = tmpdir('hermessticky');
+  fs.mkdirSync(home, { recursive: true });
+  const file = path.join(home, 'active_profile');
+  const old = process.env.HERMES_HOME;
+  process.env.HERMES_HOME = home;
+  try {
+    // `hermes profile use <name>` writes this, and every later bare invocation
+    // follows it — which is why "leave blank for the default profile" was not
+    // true, and why an agent could come up under a profile nobody picked here.
+    assert.equal(activeProfile(), 'default', 'no file means the root profile');
+    fs.writeFileSync(file, 'zima\n');
+    assert.equal(activeProfile(), 'zima');
+    fs.writeFileSync(file, '  iris  \n');
+    assert.equal(activeProfile(), 'iris', 'read with the whitespace stripped');
+    fs.writeFileSync(file, '');
+    assert.equal(activeProfile(), 'default', 'empty means the root profile');
+    fs.writeFileSync(file, 'Not A Name');
+    assert.equal(activeProfile(), 'default', 'and so does anything Hermes would not accept');
+  } finally {
+    if (old === undefined) delete process.env.HERMES_HOME;
+    else process.env.HERMES_HOME = old;
+  }
+});
+
+test('Find profiles asks about the command being typed, not the one being replaced', async () => {
+  const dir = tmpdir('profilesfor');
+  const home = tmpdir('hermesdraft');
+  fs.mkdirSync(path.join(home, 'profiles', 'iris'), { recursive: true });
+  const bus = new EventEmitter();
+  const hub = new PeerHub({ getIdentity: () => ({ id: 'me', name: 'Me' }), bus });
+  const agentHub = createAgentHub({
+    userDataDir: dir,
+    hub,
+    bus,
+    store: new MessageStore(dir),
+    safeStorage: fakeSafeStorage,
+    transports: {
+      acp: ({ id, name }) => ({
+        id,
+        name,
+        kind: 'acp',
+        start: async () => ({ detail: 'ready' }),
+        send: async () => {},
+        stop: async () => {},
+      }),
+    },
+  });
+  const { agent } = await agentHub.add({
+    name: 'Wrapped',
+    kind: 'acp',
+    config: { command: 'claude-code-acp' },
+  });
+
+  const old = process.env.HERMES_HOME;
+  process.env.HERMES_HOME = home;
+  try {
+    // The stored command is not Hermes, so answering from the record offered
+    // nothing — and someone editing that agent to point at hermes saw an empty
+    // list, which reads exactly like the feature being broken.
+    assert.deepEqual(
+      agentHub.profilesFor(agent.id, { kind: 'acp', config: { command: 'hermes' } }).profiles,
+      ['default', 'iris'],
+      'the draft wins, because it is what is about to be saved'
+    );
+    assert.deepEqual(
+      agentHub.profilesFor(agent.id).profiles,
+      [],
+      'and the record is still the answer when there is no draft'
+    );
+    // What blank would actually run, which is the question the form could not
+    // ask before. Only meaningful for a child process on this machine.
+    fs.writeFileSync(path.join(home, 'active_profile'), 'iris\n');
+    assert.equal(
+      agentHub.profilesFor(agent.id, { kind: 'acp', config: { command: 'hermes' } }).active,
+      'iris'
+    );
+    assert.equal(
+      agentHub.profilesFor(null, { kind: 'http', config: { baseUrl: 'http://127.0.0.1:8642' } }).active,
+      null,
+      'a sticky choice here says nothing about a server elsewhere'
+    );
+  } finally {
+    if (old === undefined) delete process.env.HERMES_HOME;
+    else process.env.HERMES_HOME = old;
+  }
+});
+
+test('main and the renderer agree on what counts as Hermes', () => {
+  // The rule has two homes — the renderer cannot import a CommonJS module that
+  // reads the filesystem — so the duplication is asserted away rather than
+  // trusted. A disagreement here is a form that offers a profile the launch
+  // will silently drop, or refuses one it would have honoured.
+  const main = require('../src/main/agents/profiles.js').isHermesCommand;
+  const renderer = load(
+    path.join(__dirname, '..', 'src', 'renderer', 'lib', 'agentCommand.js')
+  ).isHermesCommand;
+  const inputs = [
+    'hermes',
+    ' hermes ',
+    'HERMES',
+    '/usr/bin/hermes',
+    '/home/me/.local/bin/hermes',
+    'hermes.exe',
+    'C:\\Program Files\\hermes.exe',
+    'C:/tools/hermes',
+    'hermes-wrapper',
+    'claude-code-acp',
+    'gemini',
+    'tessie',
+    '',
+    '   ',
+    null,
+    undefined,
+  ];
+  for (const input of inputs) {
+    assert.equal(renderer(input), main(input), `both must agree about ${JSON.stringify(input)}`);
+  }
+  // And the answer itself, so the table is not merely self-consistent.
+  assert.equal(main('/home/me/.local/bin/hermes'), true);
+  assert.equal(main('C:\\Program Files\\hermes.exe'), true, 'a Windows path, read on any platform');
+  assert.equal(main('tessie'), false, 'a wrapper picks its own profile; we must not add a flag');
+});
+
 // ---- the row badge ----
 
 test('the agent row shows the profile without pretending it is uppercase', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'lib', 'agentBadge.js'), 'utf8');
-  const { agentTag } = new Function(`${src.replace(/^export\s+/gm, '')}\nreturn { agentTag };`)();
+  // Loaded rather than eval'd from stripped source: the module imports the
+  // shared command rule now, and a bare `import` cannot survive new Function.
+  const { agentTag } = load(path.join(__dirname, '..', 'src', 'renderer', 'lib', 'agentBadge.js'));
 
-  const plain = agentTag({ kind: 'acp', config: {} });
+  const plain = agentTag({ kind: 'acp', config: { command: 'hermes' } });
   assert.equal(plain.profile, null, 'an agent with no profile gets no second half');
 
-  const withProfile = agentTag({ kind: 'acp', config: { profile: 'lanchat' } });
+  const withProfile = agentTag({ kind: 'acp', config: { command: 'hermes', profile: 'lanchat' } });
   assert.equal(withProfile.kind, 'acp');
   assert.equal(withProfile.profile, 'lanchat', 'kept exactly as the user chose it');
   assert.match(withProfile.title, /Hermes profile: lanchat/, 'and explained on hover');
@@ -2157,9 +2400,26 @@ test('the agent row shows the profile without pretending it is uppercase', () =>
   // The same field exists on an HTTP agent and was never surfaced before.
   assert.equal(agentTag({ kind: 'http', config: { profile: 'iris' } }).profile, 'iris');
 
-  const long = agentTag({ kind: 'acp', config: { profile: 'a'.repeat(64) } });
+  const long = agentTag({ kind: 'acp', config: { command: 'hermes', profile: 'a'.repeat(64) } });
   assert.equal(long.truncated, true, 'a name too long for the row is marked for cutting');
   assert.match(long.title, /a{64}/, 'but the whole of it stays on the title');
+});
+
+test('the row does not name a profile that never reaches the launch', () => {
+  const { agentTag } = load(path.join(__dirname, '..', 'src', 'renderer', 'lib', 'agentBadge.js'));
+
+  // Only Hermes is given `--profile`, so on any other ACP command a stored name
+  // is inert — including a wrapper from `hermes profile alias`, which selects
+  // its own profile and would make the badge name the wrong one.
+  const alias = agentTag({ kind: 'acp', config: { command: 'tessie', profile: 'lanchat' } });
+  assert.equal(alias.profile, null, 'no second half for a command that is not Hermes');
+  assert.equal(alias.title, 'ACP', 'and nothing about a profile on hover either');
+
+  assert.equal(
+    agentTag({ kind: 'acp', config: { command: 'C:\\tools\\hermes.exe', profile: 'iris' } }).profile,
+    'iris',
+    'a Windows path is still Hermes'
+  );
 });
 
 test('sharing an agent tells the peer it exists and nothing about how it is run', async () => {
@@ -2256,6 +2516,54 @@ test(
     } finally {
       await bad.stop();
     }
+  }
+);
+
+// The whole chain, against the real Hermes: a saved record, the real registry,
+// the real transport table, a real child process. The test above builds argv by
+// hand, which is precisely why it could pass for months while the feature did
+// nothing — the defect lived above it, in the payload the form saved. This one
+// starts where a user's save lands and asserts the agent answers about the
+// profile it was actually given. Run with LANCHAT_ACP_LIVE=1.
+test(
+  'a profile saved on an agent record reaches the process that gets launched',
+  { skip: !process.env.LANCHAT_ACP_LIVE },
+  async (t) => {
+    const { localProfiles } = require('../src/main/agents/profiles.js');
+    const available = localProfiles();
+    assert.ok(available.length, 'this machine has at least one Hermes profile to test with');
+    const profile = available[0];
+
+    const dir = tmpdir('liveprofile');
+    const bus = new EventEmitter();
+    const hub = new PeerHub({ getIdentity: () => ({ id: 'me', name: 'Me' }), bus });
+    const agentHub = createAgentHub({
+      userDataDir: dir,
+      hub,
+      bus,
+      store: new MessageStore(dir),
+      safeStorage: fakeSafeStorage,
+    });
+    t.after(() => agentHub.stopAll && agentHub.stopAll());
+
+    // Exactly the payload buildPayload now produces for the ACP form.
+    const { agent, probe } = await agentHub.add({
+      name: 'Hermes',
+      kind: 'acp',
+      config: { command: 'hermes', args: undefined, cwd: undefined, profile },
+      secret: { mode: 'none' },
+    });
+    assert.equal(probe.ok, true, probe.detail || 'the agent starts');
+
+    // It survived the save — the assertion the original defect broke.
+    const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'agents.json'), 'utf8'));
+    assert.equal(onDisk.agents[0].config.profile, profile, 'the record on disk keeps the profile');
+
+    // And it became argv, rather than being stored and then ignored.
+    const { hermesLaunchArgs } = require('../src/main/agents/profiles.js');
+    assert.deepEqual(hermesLaunchArgs(onDisk.agents[0].config), ['--profile', profile, 'acp']);
+
+    await agentHub.remove(agent.id);
   }
 );
 

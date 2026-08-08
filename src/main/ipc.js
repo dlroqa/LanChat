@@ -717,9 +717,13 @@ function createIpc({
   // list when none can be discovered, and the form falls back to a typed name.
   ipcMain.handle('lanchat:listAgentProfiles', async (_e, { id, draft } = {}) => {
     try {
-      return { ok: true, profiles: await agentHub.profilesFor(id, draft) };
+      const { profiles, active } = await agentHub.profilesFor(id, draft);
+      // `active` is which profile a blank field would actually run under, which
+      // is a different question from which names exist and is the one the form
+      // could not answer before.
+      return { ok: true, profiles, active };
     } catch (err) {
-      return { ok: false, error: err.message, profiles: [] };
+      return { ok: false, error: err.message, profiles: [], active: null };
     }
   });
 

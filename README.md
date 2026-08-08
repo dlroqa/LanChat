@@ -336,7 +336,7 @@ An agent is an AI assistant that appears in LanChat as an ordinary chat thread â
 | Transport | What it is | What it needs |
 |---|---|---|
 | **HTTP API** *(recommended)* | Talks to an agent server over HTTP. The default points at a Hermes server on this machine. | Base URL (default `http://127.0.0.1:8642`), optionally a model and a Hermes profile |
-| **ACP** | Agent Client Protocol over stdio. Keeps conversation context across messages. | Command to run, arguments, working directory |
+| **ACP** | Agent Client Protocol over stdio. Keeps conversation context across messages. | Command to run, arguments, working directory, optionally a Hermes profile. Leaving the profile blank follows whatever `hermes profile use` last selected â€” pick `default` to pin the root profile instead |
 | **Local command** | Runs a CLI on this machine, once per message. | Command, arguments (use `{prompt}` where the message goes), working directory |
 | **SSH command** | Runs the agent on another host over SSH. | Host, user, port, identity file, remote command. The host must already be in your `known_hosts` |
 | **A2A** | An agent that speaks the [Agent2Agent protocol](https://a2a-protocol.org). LanChat reads its Agent Card for its name, skills and endpoint, then talks JSON-RPC to it. | Base URL, and a bearer token if the server wants one |

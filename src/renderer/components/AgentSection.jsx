@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { argumentHint, argumentPlaceholder, profileCopy } from '../lib/agentCopy';
+import { argumentHint, argumentPlaceholder, profileCopy, stickyNote } from '../lib/agentCopy';
 import { agentTag } from '../lib/agentBadge';
+import { isHermesCommand } from '../lib/agentCommand';
 
 // Agents settings: connect an agent over one of four transports, toggle it on or
 // off, choose which peers may address it, and remove it completely.
@@ -115,7 +116,15 @@ export default function AgentSection({ peers = [] }) {
           : d.kind === 'command'
             ? { command: c.command, args, cwd: c.cwd || undefined }
             : d.kind === 'acp'
-              ? { command: c.command, args, cwd: c.cwd || undefined }
+              ? // `profile` is listed here for the same reason it is listed under
+                // http: a field the form collects but the payload omits is a
+                // field that silently does nothing. Leaving it out is exactly
+                // what made the ACP picker dead on arrival — it saved, and the
+                // agent still launched under whatever Hermes was already set to.
+                // `|| undefined` rather than `''` so that clearing it works too:
+                // update merges same-kind configs, and only an explicit
+                // undefined overwrites a stored name on the way to JSON.
+                { command: c.command, args, cwd: c.cwd || undefined, profile: c.profile || undefined }
               : {
                   host: c.host,
                   user: c.user,
@@ -445,8 +454,13 @@ export default function AgentSection({ peers = [] }) {
 // authoritative for a local child process, a best guess for a server.
 function ProfileField({ draft, setCfg }) {
   const [profiles, setProfiles] = useState(null); // null = not looked yet
+  const [active, setActive] = useState(null); // Hermes' own current profile
   const [busy, setBusy] = useState(false);
   const copy = profileCopy(draft.kind);
+  // Whether this field can do anything at all, which over ACP depends on the
+  // command as it stands in the form right now — not on what was saved.
+  const applies = draft.kind !== 'acp' || isHermesCommand(draft.config.command);
+  const sticky = draft.kind === 'acp' && !draft.config.profile ? stickyNote(active) : null;
 
   async function look() {
     setBusy(true);
@@ -457,6 +471,7 @@ function ProfileField({ draft, setCfg }) {
     });
     setBusy(false);
     setProfiles(res?.profiles || []);
+    setActive(res?.active || null);
   }
 
   return (
@@ -488,9 +503,20 @@ function ProfileField({ draft, setCfg }) {
           {busy ? 'Looking…' : 'Find profiles'}
         </button>
         <span className="hint" style={{ margin: 0 }}>
-          {profiles === null ? copy.unasked : profiles.length ? copy.found : copy.none}
+          {!applies
+            ? copy.notHermes
+            : profiles === null
+              ? copy.unasked
+              : profiles.length
+                ? copy.found
+                : copy.none}
         </span>
       </div>
+      {applies && sticky && (
+        <div className="hint" style={{ marginTop: 6 }}>
+          {sticky}
+        </div>
+      )}
     </div>
   );
 }

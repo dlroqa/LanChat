@@ -15,7 +15,7 @@ const {
 const { createApprovalGate } = require('./approvalGate');
 const { createVirtualSocket } = require('./virtualSocket');
 const { createHttpTransport } = require('./transports/http');
-const { discoverProfiles, hermesLaunchArgs } = require('./profiles');
+const { discoverProfiles, hermesLaunchArgs, activeProfile } = require('./profiles');
 const { createCommandTransport } = require('./transports/command');
 const { createAcpTransport } = require('./transports/acp');
 const { createSshTransport } = require('./transports/ssh');
@@ -1351,13 +1351,26 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
   // Hermes profiles offered for this agent. Read from the Hermes install on
   // this machine, so only meaningful when the agent's server is here too; the
   // API has no way to list or confirm them. See profiles.js.
+  //
+  // The draft wins over the stored record when there is one. The form is asking
+  // about the agent it is *about to save*, so answering from the stored record
+  // meant that changing an existing agent's command to hermes and pressing Find
+  // profiles searched against the command being replaced — and found nothing,
+  // which reads exactly like the feature not working. The record is still the
+  // fallback for a caller that passes no draft.
   function profilesFor(agentId, draft) {
     const record = registry.get(agentId);
-    const kind = record ? record.kind : draft && draft.kind;
-    const config = (record ? record.config : draft && draft.config) || {};
+    const kind = (draft && draft.kind) || (record && record.kind);
+    const config = (draft && draft.config) || (record && record.config) || {};
     // ACP picks its profile by command rather than by URL, so both are offered
     // and discoverProfiles decides which one applies.
-    return discoverProfiles({ kind, baseUrl: config.baseUrl, command: config.command });
+    return {
+      profiles: discoverProfiles({ kind, baseUrl: config.baseUrl, command: config.command }),
+      // What a blank field would actually run under. Only meaningful for a
+      // local child process, so it is not offered to the HTTP form — a sticky
+      // choice on this machine says nothing about a server elsewhere.
+      active: kind === 'acp' ? activeProfile() : null,
+    };
   }
 
   async function test(agentId) {
