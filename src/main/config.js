@@ -53,6 +53,33 @@ const DEFAULTS = Object.freeze({
   agentMusic: null, // null = the default bundled track ("Universe"); or a track name, or 'custom'
   agentMusicVolume: 0.5,
   customAgentMusicPath: null,
+  // Reading a discussion aloud, so a session of four agents can be listened to
+  // rather than watched (see renderer lib/agentSpeech.js). Sessions only: a
+  // thread with a person has an ear at the far end already.
+  //
+  // Two keys and not one, and the split is the point.
+  //
+  // `agentSpeechEnabled` is the feature. On by default, because the voice it
+  // uses by default is the window's own — bundled with Chromium, free, offline,
+  // and sending nothing anywhere. There is no reason to make somebody go and
+  // find it.
+  agentSpeechEnabled: true,
+  agentSpeechVolume: 0.9,
+  // `agentSpeechEngine` is where the words go, and it is the opt-in. 'local' is
+  // the window's voices; 'gemini' sends the agents' words to Google to be read
+  // in a far better one. Nothing but a deliberate act in Settings sets it: it is
+  // read-only to the renderer and has its own IPC channel, exactly like
+  // acceptLan, so no bulk save of unrelated preferences can turn it on as a side
+  // effect. Deliberately *not* given the agentMusicVersion treatment either —
+  // that trick re-enables a free bundled feature after an update, and using it
+  // to switch a paid network call back on is exactly what it must never do.
+  agentSpeechEngine: 'local',
+  agentSpeechModel: null, // null = the current default in main/speech.js
+  // The Gemini API key, sealed by the OS keychain — { mode, cipher } or
+  // { mode, name } for an environment variable. Never in PUBLIC_KEYS and so
+  // never in the renderer: Settings is told whether a key exists, never what it
+  // is. See speech.js keyOf(), which is agents/registry.js secretFor() verbatim.
+  agentSpeechKey: null,
   pttEnabled: true,
   pttKey: null, // null = platform default (Command on macOS, Control elsewhere)
   pttCustomCode: null, // KeyboardEvent.code when pttKey === 'custom'

@@ -40,6 +40,7 @@ import { commitCount } from './lib/sessionStanding.js';
 import { linkResend, markSent, clearLink, chatOutcome, roundOutcome, retire } from './lib/resendLink.js';
 import { flashDuration, prefersReducedMotion } from './lib/connectFlash.js';
 import { useAgentMusic } from './lib/agentMusic.js';
+import { useAgentSpeech } from './lib/agentSpeech.js';
 import { trackUrl, DEFAULT_TRACK } from './lib/agentMusicTrack.js';
 
 const api = window.lanchat;
@@ -262,6 +263,11 @@ export default function App() {
   // Read from the keydown handler, which is attached once and would otherwise
   // close over whatever the answer was when the listeners went on.
   const dictationReadyRef = useRef(null);
+  // Reading a session's discussion aloud. A ref because the queue is driven from
+  // the event listener below, which is attached once and would otherwise close
+  // over whichever session was open when it went on. Filled in further down,
+  // where the hook that owns the queue lives.
+  const speechRef = useRef(null);
   const groupRef = useRef(null);
   const inCallRef = useRef(false);
   const groupActiveRef = useRef(false);
@@ -828,6 +834,15 @@ export default function App() {
           break;
         case 'chat':
           appendMessage(payload.peerId, payload);
+          // An agent's turn in a discussion, read aloud as it lands. Only in a
+          // session, and only from an agent: the person's own interjections are
+          // already in their own head, and a thread with a peer has an ear at
+          // the far end. The queue itself decides whether anything is spoken —
+          // whether the setting is on, whether this session is a dialogue, and
+          // whether this turn has been said already.
+          if (payload.direction === 'in' && payload.agentId && isSessionThread(payload.peerId)) {
+            speechRef.current?.onTurn(payload);
+          }
           // The finished reply supersedes the streamed preview. A session gets
           // the stream under its own id, so it ends the same way — but only the
           // stream belonging to the agent that just answered: the others in the
@@ -1057,6 +1072,13 @@ export default function App() {
             // is: the first of three agents answering has not finished anything.
             retireSuperseded(payload.sessionId, roundOutcome(payload));
           }
+          // A discussion that has stopped has nothing left to say. Stopping one
+          // is usually somebody pressing Stop, which means they want it to be
+          // quiet *now* — carrying on through a backlog of queued turns after
+          // that would make the button look broken. Pausing counts too: the
+          // whole point of pausing is to think, which is hard with a voice
+          // still going.
+          if (!payload.open || payload.paused) speechRef.current?.clear();
           break;
         // A run came back with nothing in it. There is no message, so the light is
         // the whole of what is shown — and because no 'chat' event is coming, the
@@ -1989,9 +2011,61 @@ export default function App() {
     return false;
   }, [typing, awaiting]);
 
+  // ---- reading a discussion aloud ----
+  //
+  // Sessions only, and dialogues only. A dialogue is the one thread in the app
+  // that is a conversation between several agents rather than a series of
+  // answers to you, which is the only thing worth following by ear: parallel and
+  // relay produce answers to one question, and a session with a single agent is
+  // that agent talking to you, in a thread you are already reading.
+  const spokenSession = useMemo(() => {
+    if (!isSessionThread(selectedId)) return null;
+    const record = sessions.find((s) => s.id === selectedId);
+    return record && record.mode === 'dialogue' ? record : null;
+  }, [selectedId, sessions]);
+
+  // A call owns the speakers, exactly as it does for the music below.
+  const speechOn =
+    config.agentSpeechEnabled === true &&
+    Boolean(spokenSession) &&
+    !inCall &&
+    !groupActive &&
+    !incoming &&
+    !groupInvited;
+
+  const {
+    speak: speakTurn,
+    replay: replayTurn,
+    clear: clearSpeech,
+    speaking,
+  } = useAgentSpeech({
+    enabled: speechOn,
+    volume: config.agentSpeechVolume ?? 0.9,
+    sessionId: spokenSession?.id || null,
+    agentIds: spokenSession?.agentIds,
+    // The online voice, when it is switched on and reachable. Anything else —
+    // the engine left on 'local', no key, no network, a refused key — comes back
+    // null, which the queue reads as "use the window's own voice" rather than as
+    // an error. The file is served by the same local endpoint that already
+    // serves thumbnails and custom sounds.
+    synthesize: async (text, voice) => {
+      const result = await api.speak(text, voice);
+      return result?.ok ? soundUrl(result.path) : null;
+    },
+  });
+
+  // What the event listener reaches for. Reassigned every render so it always
+  // holds the current session's queue, and read through the ref so attaching the
+  // listener once is safe.
+  speechRef.current = {
+    onTurn: (msg) => speakTurn({ id: msg.id, text: msg.text, agentId: msg.agentId }),
+    clear: clearSpeech,
+  };
+
   // A call owns the speakers. The bed comes back, from where it left off, when
   // the call ends.
   useAgentMusic(agentWorking && !inCall && !groupActive && !incoming && !groupInvited, {
+    ducked: speaking,
     enabled: config.agentMusicEnabled === true,
     volume: config.agentMusicVolume ?? 0.5,
     // A bundled track by name, or the user's own file served by the same local
@@ -2204,6 +2278,10 @@ export default function App() {
             // Offered on the same threads, and for the same reason: only somewhere
             // that can answer a question is there any point putting one back.
             onResend={isThinkingThread(selectedId) ? resendFrom : undefined}
+            // Only where there is a voice to hear it in. `speechOn` is already
+            // the whole answer — the setting, the mode, and no call in progress —
+            // so a thread without one never grows the affordance.
+            onSpeak={speechOn ? replayTurn : undefined}
             onSend={sendText}
             onAttach={attach}
             onVoice={sendVoice}

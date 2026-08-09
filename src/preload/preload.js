@@ -127,6 +127,19 @@ contextBridge.exposeInMainWorld('lanchat', {
   dictate: (data) => invoke('lanchat:dictate', { data }),
   probeDictation: (port) => invoke('lanchat:probeDictation', { port }),
 
+  // The way back: an agent's answer in a session, read aloud. `speak` gives back
+  // the path of a playable file, or a failure saying whether the window should
+  // fall back to its own voice.
+  //
+  // The engine and the key have channels of their own rather than riding on
+  // setConfig, because between them they decide whether the agents' words leave
+  // this machine. `speechStatus` reports whether a key is stored; there is no
+  // call anywhere that hands the key itself back to the window.
+  speak: (text, voice) => invoke('lanchat:speak', { text, voice }),
+  speechStatus: () => invoke('lanchat:speechStatus'),
+  setSpeechEngine: (engine) => invoke('lanchat:setSpeechEngine', { engine }),
+  setSpeechKey: (key) => invoke('lanchat:setSpeechKey', { key }),
+
   // Documents an agent is asked to read. Both return a verdict per file — name,
   // size and either `ok` or the reason — never the text, which is read in main
   // when the message is sent and never travels through the window.

@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { formatTime, formatBytes } from '../lib/util.js';
-import { FileIcon, Fork, Restore } from '../lib/icons.jsx';
+import { FileIcon, Fork, Restore, Speaker } from '../lib/icons.jsx';
 import { linkify, isImageUrl } from '../lib/linkify.js';
 import { fieldHits } from '../lib/findInThread.js';
 import { useCountdown } from '../lib/useCountdown.js';
@@ -46,6 +46,9 @@ export default function MessageBubble({
   // Putting a question that failed back into the composer, with whatever it was
   // asking about. Offered on the same threads as onFork.
   onResend,
+  // Reading an agent's turn aloud again. Passed only by a discussion that has a
+  // voice switched on, so every other thread renders exactly as it always has.
+  onSpeak,
   // What the find bar is looking for: `{ query, base, current }`, where `base`
   // is the ordinal this bubble's first hit was given and `current` is the one
   // being pointed at. Undefined whenever nothing is being searched, which is
@@ -132,6 +135,10 @@ export default function MessageBubble({
   // already been answered, and a button offering to put it back in the composer
   // is offering to ask it a third time on the way out the door.
   const resendable = failed && !dissolving && Boolean(onResend) && Boolean(msg.text);
+  // An agent's turn, in a thread that has a voice. Not on a bubble that is
+  // leaving, and not on a notice: neither is anybody's words.
+  const speakable =
+    Boolean(onSpeak) && !out && Boolean(msg.agentId) && Boolean(msg.text) && !msg.notice && !going;
 
   // Counted here rather than passed in, so the sentence and the bubble it sits
   // under read the same clock. Stops at the moment the bubble starts to go —
@@ -269,6 +276,23 @@ export default function MessageBubble({
           aria-label="Ask about this"
         >
           <Fork size={15} />
+        </button>
+      )}
+      {/* Hearing a turn again. Only where there is a voice to hear it in: the
+          button is absent unless the pane passes a handler, which it only does
+          in a discussion, and only on an agent's own words — reading your own
+          question back to you is not a thing anybody wants.
+
+          Cheap on the second press: main keeps what it synthesised, keyed on the
+          voice and the text, so a replay costs nothing and is not billed twice. */}
+      {speakable && (
+        <button
+          className="bubble-speak"
+          onClick={() => onSpeak(msg)}
+          title="Read this aloud"
+          aria-label="Read this aloud"
+        >
+          <Speaker size={15} />
         </button>
       )}
       {/* Beside the question rather than beside the error, because the error is

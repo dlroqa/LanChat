@@ -6242,6 +6242,46 @@ code.path {
   order: -1;
 }
 
+/* Reading a turn aloud again. Same placement and same reveal as the two buttons
+   above — outside the bubble, on hover and on keyboard focus.
+
+   No `.out` rule: it only ever appears on an agent's own bubble, which is always
+   on the received side. */
+.bubble-speak {
+  flex: none;
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  margin: 0 2px 2px;
+  border-radius: 50%;
+  color: var(--fg-faint);
+  opacity: 0;
+  transform: scale(0.92);
+  transition:
+    opacity 0.14s ease,
+    transform 0.14s ease,
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.bubble-row:hover .bubble-speak,
+.bubble-speak:focus-visible {
+  opacity: 1;
+  transform: none;
+}
+
+.bubble-speak:hover {
+  background: var(--surface-hover);
+  /* The agent's own colour where the row has one, so pressing it reads as "hear
+     *this* agent" rather than as a generic control. The variable is set on the
+     row by MessageBubble; the fallback is what a row without an agent uses, and
+     is also what keeps this readable if the colour is ever dropped. */
+  color: var(--agent-color, var(--primary));
+}
+
 @media (prefers-reduced-motion: reduce) {
   /* The global switch already removes the disintegration. Removal is driven by
      a timer in App.jsx rather than by animationend precisely because of that —
@@ -6252,6 +6292,10 @@ code.path {
     opacity: 0;
   }
   .bubble-resend {
+    transition: opacity 0.14s ease;
+    transform: none;
+  }
+  .bubble-speak {
     transition: opacity 0.14s ease;
     transform: none;
   }

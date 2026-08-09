@@ -41,6 +41,12 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
     agentMusic: config.agentMusic,
     agentMusicVolume: config.agentMusicVolume,
     customAgentMusicPath: config.customAgentMusicPath,
+    agentSpeechEnabled: config.agentSpeechEnabled,
+    agentSpeechVolume: config.agentSpeechVolume,
+    // agentSpeechEngine is deliberately not here. It decides whether the agents'
+    // words leave this machine, so it is applied the moment it changes rather
+    // than sitting in a draft — the same treatment, for the same reason, as
+    // acceptLan above. SoundSettings owns it and talks to main directly.
   });
   const [ptt, setPtt] = useState({
     pttEnabled: config.pttEnabled !== false,
@@ -147,6 +153,7 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
       <SoundSettings
         value={sounds}
         soundUrl={soundUrl}
+        speechEngine={config.agentSpeechEngine}
         onChange={(patch) => setSounds((v) => ({ ...v, ...patch }))}
       />
 

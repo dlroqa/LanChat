@@ -3,13 +3,14 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { ipcMain, dialog, shell } = require('electron');
+const { ipcMain, dialog, shell, safeStorage } = require('electron');
 const { guessMime } = require('./fileTransfer');
 const { readDocument, composePrompt } = require('./documents');
 const { LOCAL_ORIGIN: AGENT_LOCAL_ORIGIN } = require('./agents');
 const { createRemoteAgents } = require('./agents/remote');
 const { createSessions, isSessionId } = require('./sessions');
 const { createDictation } = require('./dictation');
+const { createSpeech } = require('./speech');
 const { NoteStore } = require('./notes');
 const { createTasks, isTaskId } = require('./tasks');
 const { ScheduleRegistry } = require('./tasks/schedules');
@@ -73,6 +74,8 @@ const SETTABLE_KEYS = Object.freeze([
   'agentMusic',
   'agentMusicVolume',
   'customAgentMusicPath',
+  'agentSpeechEnabled',
+  'agentSpeechVolume',
   'pttEnabled',
   'pttKey',
   'pttCustomCode',
@@ -163,6 +166,11 @@ function createIpc({
   // Speech-to-text through the FluidVoice app on this machine. Nothing of it
   // crosses the wire.
   const dictation = createDictation({ config });
+
+  // Text-to-speech for session discussions. Unlike dictation above this one can
+  // cross the wire — but only once somebody has switched the engine to 'gemini'
+  // and pasted a key. Left alone it opens no socket at all; see speech.js.
+  const speech = createSpeech({ config, userDataDir, safeStorage });
 
   // Notes: the Task Bar's own writing. Local to this machine, never sent, and
   // stored in halves — see src/main/notes.js for why the bodies are not in the
@@ -1355,6 +1363,42 @@ function createIpc({
   // a key and getting nothing.
   ipcMain.handle('lanchat:probeDictation', (_e, { port } = {}) => dictation.probe(port));
 
+  // ---- speech ----
+  //
+  // The other direction: an agent's answer in a session, read aloud. Dictation
+  // above never leaves this machine; this one can, which is why it is gated in
+  // speech.js and why the engine has its own channel below.
+  //
+  // Returns a path, not bytes. The file is served to the window through the same
+  // local preview endpoint that already serves thumbnails and custom sounds, so
+  // there is no second way for audio to reach the renderer — and the path is
+  // allowed through that endpoint here, at the moment it is produced.
+  ipcMain.handle('lanchat:speak', async (_e, { text, voice } = {}) => {
+    const result = await speech.speak({ text, voice });
+    if (result.ok) bus.emit('allow-preview', result.path);
+    return result;
+  });
+
+  ipcMain.handle('lanchat:speechStatus', () => speech.status());
+
+  // Turning the online voice on, and pasting the key it needs. Its own channel
+  // rather than a `setConfig` key, for the reason in publicConfig(): this is the
+  // switch that decides whether the agents' words leave the machine, and it must
+  // never move except when somebody moves it.
+  //
+  // The key is kept when the engine goes back to 'local' rather than wiped, so
+  // switching the voice off for an evening does not mean finding the key again.
+  // Removing it is `setSpeechKey` with an empty string — a separate, deliberate act.
+  ipcMain.handle('lanchat:setSpeechEngine', (_e, { engine } = {}) => {
+    config.set({ agentSpeechEngine: engine === 'gemini' ? 'gemini' : 'local' });
+    return { ...publicConfig(config), speech: speech.status() };
+  });
+
+  ipcMain.handle('lanchat:setSpeechKey', (_e, { key } = {}) => {
+    const result = speech.setKey(key);
+    return { ...result, speech: speech.status() };
+  });
+
   // ---- device identity and known peers ----
 
   // Our own key, for reading out loud to somebody comparing it on their screen.
@@ -1723,6 +1767,15 @@ const PUBLIC_KEYS = Object.freeze([
   // decides who may open a socket to this machine gets its own channel, so it
   // can never be flipped as a side effect of saving unrelated preferences.
   'acceptLan',
+  // Here for the same reason and on the same terms. This one decides whether the
+  // agents' words leave the machine for Google, which makes it the last setting
+  // in the app that should be reachable by a bulk patch. Shown, never set, from
+  // the renderer; `lanchat:setSpeechEngine` is the only way it moves.
+  //
+  // agentSpeechKey is pointedly absent from this list: Settings is told whether
+  // a key exists (speech.status()), never what it is.
+  'agentSpeechEngine',
+  'agentSpeechModel',
 ]);
 
 function publicConfig(config) {

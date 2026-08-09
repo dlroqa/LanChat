@@ -81,6 +81,10 @@ export default function ChatPane({
   // threads as onFork, since both only mean anything where a question can be
   // asked.
   onResend,
+  // Reading an agent's turn aloud again. Given only by a discussion with the
+  // voice switched on; every other thread passes nothing and the button is not
+  // rendered at all.
+  onSpeak,
   approval,
   // Live output, per agent: `[{ agentId, name, text }]`. One string was enough
   // while one agent answered at a time; a counsel has several typing into the
@@ -535,6 +539,7 @@ export default function ChatPane({
                   // is nothing there to carry a context to.
                   onFork={onFork}
                   onResend={onResend}
+                  onSpeak={onSpeak}
                   find={searching ? { query, base: bases.get(m.id) || 0, current } : undefined}
                 />
               </React.Fragment>

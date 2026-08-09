@@ -48,11 +48,15 @@ export const AGENT_HUES = Object.freeze([
 // Which slot an id belongs to when nothing is in the way. The same hash
 // colorFor() in util.js uses, deliberately: an agent's avatar and its bubbles
 // should not disagree about which end of the spectrum it lives at.
-function slotFor(key) {
+//
+// `count` is the size of the ring being indexed. It exists because this hash now
+// serves two rings — hues here, voices in agentVoice.js — and an agent should
+// land on the same *relative* position in both.
+export function slotFor(key, count = AGENT_HUES.length) {
   let h = 0;
   const s = String(key || '');
   for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  return h % AGENT_HUES.length;
+  return h % count;
 }
 
 // The colour an agent has on its own, with no room to be distinct within. For
@@ -60,6 +64,29 @@ function slotFor(key) {
 // that matters is that the colour is always the same one.
 export function colorOf(agentId) {
   return AGENT_HUES[slotFor(agentId)];
+}
+
+// Handing out one thing from a ring per agent, all of them different.
+//
+// The rule this implements is described in full over paletteFor() below — it was
+// written for colours and every word of it holds for voices too, which is why it
+// lives here once rather than twice. `ring` is the array being dealt from; the
+// return is a Map from id to the entry it got.
+export function ringFor(agentIds, ring) {
+  const ids = [...new Set((agentIds || []).filter(Boolean))].sort();
+  const taken = new Set();
+  const out = new Map();
+  for (const id of ids) {
+    const start = slotFor(id, ring.length);
+    let slot = start;
+    for (let step = 0; step < ring.length; step += 1) {
+      slot = (start + step) % ring.length;
+      if (!taken.has(slot)) break;
+    }
+    taken.add(slot);
+    out.set(id, ring[slot]);
+  }
+  return out;
 }
 
 // The colours of everybody in one conversation, all of them different.
@@ -85,18 +112,5 @@ export function colorOf(agentId) {
 // shares with the first, which is worse than distinct and far better than
 // undefined.
 export function paletteFor(agentIds) {
-  const ids = [...new Set((agentIds || []).filter(Boolean))].sort();
-  const taken = new Set();
-  const out = new Map();
-  for (const id of ids) {
-    const start = slotFor(id);
-    let slot = start;
-    for (let step = 0; step < AGENT_HUES.length; step += 1) {
-      slot = (start + step) % AGENT_HUES.length;
-      if (!taken.has(slot)) break;
-    }
-    taken.add(slot);
-    out.set(id, AGENT_HUES[slot]);
-  }
-  return out;
+  return ringFor(agentIds, AGENT_HUES);
 }

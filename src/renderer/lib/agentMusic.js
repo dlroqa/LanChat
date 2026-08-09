@@ -38,6 +38,19 @@ export const VOLUME_STEP_MS = 120;
 // stuck spinner, which is a bug you can ignore, and music you cannot.
 export const MAX_RUN_MS = 20 * 60 * 1000;
 
+// How far the bed drops while an agent's answer is being read aloud, and how
+// long it takes to get there.
+//
+// A quarter, not silence: the music is what says work is still happening, and
+// cutting it dead at every turn would make a discussion of twelve turns sound
+// like the app repeatedly breaking. A quarter is far enough under a speaking
+// voice to leave it clear, and near enough to stay present underneath it.
+//
+// Faster than either of the two fades above, because this one has to be out of
+// the way before the first syllable rather than merely soon.
+export const DUCK_LEVEL = 0.25;
+export const DUCK_MS = 220;
+
 export function clampVolume(v) {
   const n = Number(v);
   if (!Number.isFinite(n)) return 0;
@@ -72,6 +85,11 @@ export class AgentMusic {
     this.stopTimer = null;
     this.gestureOff = null;
     this.volume = 0.5;
+    // Whether a voice is currently talking over the bed. Held separately from
+    // `volume` so the slider and the ducking cannot overwrite one another: the
+    // volume is what the user asked for, this is what is temporarily happening
+    // to it, and _target() below is the only thing that combines them.
+    this.ducked = false;
     // What the music is *for*, not what the element is doing. A fading-out track
     // is still playing; a track that wants to play but was refused autoplay is
     // not. This is the intent, and everything else follows it.
@@ -140,13 +158,37 @@ export class AgentMusic {
     if (wasWanted) this.start();
   }
 
+  // Where the gain should sit right now: what the user asked for, less whatever
+  // is talking over it. Every ramp that is not a fade to silence aims here, so
+  // moving the slider mid-sentence keeps the bed ducked, and a duck that lifts
+  // returns to the volume the slider is on rather than the one it was on when
+  // the voice started.
+  _target() {
+    return this.ducked ? this.volume * DUCK_LEVEL : this.volume;
+  }
+
+  // Getting out of the way of a voice, and coming back afterwards.
+  //
+  // Idempotent: a discussion where one agent finishes speaking as the next
+  // begins calls this repeatedly with the same value, and re-ramping to the
+  // level it is already at would be an audible stutter at every turn.
+  duck(on) {
+    const next = Boolean(on);
+    if (next === this.ducked) return;
+    this.ducked = next;
+    if (!this.wanted || !this.gain) return;
+    try {
+      this._ramp(this._target(), DUCK_MS);
+    } catch {}
+  }
+
   setVolume(v) {
     this.volume = clampVolume(v);
     // Dragging the slider while an agent is working is audible immediately,
     // rather than taking effect on some future run.
     if (this.wanted && this.gain) {
       try {
-        this._ramp(this.volume, VOLUME_STEP_MS);
+        this._ramp(this._target(), VOLUME_STEP_MS);
       } catch {}
     }
   }
@@ -161,7 +203,11 @@ export class AgentMusic {
       }
       this.wanted = true;
       const from = this.gain.gain.value;
-      this._ramp(this.volume, fadeMs(from, this.volume, FADE_IN_MS, this.volume));
+      const to = this._target();
+      // `span` stays the configured volume, not the ducked target: it is the
+      // full travel of a fade at the current setting, which is what holds the
+      // slope constant. See fadeMs().
+      this._ramp(to, fadeMs(from, to, FADE_IN_MS, this.volume));
       this._play();
     } catch {}
   }
@@ -280,21 +326,31 @@ export function previewTrack(url, volume) {
 // Drives the bed from one boolean. Called once, at the top of the app, because
 // the music is a property of the machine's state and not of whichever
 // conversation happens to be open — switching threads mid-run must not touch it.
-export function useAgentMusic(busy, { enabled = false, volume = 0.5, url = null } = {}) {
+export function useAgentMusic(busy, { enabled = false, volume = 0.5, url = null, ducked = false } = {}) {
   const ref = useRef(null);
   // No track chosen, or "custom" with nothing picked yet, is simply silence —
   // the same as being switched off, and not a thing to report.
   const wanted = Boolean(busy) && enabled === true && Boolean(url);
   const vol = clampVolume(volume);
+  const under = Boolean(ducked);
 
   // Read inside the effect below without being a dependency of it: a nudge of
   // the volume slider must not count as work stopping and starting again.
   const volRef = useRef(vol);
   volRef.current = vol;
 
+  // The same treatment, for the same reason: a voice starting mid-run must duck
+  // the bed, not restart it.
+  const duckRef = useRef(under);
+  duckRef.current = under;
+
   useEffect(() => {
     ref.current?.setVolume(vol);
   }, [vol]);
+
+  useEffect(() => {
+    ref.current?.duck(under);
+  }, [under]);
 
   useEffect(() => {
     if (!wanted) {
@@ -307,6 +363,12 @@ export function useAgentMusic(busy, { enabled = false, volume = 0.5, url = null 
     if (!ref.current) ref.current = new AgentMusic({ url });
     ref.current.setUrl(url);
     ref.current.setVolume(volRef.current);
+    // Applied before start(), not by the effect above: an agent that begins work
+    // while a previous turn is still being read aloud gets a fresh instance
+    // whose `ducked` is false, and nothing would change it — the flag has not
+    // moved, so its own effect will not fire. The bed would come up full over a
+    // speaking voice.
+    ref.current.duck(duckRef.current);
     ref.current.start();
     const cap = setTimeout(() => ref.current?.stop(), MAX_RUN_MS);
     return () => clearTimeout(cap);

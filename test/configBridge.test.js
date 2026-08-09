@@ -146,3 +146,49 @@ test('acceptLan is shown to the renderer but not settable in bulk', () => {
   assert.equal(call('lanchat:setAcceptLan', { on: true }).acceptLan, true);
   assert.equal(onDisk().acceptLan, true);
 });
+
+test('the speech engine is shown to the renderer but not settable in bulk', () => {
+  const { call, onDisk } = bridge();
+
+  // Reading a discussion aloud arrives switched on, in the window's own voice.
+  // Sending the agents' words to Google does not: that is a separate switch, and
+  // it starts off.
+  assert.equal(call('lanchat:getConfig').agentSpeechEnabled, true);
+  assert.equal(call('lanchat:getConfig').agentSpeechEngine, 'local');
+
+  // Its own channel is the only way in — for the same reason as acceptLan
+  // above, and a stronger one: a bulk save of unrelated preferences must not
+  // decide whether the agents' words leave this machine.
+  const ignored = call('lanchat:setConfig', { agentSpeechEngine: 'gemini', agentSpeechVolume: 0.4 });
+  assert.equal(ignored.agentSpeechEngine, 'local');
+  assert.equal(ignored.agentSpeechVolume, 0.4, 'the ordinary preferences still save');
+  assert.equal(onDisk().agentSpeechEngine, 'local');
+
+  assert.equal(call('lanchat:setSpeechEngine', { engine: 'gemini' }).agentSpeechEngine, 'gemini');
+  assert.equal(onDisk().agentSpeechEngine, 'gemini');
+
+  // Anything that is not 'gemini' means the local voice, so a malformed call
+  // cannot leave the setting in a state nothing understands.
+  assert.equal(call('lanchat:setSpeechEngine', { engine: 'nonsense' }).agentSpeechEngine, 'local');
+  assert.equal(call('lanchat:setSpeechEngine', {}).agentSpeechEngine, 'local');
+});
+
+test('the API key is never handed to the renderer', () => {
+  const { call } = bridge();
+
+  // Not in the bridge at all — not settable, and not shown.
+  assert.ok(!PUBLIC_KEYS.includes('agentSpeechKey'));
+  assert.ok(!SETTABLE_KEYS.includes('agentSpeechKey'));
+  assert.equal(call('lanchat:getConfig').agentSpeechKey, undefined);
+
+  // What Settings is told instead: whether one exists.
+  const status = call('lanchat:speechStatus');
+  assert.deepEqual(Object.keys(status).sort(), ['engine', 'hasKey', 'model']);
+  assert.equal(status.hasKey, false);
+
+  // This stub reports no secure storage, which is the case where a key must be
+  // refused rather than written to disk in the clear.
+  const saved = call('lanchat:setSpeechKey', { key: 'a-real-key' });
+  assert.equal(saved.ok, false);
+  assert.equal(saved.speech.hasKey, false);
+});

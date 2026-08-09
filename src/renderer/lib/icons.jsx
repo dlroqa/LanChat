@@ -68,6 +68,16 @@ export const Mic = (p) => (
     <line x1="12" y1="19" x2="12" y2="22" />
   </S>
 );
+// Reading a turn aloud. A speaker with two waves rather than one: one wave is
+// the volume glyph used all over this app's sliders, and a button that borrows
+// it would read as "set the volume of this message".
+export const Speaker = (p) => (
+  <S {...p}>
+    <path d="M11 5 6 9H3v6h3l5 4V5Z" />
+    <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+    <path d="M18.5 5.5a9 9 0 0 1 0 13" />
+  </S>
+);
 export const MicOff = (p) => (
   <S {...p}>
     <line x1="2" y1="2" x2="22" y2="22" />
