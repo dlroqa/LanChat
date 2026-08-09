@@ -174,3 +174,15 @@ module.exports = async function afterPack(context) {
   if (context.electronPlatformName !== 'darwin') return;
   signMac(context);
 };
+
+// The two pruners on their own, for test/ttsPackaging.test.js.
+//
+// Exported because driving them through afterPack() means also driving
+// signMac(), and on a macOS runner that really does shell out to codesign —
+// against the temporary directory a test built, which contains no .app. That
+// failed CI on macOS alone while passing on Linux and Windows, which is the
+// least useful shape a test failure can have. Pruning and signing are separate
+// jobs; the tests now ask for the one they are about, and every platform runs
+// every case.
+module.exports.pruneOnnx = pruneOnnx;
+module.exports.pruneOnnxWeb = pruneOnnxWeb;

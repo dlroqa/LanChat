@@ -80,6 +80,7 @@ test('its native modules stay ABI-stable with Electron', () => {
 // ------------------------------------------------------------------ pruning
 
 const afterPack = require('../build/afterPack.js');
+const { pruneOnnx, pruneOnnxWeb } = afterPack;
 
 // A stand-in for what electron-builder leaves on disk: every platform's binaries
 // unpacked beside the asar.
@@ -122,14 +123,11 @@ const ARCH = { x64: 1, arm64: 3 };
 async function pack(platform, arch) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lanchat-pack-'));
   const root = fakeBuild(dir);
-  await afterPack({
-    appOutDir: dir,
-    electronPlatformName: platform,
-    arch: ARCH[arch],
-    // darwin would otherwise be handed to codesign, which is not the subject
-    // here and does not exist off macOS.
-    packager: { appInfo: { productFilename: 'LanChat' } },
-  });
+  // The pruner directly, not the whole afterPack: the darwin path of that goes
+  // on to run codesign, which on a macOS runner really executes against a
+  // directory holding no .app. Signing is a separate job with its own failure
+  // mode and is not what these cases are about.
+  pruneOnnx({ appOutDir: dir, electronPlatformName: platform, arch: ARCH[arch] });
   const left = [];
   for (const p of fs.readdirSync(root)) {
     for (const a of fs.readdirSync(path.join(root, p))) left.push(`${p}/${a}`);
@@ -137,14 +135,8 @@ async function pack(platform, arch) {
   return { dir, root, left };
 }
 
-// darwin is skipped on non-macOS hosts only because afterPack goes on to run
-// codesign, which is a separate concern with its own failure mode. The pruning
-// itself is what is under test, and it runs before that.
-const canSign = process.platform === 'darwin';
-
 test('packaging keeps this target’s binaries and deletes every other platform', async () => {
   for (const [platform, arch] of SHIPPED) {
-    if (platform === 'darwin' && !canSign) continue;
     const { dir, left } = await pack(platform, arch);
     assert.deepEqual(left, [`${platform}/${arch}`], `${platform}/${arch} should be all that survives`);
     fs.rmSync(dir, { recursive: true, force: true });
@@ -153,39 +145,19 @@ test('packaging keeps this target’s binaries and deletes every other platform'
 
 test('packaging an Intel Mac keeps the Intel Mac binary', async () => {
   // The case this whole file is about, asserted on its own so a failure names
-  // it. On a non-macOS host the signing step cannot run, so the pruning is
-  // driven directly instead of through the darwin path.
-  if (!canSign) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lanchat-pack-'));
-    const root = fakeBuild(dir);
-    await afterPack({
-      appOutDir: dir,
-      // 'mas' takes the same darwin binaries and does not reach codesign here.
-      electronPlatformName: 'mas',
-      arch: ARCH.x64,
-      packager: { appInfo: { productFilename: 'LanChat' } },
-    });
-    const left = fs.readdirSync(path.join(root, 'darwin'));
-    assert.deepEqual(left, ['x64']);
-    assert.ok(fs.existsSync(path.join(root, 'darwin', 'x64', 'onnxruntime_binding.node')));
-    assert.ok(!fs.existsSync(path.join(root, 'linux')), 'other platforms are gone');
-    fs.rmSync(dir, { recursive: true, force: true });
-    return;
-  }
-  const { dir, left } = await pack('darwin', 'x64');
+  // it rather than being one row of a loop.
+  const { dir, root, left } = await pack('darwin', 'x64');
   assert.deepEqual(left, ['darwin/x64']);
+  assert.ok(fs.existsSync(path.join(root, 'darwin', 'x64', 'onnxruntime_binding.node')));
+  assert.ok(!fs.existsSync(path.join(root, 'linux')), 'other platforms are gone');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('packaging drops the GPU providers nothing asks for', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lanchat-pack-'));
   const root = fakeBuild(dir);
-  await afterPack({
-    appOutDir: dir,
-    electronPlatformName: 'linux',
-    arch: ARCH.x64,
-    packager: { appInfo: { productFilename: 'LanChat' } },
-  });
+  pruneOnnx({ appOutDir: dir, electronPlatformName: 'linux', arch: ARCH.x64 });
+  pruneOnnxWeb({ appOutDir: dir, electronPlatformName: 'linux', arch: ARCH.x64 });
   const left = fs.readdirSync(path.join(root, 'linux', 'x64')).sort();
   assert.deepEqual(left, ['libonnxruntime.so.1', 'onnxruntime_binding.node']);
   fs.rmSync(dir, { recursive: true, force: true });
@@ -196,12 +168,8 @@ test('packaging a build without the offline voice is not an error', async () => 
   // look like if the dependency were ever removed. afterPack must not throw.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lanchat-pack-'));
   fs.mkdirSync(path.join(dir, 'resources'), { recursive: true });
-  await afterPack({
-    appOutDir: dir,
-    electronPlatformName: 'linux',
-    arch: ARCH.x64,
-    packager: { appInfo: { productFilename: 'LanChat' } },
-  });
+  pruneOnnx({ appOutDir: dir, electronPlatformName: 'linux', arch: ARCH.x64 });
+  pruneOnnxWeb({ appOutDir: dir, electronPlatformName: 'linux', arch: ARCH.x64 });
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -257,12 +225,8 @@ test('packaging keeps the three WebAssembly files and drops the rest', async () 
     fs.writeFileSync(path.join(web, name), Buffer.alloc(2048));
   }
 
-  await afterPack({
-    appOutDir: dir,
-    electronPlatformName: 'linux',
-    arch: ARCH.x64,
-    packager: { appInfo: { productFilename: 'LanChat' } },
-  });
+  pruneOnnx({ appOutDir: dir, electronPlatformName: 'linux', arch: ARCH.x64 });
+  pruneOnnxWeb({ appOutDir: dir, electronPlatformName: 'linux', arch: ARCH.x64 });
 
   assert.deepEqual(fs.readdirSync(web).sort(), [
     'ort-wasm-simd-threaded.mjs',
@@ -282,13 +246,8 @@ test('packaging refuses to ship a WebAssembly runtime missing a piece', async ()
   fs.writeFileSync(path.join(web, 'ort.node.min.js'), Buffer.alloc(16));
   fs.writeFileSync(path.join(web, 'ort.webgl.min.js'), Buffer.alloc(16));
 
-  await assert.rejects(
-    afterPack({
-      appOutDir: dir,
-      electronPlatformName: 'linux',
-      arch: ARCH.x64,
-      packager: { appInfo: { productFilename: 'LanChat' } },
-    }),
+  assert.throws(
+    () => pruneOnnxWeb({ appOutDir: dir, electronPlatformName: 'linux', arch: ARCH.x64 }),
     /WebAssembly fallback would not load/
   );
   fs.rmSync(dir, { recursive: true, force: true });
