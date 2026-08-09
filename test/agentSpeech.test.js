@@ -66,6 +66,11 @@ function stage() {
     preload: null,
     onended: null,
     onerror: null,
+    // The online word estimate reads these; a test drives them and calls
+    // ontimeupdate to move the audio position by hand.
+    duration: 0,
+    currentTime: 0,
+    ontimeupdate: null,
     paused: false,
     play() {
       played.push(this.src);
@@ -1142,4 +1147,146 @@ test('preload off starts the first turn at once, without a prepare phase', async
   await settle();
   assert.equal(p.prefetch, null, 'no prepare phase');
   assert.equal(p.pending, true, 'the first turn is fetched straight away');
+});
+
+// ---------------------------------------------- live: speak as it arrives
+
+test('a live turn not yet in the list is inserted and spoken', async () => {
+  const s = stage();
+  const p = player(s);
+  // The list is empty, exactly as it is in the tick a turn arrives — before the
+  // message has been committed and before the sync effect has added it. The old
+  // lookup-only speakNow found nothing here and gave up; this must not.
+  const ok = p.speakNow({ id: '7', text: 'live turn', voice: 'Kore' });
+  assert.equal(ok, true);
+  assert.equal(p.count, 1, 'the turn was inserted');
+  assert.equal(p.status, PLAYING);
+  assert.equal(p.speakingId, '7');
+  await settle();
+  assert.deepEqual(s.played, ['file:///live turn.wav']);
+});
+
+test('a later sync keeps the cursor on the live turn it inserted', async () => {
+  const s = stage();
+  const p = player(s);
+  p.speakNow({ id: '2', text: 'two', voice: 'Kore' });
+  await settle();
+  assert.equal(p.speakingId, '2');
+  // The whole session arrives a moment later, the live turn among earlier ones.
+  p.sync(turns('one', 'two', 'three')); // ids '1','2','3'
+  assert.equal(p.count, 3, 'reconciled to the whole session');
+  assert.equal(p.speakingId, '2', 'still reading the same turn');
+  assert.equal(p.index, 1, 'now at its real position');
+});
+
+test('a live turn is refused while something is already being read', async () => {
+  const s = stage();
+  const p = player(s);
+  p.sync(turns('one'));
+  p.playFrom();
+  await settle();
+  assert.equal(p.status, PLAYING);
+  const ok = p.speakNow({ id: '9', text: 'nine', voice: 'Kore' });
+  assert.equal(ok, false, 'not started — it reaches its turn in its own time');
+});
+
+// -------------------------------------------------- the spoken-word trace
+
+// A local player wired to record its utterances, so a test can fire the word
+// boundary the platform fires as it speaks.
+function localPlayer(s, l, turnList) {
+  const p = new AgentSpeech({
+    synthesize: null,
+    context: s.context,
+    element: s.element,
+    synth: l.synth,
+    utterance: l.utterance,
+  });
+  p.sync(turnList);
+  return p;
+}
+
+test('the local voice lights each word as it is spoken', async () => {
+  const s = stage();
+  const l = localStage();
+  const p = localPlayer(s, l, [{ id: '1', text: 'alpha beta gamma', voice: null }]);
+  p.playFrom();
+  await settle();
+  assert.equal(p.wordAt, -1, 'no word until the first boundary');
+  const u = l.utterances[0];
+  u.onboundary({ name: 'word', charIndex: 0 }); // alpha
+  assert.equal(p.wordAt, 0);
+  u.onboundary({ name: 'word', charIndex: 6 }); // beta starts after "alpha "
+  assert.equal(p.wordAt, 1);
+  u.onboundary({ name: 'word', charIndex: 11 }); // gamma
+  assert.equal(p.wordAt, 2);
+  // A sentence boundary is not a word and must not move the trace.
+  u.onboundary({ name: 'sentence', charIndex: 0 });
+  assert.equal(p.wordAt, 2);
+});
+
+test('the word index carries across a chunk boundary', async () => {
+  const s = stage();
+  const l = localStage();
+  const long = Array.from({ length: 80 }, (_, i) => 'w' + i).join(' '); // > 200 chars
+  const p = localPlayer(s, l, [{ id: '1', text: long, voice: null }]);
+  p.playFrom();
+  await settle();
+  assert.ok(p.chunks.length >= 2, 'the turn split into chunks');
+  const base = p.chunkWordBase[1];
+  assert.ok(base > 0, 'the second chunk starts partway through the turn');
+  // The first chunk finishes; the second begins.
+  l.utterances[0].onend();
+  await settle();
+  assert.equal(l.utterances.length, 2, 'the second chunk is being spoken');
+  l.utterances[1].onboundary({ name: 'word', charIndex: 0 });
+  assert.equal(p.wordAt, base, "chunk two's first word is word `base` of the whole turn");
+});
+
+test('an online turn estimates the word from the audio position', async () => {
+  const s = stage();
+  s.el.duration = 10;
+  const p = player(s); // synthesize returns a url → the online path
+  p.sync([{ id: '1', text: 'alpha bb ccccc', voice: 'Zephyr' }]);
+  p.playFrom();
+  await settle();
+  assert.equal(typeof s.el.ontimeupdate, 'function', 'the estimate is wired to the element');
+  s.el.currentTime = 0;
+  s.el.ontimeupdate();
+  assert.equal(p.wordAt, 0, 'at the start, the first word');
+  s.el.currentTime = 9.9;
+  s.el.ontimeupdate();
+  assert.equal(p.wordAt, 2, 'near the end, the last word');
+});
+
+test('the spoken word resets when the reading moves or stops', async () => {
+  const s = stage();
+  const l = localStage();
+  const p = localPlayer(s, l, [
+    { id: '1', text: 'alpha beta', voice: null },
+    { id: '2', text: 'gamma', voice: null },
+  ]);
+  p.playFrom();
+  await settle();
+  l.utterances[0].onboundary({ name: 'word', charIndex: 6 });
+  assert.equal(p.wordAt, 1);
+  p.next(); // a new turn starts with nothing lit
+  await settle();
+  assert.equal(p.wordAt, -1);
+  l.utterances[l.utterances.length - 1].onboundary({ name: 'word', charIndex: 0 });
+  assert.equal(p.wordAt, 0);
+  p.clear();
+  assert.equal(p.wordAt, -1, 'stopping clears the trace');
+});
+
+test('the spoken word is held across a pause', async () => {
+  const s = stage();
+  const l = localStage();
+  const p = localPlayer(s, l, [{ id: '1', text: 'alpha beta', voice: null }]);
+  p.playFrom();
+  await settle();
+  l.utterances[0].onboundary({ name: 'word', charIndex: 6 });
+  assert.equal(p.wordAt, 1);
+  p.pause();
+  assert.equal(p.wordAt, 1, 'a pause freezes the trace rather than clearing it');
 });

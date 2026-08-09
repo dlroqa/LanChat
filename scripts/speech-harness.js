@@ -191,11 +191,20 @@ const MY_QUESTION = {
   text: 'Which one first?', ts: Date.now(),
 };
 const thread = createRoot($('#thread'));
-const drawThread = (onSpeak, speakingId, speechPaused) => new Promise((r) => {
+const drawThread = (onSpeak, speakingId, speechPaused, speakWord) => new Promise((r) => {
   const state = (m) => (speakingId && m.id === speakingId ? (speechPaused ? 'paused' : 'playing') : undefined);
+  // The word index is handed only to the speaking bubble, exactly as ChatPane
+  // narrows it, so the trace lights one word in one place.
+  const word = (m) => (speakingId && m.id === speakingId ? speakWord : undefined);
   thread.render(h('div', { className: 'messages' }, [
-    h(MessageBubble, { key: 'a', msg: AGENT_TURN, color: '#88ddb3', onSpeak, speakState: state(AGENT_TURN) }),
-    h(MessageBubble, { key: 'b', msg: MY_QUESTION, onSpeak, speakState: state(MY_QUESTION) }),
+    h(MessageBubble, {
+      key: 'a', msg: AGENT_TURN, color: '#88ddb3', onSpeak,
+      speakState: state(AGENT_TURN), speakWord: word(AGENT_TURN),
+    }),
+    h(MessageBubble, {
+      key: 'b', msg: MY_QUESTION, onSpeak,
+      speakState: state(MY_QUESTION), speakWord: word(MY_QUESTION),
+    }),
   ]));
   setTimeout(r, 80);
 });
@@ -371,6 +380,30 @@ const out = {};
 
   await drawThread(() => {}, 'm1', true);
   out.bubblePausedLabel = $('.bubble-speak').getAttribute('aria-label');
+
+  // ---- the spoken-word trace ----
+  // AGENT_TURN.text = "I think we should start with the smaller of the two."
+  // Word 4 (0-based) is "start". Lit only on the bubble being read, and only on
+  // the one word — the trace lights one place at a time.
+  await drawThread(() => {}, 'm1', false, 4);
+  const marks = document.querySelectorAll('.bubble-row[data-speaking-id="m1"] .text .speak-word');
+  out.speakWordCount = marks.length;
+  out.speakWordText = marks[0] ? marks[0].textContent : null;
+  // The other bubble, not being read, carries no trace even with a word set.
+  out.speakWordOnlyOnReadBubble =
+    document.querySelectorAll('.bubble-row[data-speaking-id="m2"] .speak-word').length;
+  // The mark sits inside the message text without breaking it: the run before and
+  // after it are still there, so the full sentence is intact.
+  out.speakWordTextIntact = $('.bubble-row[data-speaking-id="m1"] .text').textContent === AGENT_TURN.text;
+  // Legible by construction — the text keeps its own colour and the wash sits
+  // behind it — so this checks the wash actually resolves to a colour rather than
+  // measuring a contrast pair.
+  out.speakWordHasWash = marks[0]
+    ? getComputedStyle(marks[0]).backgroundColor !== 'rgba(0, 0, 0, 0)'
+    : false;
+  // No word set → no trace, even on the bubble being read.
+  await drawThread(() => {}, 'm1', false, -1);
+  out.speakWordNoneWhenUnset = document.querySelectorAll('.speak-word').length;
 
   // The handle the pane scrolls to as the reading advances. Every bubble carries
   // its own id; ChatPane queries for the one the cursor is on and centres it,

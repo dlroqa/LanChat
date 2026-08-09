@@ -2368,9 +2368,30 @@ mark.find-hit.current {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 45%, transparent);
 }
 
+/* The word being spoken, traced along the bubble as the voice moves. Unlike a
+   search hit it leaves the text its own colour and washes the agent's colour
+   behind it, so it reads as a highlighter drawn over what is already there
+   rather than a second thing painted on top — and, because the text colour is
+   untouched, it stays legible on every bubble without a measured pair. The
+   transition is what makes it glide word to word instead of blinking. */
+.text .speak-word {
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--agent-color, var(--primary)) 38%, transparent);
+  transition: background 0.1s linear;
+}
+/* Your own turns are read too, and their bubble is solid --primary, so an
+   agent-blue wash would vanish into it. A light wash shows there instead. */
+.bubble-row.out .text .speak-word {
+  background: color-mix(in srgb, var(--fg) 26%, transparent);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .find-bar {
     animation: none;
+  }
+  /* The word still lights; it simply snaps rather than glides. */
+  .text .speak-word {
+    transition: none;
   }
 }
 

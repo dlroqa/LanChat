@@ -2366,6 +2366,7 @@ export default function App() {
             onSpeak={speechOn ? onSpeakFrom : undefined}
             speakingId={speech.speakingId}
             speechPaused={speech.paused}
+            speakWord={speech.wordAt}
             onSend={sendText}
             onAttach={attach}
             onVoice={sendVoice}

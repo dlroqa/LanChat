@@ -120,6 +120,13 @@ export function chunkText(raw, limit = LOCAL_CHUNK_CHARS) {
   return out.filter(Boolean);
 }
 
+// How many words are in a string. A word is any run of non-space, which is what
+// SpeechSynthesisUtterance's `word` boundary counts and what the bubble splits on
+// to highlight — so the count here and the ranges there index the same words.
+function wordsIn(s) {
+  return (String(s == null ? '' : s).match(/\S+/g) || []).length;
+}
+
 // A turn, in the one shape the list holds. Anything without words is not a turn:
 // a file, a notice and an empty string are all things there is nothing to say
 // about.
@@ -191,6 +198,14 @@ export class AgentSpeech {
     // when there is none. Distinct from `pending`, which is the per-turn gap of
     // an ordinary reading — the two never show at once.
     this.prefetch = null;
+    // Which word of the current turn is being spoken, for the highlight that
+    // traces the voice across the bubble. -1 is "no word": nothing is speaking,
+    // or the turn just changed and the first boundary has not fired yet. Exact on
+    // the local path (a boundary event per word) and estimated from audio time on
+    // the online paths, which return one file with no timings. `_wordWeights`
+    // holds the per-word char cumulatives the online estimate reads.
+    this.wordAt = -1;
+    this._wordWeights = null;
     // The session this list belongs to. Held here so that being handed a
     // different one is what resets the player, rather than the caller having
     // remembered to clear it first — see sync().
@@ -311,10 +326,29 @@ export class AgentSpeech {
   // A turn has just been said, live. Read it only if nothing else is being read
   // — anything already under way reaches it in its own time, because it is
   // already in the list.
-  speakNow(id) {
+  //
+  // Takes the whole turn, not just its id, and inserts it if the list does not
+  // have it yet. That is the difference between this working and not: an arriving
+  // turn is spoken from the message-arrived handler, in the same tick the message
+  // is appended, before React has committed and before the sync effect has added
+  // it to the list. Looking it up by id alone found nothing and gave up silently
+  // (the live-reading regression). Inserting it here restores what the old queue
+  // did. When sync runs a moment later it finds this same turn by id and keeps
+  // the cursor on it, so the manual insert and the reconciliation agree.
+  speakNow(turn) {
     if (this.status !== IDLE) return false;
-    const at = this.list.findIndex((t) => t.id === id);
-    if (at < 0) return false;
+    const id = turn && typeof turn === 'object' ? turn.id : turn;
+    let at = this.list.findIndex((t) => t.id === id);
+    if (at < 0) {
+      const built = toTurn(turn);
+      // A bare id with no turn behind it, or a full list: nothing to speak, same
+      // answer this used to give.
+      if (!built || this.list.length >= MAX_LIST) return false;
+      this.list.push(built);
+      this.seen.add(built.id);
+      at = this.list.length - 1;
+      this._announce();
+    }
     return this._goto(at);
   }
 
@@ -507,11 +541,28 @@ export class AgentSpeech {
 
     const url = typeof out === 'string' ? out : out?.url || null;
     const engine = typeof out === 'string' ? null : out?.engine || null;
-    if (url) this._playUrl(url, engine);
+    if (url) this._playUrl(url, engine, turn);
     else this._playLocal(turn);
   }
 
-  _playUrl(url, engine) {
+  // The cumulative character count at the end of each word of a turn, and the
+  // total — what the online estimate reads to turn an audio position into a word.
+  // Weighting by characters rather than counting words evenly makes a long word
+  // hold the highlight longer than a short one, which is roughly how a voice
+  // spends its time. Null when there is nothing to weigh.
+  _weighWords(text) {
+    const words = String(text == null ? '' : text).match(/\S+/g) || [];
+    if (!words.length) return null;
+    const ends = [];
+    let sum = 0;
+    for (const w of words) {
+      sum += w.length;
+      ends.push(sum);
+    }
+    return { ends, total: sum };
+  }
+
+  _playUrl(url, engine, turn) {
     if (!this._build()) {
       this._finish();
       return;
@@ -530,6 +581,23 @@ export class AgentSpeech {
       this.el.onended = done;
       // A file that will not decode is a turn skipped, not a reading stopped.
       this.el.onerror = done;
+      // The online engines return one file with no word timings, so the word
+      // being spoken is estimated from how far through the audio we are, weighted
+      // by word length. Coarse — timeupdate fires a few times a second — but
+      // enough to trace the voice. Guarded so a stale element cannot light a word
+      // in a turn that has moved on.
+      this._wordWeights = this._weighWords(turn?.text);
+      const gen = this.gen;
+      this.el.ontimeupdate = () => {
+        if (gen !== this.gen || this.status !== PLAYING || !this._wordWeights) return;
+        const dur = this.el.duration;
+        if (!dur || !isFinite(dur)) return;
+        const target = (this.el.currentTime / dur) * this._wordWeights.total;
+        const { ends } = this._wordWeights;
+        let i = 0;
+        while (i < ends.length - 1 && ends[i] < target) i += 1;
+        this._setWordAt(i);
+      };
       // Paused while the audio was being fetched: it is loaded and ready, and
       // resume() will start it. The cap stays unarmed, because nothing is being
       // said for it to be a cap on.
@@ -553,6 +621,16 @@ export class AgentSpeech {
     // LOCAL_CHUNK_CHARS.
     this.chunks = chunkText(turn.text);
     this.chunkAt = 0;
+    // How many words come before each chunk, so a boundary event's word index
+    // within its chunk can be turned into an index into the whole turn. Cuts fall
+    // on spaces (see chunkText), so no word is split across chunks and the sum is
+    // exact.
+    this.chunkWordBase = [];
+    let base = 0;
+    for (const c of this.chunks) {
+      this.chunkWordBase.push(base);
+      base += wordsIn(c);
+    }
     this.localVoice = turn.localVoice || null;
     if (!this.chunks.length) {
       this._finish();
@@ -589,6 +667,15 @@ export class AgentSpeech {
       };
       u.onend = done;
       u.onerror = done;
+      // The word being spoken, exact: the platform fires a `word` boundary as it
+      // reaches each one, with the character it starts at within this chunk. The
+      // words before this chunk plus the words before that character give the
+      // index into the whole turn that the bubble highlights.
+      u.onboundary = (e) => {
+        if (gen !== this.gen || this.status !== PLAYING || (e && e.name && e.name !== 'word')) return;
+        const within = wordsIn(this.chunks[this.chunkAt].slice(0, e ? e.charIndex : 0));
+        this._setWordAt((this.chunkWordBase[this.chunkAt] || 0) + within);
+      };
       // Kept so resume() can put the watchdog back on the piece it left.
       this.chunkDone = done;
 
@@ -689,6 +776,7 @@ export class AgentSpeech {
       if (this.el) {
         this.el.onended = null;
         this.el.onerror = null;
+        this.el.ontimeupdate = null;
         this.el.pause();
       }
     } catch {}
@@ -708,6 +796,17 @@ export class AgentSpeech {
     // loading states are put down, so cancelling a reading cannot leave either on.
     this._setPending(false);
     this._setPrefetch(null);
+    // Nothing is being spoken, so no word is lit. The next turn arms it again.
+    this._wordWeights = null;
+    this._setWordAt(-1);
+  }
+
+  // Which word is being spoken, announced only when it changes so the bubble
+  // re-highlights once per word rather than on every boundary or time update.
+  _setWordAt(n) {
+    if (n === this.wordAt) return;
+    this.wordAt = n;
+    this._announce();
   }
 
   // The loading state, announced only when it changes so a cache hit — which sets
@@ -933,10 +1032,14 @@ export function useAgentSpeech({
     // that preference is on: { done, total } while it runs, else null. The
     // transport fills the same bar to this proportion and names it.
     prefetch: player.prefetch,
+    // Which word of the current turn is being spoken, or -1. The bubble being
+    // read lights this word and traces it along as the voice moves.
+    wordAt: player.wordAt,
 
-    // The live path: an agent has just answered. The turn is already in the list
-    // (the effect above put it there); this only decides whether to start.
-    speak: (msg) => (enabled ? player.speakNow(msg.id) : false),
+    // The live path: an agent has just answered. Built into a turn here and
+    // handed whole, so the player can speak it even in the tick before the sync
+    // effect has added it to the list — which is the tick this is called in.
+    speak: (msg) => (enabled ? player.speakNow(turnOf(msg)) : false),
     // Both buttons. `startId` is the only difference between the transport's
     // play and a bubble's.
     play: (startId = null) => (enabled ? player.playFrom(startId) : false),

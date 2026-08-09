@@ -89,6 +89,9 @@ export default function ChatPane({
   // bubble below rather than handed to all of them, so exactly one can be lit.
   speakingId,
   speechPaused,
+  // Which word of that message is being spoken, or -1. Handed only to the
+  // speaking bubble, so the trace never lights a word in the wrong one.
+  speakWord,
   approval,
   // Live output, per agent: `[{ agentId, name, text }]`. One string was enough
   // while one agent answered at a time; a counsel has several typing into the
@@ -301,20 +304,26 @@ export default function ChatPane({
     searchingRef.current = searching;
   }, [searching]);
 
-  // Bringing the turn being read into view as the reading advances — "2 of 6"
-  // puts the second bubble on screen, "4 of 6" the fourth. Centred by measuring
-  // rather than with scrollIntoView, exactly as the search hit above is, and for
-  // the same reason: scrollIntoView would also scroll whatever contains the
-  // pane. A search in progress owns the view, so a reading never drags it.
+  // Keeping the word being read in view, gently. Not by re-centring the bubble on
+  // every turn — that moved the conversation out from under the reader — but by
+  // nudging only when the spoken word (or, before the first word lands, the
+  // bubble) would be off-screen, and then only to the nearest edge. A reading
+  // whose word is already visible does not move at all, so a long turn scrolls a
+  // line at a time rather than jumping. Keyed on the word as well as the turn, so
+  // it follows the trace down the bubble. A search in progress owns the view.
   useEffect(() => {
     if (!speakingId || searchingRef.current) return;
     const scroller = scrollRef.current;
     const bubble = scroller?.querySelector(`[data-speaking-id="${speakingId}"]`);
     if (!scroller || !bubble) return;
+    const target = bubble.querySelector('.speak-word') || bubble;
     const box = scroller.getBoundingClientRect();
-    const seen = bubble.getBoundingClientRect();
-    scroller.scrollTop += seen.top - box.top - (box.height - seen.height) / 2;
-  }, [speakingId]);
+    const seen = target.getBoundingClientRect();
+    const margin = 24;
+    if (seen.top < box.top + margin) scroller.scrollTop -= box.top + margin - seen.top;
+    else if (seen.bottom > box.bottom - margin) scroller.scrollTop += seen.bottom - (box.bottom - margin);
+    // Already comfortably in view: leave it exactly where it is.
+  }, [speakingId, speakWord]);
 
   // Whether a reading is centred on a turn that is not the newest one. While it
   // is, the bottom-pinning below stands down: an agent answering during a
@@ -575,6 +584,7 @@ export default function ChatPane({
                   speakState={
                     speakingId && m.id === speakingId ? (speechPaused ? 'paused' : 'playing') : undefined
                   }
+                  speakWord={speakingId && m.id === speakingId ? speakWord : undefined}
                   find={searching ? { query, base: bases.get(m.id) || 0, current } : undefined}
                 />
               </React.Fragment>

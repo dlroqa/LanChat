@@ -53,6 +53,9 @@ export default function MessageBubble({
   // being read, 'paused' while it is the one stopped on, and undefined for every
   // other bubble.
   speakState,
+  // Which word of this bubble is being spoken, or -1/undefined. Set only on the
+  // bubble being read, so the trace lights one word in one place.
+  speakWord,
   // What the find bar is looking for: `{ query, base, current }`, where `base`
   // is the ordinal this bubble's first hit was given and `current` is the one
   // being pointed at. Undefined whenever nothing is being searched, which is
@@ -77,6 +80,19 @@ export default function MessageBubble({
     [msg, find?.query, find?.base]
   );
   const current = find?.current;
+
+  // The character range of each word of the message, worked out once, so the
+  // spoken-word trace can point at the Nth word without re-scanning the text on
+  // every step. The player indexes words the same way (runs of non-space), so
+  // its `speakWord` picks the range that lights.
+  const wordRanges = useMemo(() => {
+    if (!msg.text) return [];
+    return [...msg.text.matchAll(/\S+/g)].map((m2) => ({ start: m2.index, end: m2.index + m2[0].length }));
+  }, [msg.text]);
+  // The range to light right now, or null: only while this bubble is the one
+  // being read, and only for a word the message actually has.
+  const speakRange =
+    speakState === 'playing' && speakWord != null && speakWord >= 0 ? wordRanges[speakWord] || null : null;
   // The first link only: a message with several should not become a wall of cards.
   // A link that is a picture is not one of them — it is drawn below as the
   // picture it is, and a card underneath saying the same thing again is noise.
@@ -109,6 +125,7 @@ export default function MessageBubble({
         onOpen={onOpen}
         hit={hits?.get('text')}
         current={current}
+        speakRange={speakRange}
       />
     );
 
@@ -353,12 +370,46 @@ export default function MessageBubble({
 // again at the edges of what it found; a word that begins in a sentence and ends
 // inside a link therefore comes back as two pieces carrying one ordinal, and the
 // second is an anchor to the same place as the first.
-function MessageText({ runs, onOpenLink, onOpen, hit, current }) {
-  const pieces = markRuns(runs, hit);
+// Re-slice already-marked pieces at the edges of one range, tagging the covered
+// slice `.speak`. A second pass on top of the search marking rather than a
+// replacement for it, so a spoken word and a search hit can both be showing —
+// the existing `.hit` ordinals are carried through untouched. Mirrors the inner
+// loop of sliceRuns, kept here because it composes with, rather than replaces,
+// that function's output.
+function markSpokenWord(pieces, range) {
+  if (!range || range.end <= range.start) return pieces;
+  const out = [];
+  let at = 0;
+  for (const run of pieces) {
+    const start = at;
+    const end = at + run.text.length;
+    at = end;
+    const from = Math.max(range.start, start);
+    const to = Math.min(range.end, end);
+    if (to <= from) {
+      out.push(run);
+      continue;
+    }
+    // The part before the word, the word, and the part after — each keeps the
+    // run's type and its search `hit`, so nothing about the run is lost.
+    if (from > start) out.push({ ...run, text: run.text.slice(0, from - start) });
+    out.push({ ...run, text: run.text.slice(from - start, to - start), speak: true });
+    if (to < end) out.push({ ...run, text: run.text.slice(to - start) });
+  }
+  return out;
+}
+
+function MessageText({ runs, onOpenLink, onOpen, hit, current, speakRange }) {
+  const marked = markRuns(runs, hit);
+  const pieces = speakRange ? markSpokenWord(marked, speakRange) : marked;
+  const bodyOf = (run) => {
+    const inner = run.hit == null ? run.text : <Hit run={run} current={current} />;
+    return run.speak ? <mark className="speak-word">{inner}</mark> : inner;
+  };
   return (
     <div className="text">
       {pieces.map((run, i) => {
-        const body = run.hit == null ? run.text : <Hit run={run} current={current} />;
+        const body = bodyOf(run);
         if (run.type === 'link') {
           return (
             <a
@@ -405,8 +456,10 @@ function MessageText({ runs, onOpenLink, onOpen, hit, current }) {
             </span>
           );
         }
-        if (run.hit == null) return <React.Fragment key={i}>{run.text}</React.Fragment>;
-        return <Hit key={i} run={run} current={current} />;
+        // Plain text: a fragment when it is neither a search hit nor the spoken
+        // word, and `body` (which carries either mark) otherwise.
+        if (run.hit == null && !run.speak) return <React.Fragment key={i}>{run.text}</React.Fragment>;
+        return <React.Fragment key={i}>{body}</React.Fragment>;
       })}
     </div>
   );
