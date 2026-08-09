@@ -10,7 +10,7 @@ const { LOCAL_ORIGIN: AGENT_LOCAL_ORIGIN } = require('./agents');
 const { createRemoteAgents } = require('./agents/remote');
 const { createSessions, isSessionId } = require('./sessions');
 const { createDictation } = require('./dictation');
-const { createSpeech } = require('./speech');
+const { createSpeech, engineOf } = require('./speech');
 const { NoteStore } = require('./notes');
 const { createTasks, isTaskId } = require('./tasks');
 const { ScheduleRegistry } = require('./tasks/schedules');
@@ -1373,13 +1373,22 @@ function createIpc({
   // local preview endpoint that already serves thumbnails and custom sounds, so
   // there is no second way for audio to reach the renderer — and the path is
   // allowed through that endpoint here, at the moment it is produced.
-  ipcMain.handle('lanchat:speak', async (_e, { text, voice } = {}) => {
-    const result = await speech.speak({ text, voice });
+  //
+  // `language` comes from the window because main has no business guessing it:
+  // xAI requires one on every call, and the renderer already knows what this
+  // machine reads in.
+  ipcMain.handle('lanchat:speak', async (_e, { text, voice, language } = {}) => {
+    const result = await speech.speak({ text, voice, language });
     if (result.ok) bus.emit('allow-preview', result.path);
     return result;
   });
 
   ipcMain.handle('lanchat:speechStatus', () => speech.status());
+
+  // The voices the chosen provider offers, so the window can deal one to each
+  // agent. Empty for the local voices and for Gemini, whose roster the window
+  // already holds; only xAI publishes a list to ask for.
+  ipcMain.handle('lanchat:speechVoices', () => speech.voices());
 
   // Turning the online voice on, and pasting the key it needs. Its own channel
   // rather than a `setConfig` key, for the reason in publicConfig(): this is the
@@ -1389,13 +1398,22 @@ function createIpc({
   // The key is kept when the engine goes back to 'local' rather than wiped, so
   // switching the voice off for an evening does not mean finding the key again.
   // Removing it is `setSpeechKey` with an empty string — a separate, deliberate act.
+  //
+  // `engineOf` is the one place that decides what a valid engine is, so an
+  // unknown value — a hand-edited config, an older build, a malformed call —
+  // always lands on the window's own voices rather than on something that
+  // cannot speak. That is what makes the dropdown's selection true: it shows
+  // what main settled on, not what it was asked for.
   ipcMain.handle('lanchat:setSpeechEngine', (_e, { engine } = {}) => {
-    config.set({ agentSpeechEngine: engine === 'gemini' ? 'gemini' : 'local' });
+    config.set({ agentSpeechEngine: engineOf(engine) });
     return { ...publicConfig(config), speech: speech.status() };
   });
 
-  ipcMain.handle('lanchat:setSpeechKey', (_e, { key } = {}) => {
-    const result = speech.setKey(key);
+  // One key per provider, named on every call. There is no way to set "the" key,
+  // because there is no longer one — and a provider must never be handed
+  // another's credentials.
+  ipcMain.handle('lanchat:setSpeechKey', (_e, { provider, key } = {}) => {
+    const result = speech.setKey(provider, key);
     return { ...result, speech: speech.status() };
   });
 

@@ -34,10 +34,10 @@ function entry() {
   return `
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import SoundSettings from ${JSON.stringify(path.join(SRC, 'components', 'SoundSettings.jsx'))};
+import SpeechSettings from ${JSON.stringify(path.join(SRC, 'components', 'SpeechSettings.jsx'))};
 import MessageBubble from ${JSON.stringify(path.join(SRC, 'components', 'MessageBubble.jsx'))};
 import ConnectionPanel from ${JSON.stringify(path.join(SRC, 'components', 'ConnectionPanel.jsx'))};
-window.__lanchat = { React, createRoot, SoundSettings, MessageBubble, ConnectionPanel };
+window.__lanchat = { React, createRoot, SpeechSettings, MessageBubble, ConnectionPanel };
 `;
 }
 
@@ -108,22 +108,37 @@ function buildPage(bundle) {
 // The preload surface, stubbed. Only what this section actually calls: main is
 // the authority on the engine, so setSpeechEngine answers the way ipc.js does.
 let engine = 'local';
+const keys = { gemini: false, xai: false };
+// What main really answers: the chosen engine, which providers hold a key, and
+// which one can actually speak — a provider chosen without a key reads locally.
+const status = () => ({
+  engine,
+  keys: { ...keys },
+  active: engine !== 'local' && keys[engine] ? engine : 'local',
+  model: 'test-model',
+});
 window.lanchat = {
   pickSound: async () => null,
-  speechStatus: async () => ({ engine, hasKey: false, model: 'test-model' }),
-  // The preload signature, not the IPC one: preload.js takes the engine as a
-  // plain string and wraps it into { engine } on the way through.
+  speechStatus: async () => status(),
+  // The preload signature, not the IPC one: preload.js takes these as plain
+  // arguments and wraps them on the way through. engineOf() in main is what
+  // refuses an unknown engine, so the stub refuses one the same way.
   setSpeechEngine: async (next) => {
-    engine = next === 'gemini' ? 'gemini' : 'local';
-    return { agentSpeechEngine: engine, speech: { engine, hasKey: false, model: 'test-model' } };
+    engine = ['gemini', 'xai'].includes(next) ? next : 'local';
+    return { agentSpeechEngine: engine, speech: status() };
   },
-  setSpeechKey: async () => ({ ok: true, speech: { engine, hasKey: true, model: 'test-model' } }),
+  setSpeechKey: async (provider, key) => {
+    if (!(provider in keys)) return { ok: false, error: 'Unknown speech provider.', speech: status() };
+    keys[provider] = Boolean(key && key.trim());
+    return { ok: true, speech: status() };
+  },
+  speechVoices: async () => ({ ok: true, provider: engine, voices: [] }),
   speak: async () => ({ ok: false, reason: 'local', fallback: true }),
 };
 </script>
 <script>${bundle}</script>
 <script>
-const { React, createRoot, SoundSettings, MessageBubble, ConnectionPanel } = window.__lanchat;
+const { React, createRoot, SpeechSettings, MessageBubble, ConnectionPanel } = window.__lanchat;
 const h = React.createElement;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const $ = (s) => document.querySelector(s);
@@ -137,11 +152,17 @@ let sounds = {
 };
 const settings = createRoot($('#settings'));
 const drawSettings = () => new Promise((r) => {
-  settings.render(h(SoundSettings, {
-    value: sounds,
-    soundUrl: () => null,
-    onChange: (patch) => { sounds = { ...sounds, ...patch }; drawSettings(); },
-  }));
+  // Rendered under its own heading, exactly as SettingsModal does it, so the
+  // rule beneath the title is the real one rather than a mock-up of it.
+  settings.render(h('div', null, [
+    h('div', { key: 'h', className: 'section-head' }, 'TTS'),
+    h(SpeechSettings, {
+      key: 's',
+      value: sounds,
+      soundUrl: () => null,
+      onChange: (patch) => { sounds = { ...sounds, ...patch }; drawSettings(); },
+    }),
+  ]));
   setTimeout(r, 80);
 });
 
@@ -192,6 +213,12 @@ const panelText = () => $('#settings').textContent;
 // React tracks a controlled input's value on the node itself and skips its
 // onChange when the value it sees has not moved. Assigning through the
 // prototype's setter is what makes a dispatched event look like a real edit.
+function setSelect(el, value) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+  setter.call(el, value);
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
 function setInput(el, value) {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
   setter.call(el, value);
@@ -211,52 +238,79 @@ const out = {};
   out.volumeRow = [...document.querySelectorAll('.volume-field label')]
     .some((l) => l.textContent.includes('Speech volume'));
 
-  // A switch, not a dropdown: one boolean cannot be in both states or neither,
-  // which is the whole reason for the change.
-  const engineToggle = toggleIn('Use Gemini voices');
-  out.engineIsToggle = Boolean(engineToggle);
-  out.engineSelectGone = document.querySelectorAll('#speech-engine').length;
-  out.engineOffAtRest = engineToggle.getAttribute('aria-pressed');
+  // Its own category, with the same rule under the title every other category
+  // in Settings has.
+  const head = [...document.querySelectorAll('.section-head')].find((h2) => h2.textContent.trim() === 'TTS');
+  out.ttsHeading = Boolean(head);
+  out.ttsHeadingRule = head ? getComputedStyle(head).borderBottomStyle : null;
+  out.ttsHeadingWidth = head ? getComputedStyle(head).borderBottomWidth : null;
 
-  // Local: no key box, no warning about sending anything, and it says plainly
-  // what will speak. The absent warning matters as much as the present one — a
-  // notice shown when nothing is being sent is one people learn to scroll past.
-  out.localKeyBox = Boolean($('#speech-key'));
-  // The switch itself says what "off" means, so the choice is legible without
-  // having to turn it on to find out.
-  out.toggleSaysNothingSent = panelText().includes('send nothing anywhere');
-  out.localSaysSentToGoogle = panelText().includes('sent to Google');
+  // A dropdown again, because there are three engines now and a boolean cannot
+  // name three things.
+  const select = $('#speech-engine');
+  out.engineIsSelect = Boolean(select);
+  out.engineChoices = [...select.options].map((o) => o.value);
+  out.engineLabels = [...select.options].map((o) => o.textContent);
+  out.engineAtRest = select.value;
+
+  // Local: no key box anywhere, and no warning about sending anything. The
+  // absent warning matters as much as the present one — a notice shown when
+  // nothing is being sent is one people learn to scroll past.
+  out.localKeyBoxes = document.querySelectorAll('input[type=password]').length;
+  out.localSaysSent = /sent to (Google|xAI)/.test(panelText());
   out.localState = state();
 
-  // Turning it on brings in the key box and the notice.
-  engineToggle.click();
+  // Gemini: its own key box, its own sentence, and — with no key saved — a line
+  // saying plainly that it is still reading locally. That is the case the old
+  // dropdown could not express and the one that caused the confusion.
+  setSelect(select, 'gemini');
   await wait(250);
-
-  out.engineOnAfterClick = toggleIn('Use Gemini voices').getAttribute('aria-pressed');
-  out.geminiKeyBox = Boolean($('#speech-key'));
-  out.keyIsPassword = $('#speech-key') ? $('#speech-key').type : null;
-  out.keyAutocomplete = $('#speech-key') ? $('#speech-key').getAttribute('autocomplete') : null;
-  out.geminiSaysSentToGoogle = panelText().includes('sent to Google');
-  // On, but no key saved: the case a dropdown could not express. It must say it
-  // is still reading locally rather than implying Gemini.
+  out.geminiSelected = $('#speech-engine').value;
+  out.geminiKeyBox = Boolean($('#speech-key-gemini'));
+  out.geminiKeyLabel = document.querySelector('label[for=speech-key-gemini]')?.textContent || null;
+  out.geminiKeyIsPassword = $('#speech-key-gemini')?.type || null;
+  out.geminiSaysGoogle = panelText().includes('sent to Google');
   out.geminiNoKeyState = state();
   out.geminiNoKeyAccented = $('.speech-engine-state').classList.contains('on');
 
-  // With a key saved it says so, and takes the accent.
-  setInput($('#speech-key'), 'a-key');
+  setInput($('#speech-key-gemini'), 'a-gemini-key');
   await wait(120);
   [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Save').click();
   await wait(250);
   out.geminiWithKeyState = state();
   out.geminiWithKeyAccented = $('.speech-engine-state').classList.contains('on');
 
-  // Switched off, the whole section is inert rather than gone — the same
-  // treatment the music picker gets above it.
+  // xAI: a key box of its own, and its own destination named. Choosing it must
+  // not inherit Gemini's saved key — the two are kept apart in main, and the
+  // panel has to reflect that.
+  setSelect($('#speech-engine'), 'xai');
+  await wait(250);
+  out.xaiSelected = $('#speech-engine').value;
+  out.xaiKeyBox = Boolean($('#speech-key-xai'));
+  out.xaiKeyLabel = document.querySelector('label[for=speech-key-xai]')?.textContent || null;
+  out.geminiBoxGoneOnXai = document.querySelectorAll('#speech-key-gemini').length;
+  out.xaiSaysXai = panelText().includes('sent to xAI');
+  out.xaiSaysGoogle = panelText().includes('sent to Google');
+  out.xaiNoKeyState = state();
+
+  setInput($('#speech-key-xai'), 'an-xai-key');
+  await wait(120);
+  [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Save').click();
+  await wait(250);
+  out.xaiWithKeyState = state();
+
+  // Back to Gemini: its key is still saved, which is the point of holding them
+  // apart rather than in one field.
+  setSelect($('#speech-engine'), 'gemini');
+  await wait(250);
+  out.geminiKeyKept = $('#speech-key-gemini').getAttribute('placeholder');
+
+  // Switched off, the section is inert rather than gone.
   sounds = { ...sounds, agentSpeechEnabled: false };
   await drawSettings();
   await wait(80);
-  out.engineDisabledWhenOff = toggleIn('Use Gemini voices').disabled;
-  out.keyDisabledWhenOff = $('#speech-key') ? $('#speech-key').disabled : null;
+  out.selectDisabledWhenOff = $('#speech-engine').disabled;
+  out.keyDisabledWhenOff = $('#speech-key-gemini') ? $('#speech-key-gemini').disabled : null;
   out.offState = state();
 
   sounds = { ...sounds, agentSpeechEnabled: true };

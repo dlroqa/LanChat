@@ -2043,6 +2043,30 @@ export default function App() {
     !incoming &&
     !groupInvited;
 
+  // The roster of the provider that is going to speak.
+  //
+  // Empty for the local voices and for Gemini, whose ring this window already
+  // holds; xAI publishes its own and it is asked for, because its documentation
+  // and its announcement list different voices.
+  //
+  // Re-asked whenever Settings closes, because that is where the engine and the
+  // key are changed and neither reaches this component's config: the engine has
+  // its own IPC channel and the key never leaves main at all. Cheap to ask —
+  // main keeps the roster for the life of the process and drops it only when a
+  // key changes, so all but the first of these is answered without a socket.
+  const [speechRing, setSpeechRing] = useState(null);
+  useEffect(() => {
+    if (!config.agentSpeechEnabled) return undefined;
+    let live = true;
+    api
+      .speechVoices()
+      .then((res) => live && setSpeechRing(res?.voices?.length ? res.voices : null))
+      .catch(() => live && setSpeechRing(null));
+    return () => {
+      live = false;
+    };
+  }, [config.agentSpeechEnabled, config.agentSpeechEngine, modal]);
+
   // Who this session actually asks.
   //
   // Not `record.agentIds`, which is the bug that shipped in 0.8.8: a session set
@@ -2075,8 +2099,11 @@ export default function App() {
     // null, which the player reads as "use the window's own voice" rather than
     // as an error. The file is served by the same local endpoint that already
     // serves thumbnails and custom sounds.
+    ring: speechRing,
     synthesize: async (text, voice) => {
-      const result = await api.speak(text, voice);
+      // The language travels with the request: xAI requires one on every call,
+      // and this window is the only thing that knows what this machine reads in.
+      const result = await api.speak(text, voice, navigator.language);
       return result?.ok ? soundUrl(result.path) : null;
     },
   });

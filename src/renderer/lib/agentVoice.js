@@ -85,9 +85,31 @@ export const USER_VOICE = 'Sulafat';
 // So the roster decides *distinctness* and voiceOf() guarantees *everybody has
 // one* — exactly the colorOf/paletteFor split agentColor.js describes. An agent
 // nobody told us about still speaks, just not necessarily distinctly.
-export function voiceForTurn({ agentId, mine }, voices) {
-  if (mine) return USER_VOICE;
-  return voices?.get(agentId) || voiceOf(agentId);
+// `ring` is the provider's roster, and `userVoice` the one held back for you.
+// Both default to Gemini's, which is the only roster written down here — xAI's
+// is fetched from its API at runtime, because its own documentation and its
+// announcement disagree about what is in it.
+export function voiceForTurn({ agentId, mine }, voices, ring = VOICES, userVoice = USER_VOICE) {
+  const list = ring && ring.length ? ring : VOICES;
+  if (mine) return userVoice || list[0];
+  // The roster decides *distinctness*; this guarantees *everybody has one*. An
+  // agent outside the resolved cast still speaks — the 0.8.9 fix, now true on
+  // whichever provider is doing the speaking rather than only on Gemini.
+  return voices?.get(agentId) || list[slotFor(agentId, list.length)];
+}
+
+// Dealing a provider's roster out to a cast, with one voice kept back for you.
+//
+// The same shape as localVoicesFor below and for the same reason: your own turns
+// should not sound like a participant. Which voice is held back is the last in
+// the list rather than a name — this has to work for a roster nobody has seen.
+export function ringVoices(agentIds, ring) {
+  const list = (ring || []).filter((n) => typeof n === 'string' && n.trim());
+  if (!list.length) return { voices: new Map(), userVoice: null, ring: [] };
+  // A roster of one is shared rather than leaving the agents mute.
+  const mine = list[list.length - 1];
+  const forAgents = list.length > 1 ? list.slice(0, -1) : list;
+  return { voices: ringFor(agentIds, forAgents), userVoice: mine, ring: forAgents };
 }
 
 // ------------------------------------------------------------ the local voice

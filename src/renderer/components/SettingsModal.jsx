@@ -3,6 +3,7 @@ import ModalShell from './ModalShell.jsx';
 import DevicePicker from './DevicePicker.jsx';
 import UpdateSection from './UpdateSection.jsx';
 import SoundSettings from './SoundSettings.jsx';
+import SpeechSettings from './SpeechSettings.jsx';
 import AgentSection from './AgentSection.jsx';
 import { PTT_KEYS, defaultPttKey, describeKeyCode, hasOwnDictationKey } from '../lib/ptt.js';
 
@@ -151,6 +152,17 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
 
       <div className="section-head">Sounds</div>
       <SoundSettings
+        value={sounds}
+        soundUrl={soundUrl}
+        onChange={(patch) => setSounds((v) => ({ ...v, ...patch }))}
+      />
+
+      {/* Its own category rather than a corner of Sounds: reading a session
+          aloud has an engine, a key and a bill, and none of that belongs among
+          the ringtones. `.section-head` brings the rule beneath the title that
+          every other category here has. */}
+      <div className="section-head">TTS</div>
+      <SpeechSettings
         value={sounds}
         soundUrl={soundUrl}
         onChange={(patch) => setSounds((v) => ({ ...v, ...patch }))}

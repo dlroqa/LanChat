@@ -143,7 +143,7 @@ test('with the engine left at its default, nothing is contacted', async (t) => {
     // No agentSpeechEngine at all — a fresh install, or a config file written by
     // a version that had never heard of this feature.
     config: fakeConfig({
-      agentSpeechKey: { mode: 'sealed', cipher: Buffer.from('sealed:k').toString('base64') },
+      agentSpeechKeys: { gemini: { mode: 'sealed', cipher: Buffer.from('sealed:k').toString('base64') } },
     }),
     userDataDir: tempDir(),
     safeStorage: fakeSafeStorage,
@@ -164,7 +164,9 @@ test('a key with the engine off is still never sent anywhere', async (t) => {
   const speech = createSpeech({
     config: fakeConfig({
       agentSpeechEngine: 'local',
-      agentSpeechKey: { mode: 'sealed', cipher: Buffer.from('sealed:real-key').toString('base64') },
+      agentSpeechKeys: {
+        gemini: { mode: 'sealed', cipher: Buffer.from('sealed:real-key').toString('base64') },
+      },
     }),
     userDataDir: tempDir(),
     safeStorage: fakeSafeStorage,
@@ -178,7 +180,7 @@ test('a key with the engine off is still never sent anywhere', async (t) => {
 test('the engine on with no key does not reach the network either', async (t) => {
   const server = await forbidden(t);
   const speech = createSpeech({
-    config: fakeConfig({ agentSpeechEngine: 'gemini', agentSpeechKey: null }),
+    config: fakeConfig({ agentSpeechEngine: 'gemini', agentSpeechKeys: {} }),
     userDataDir: tempDir(),
     safeStorage: fakeSafeStorage,
     endpoint: server.endpoint,
@@ -197,7 +199,7 @@ test('a key that will not decrypt is no key at all', async (t) => {
       agentSpeechEngine: 'gemini',
       // Written by a different machine's keychain, which is exactly what a copied
       // config directory looks like.
-      agentSpeechKey: { mode: 'sealed', cipher: Buffer.from('garbage').toString('base64') },
+      agentSpeechKeys: { gemini: { mode: 'sealed', cipher: Buffer.from('garbage').toString('base64') } },
     }),
     userDataDir: tempDir(),
     safeStorage: fakeSafeStorage,
@@ -217,7 +219,9 @@ function online(endpoint, dir, extra = {}) {
   return createSpeech({
     config: fakeConfig({
       agentSpeechEngine: 'gemini',
-      agentSpeechKey: { mode: 'sealed', cipher: Buffer.from('sealed:test-key').toString('base64') },
+      agentSpeechKeys: {
+        gemini: { mode: 'sealed', cipher: Buffer.from('sealed:test-key').toString('base64') },
+      },
       ...extra,
     }),
     userDataDir: dir,
@@ -448,7 +452,9 @@ test('a server that never answers times out and falls back', async () => {
   const speech = createSpeech({
     config: fakeConfig({
       agentSpeechEngine: 'gemini',
-      agentSpeechKey: { mode: 'sealed', cipher: Buffer.from('sealed:test-key').toString('base64') },
+      agentSpeechKeys: {
+        gemini: { mode: 'sealed', cipher: Buffer.from('sealed:test-key').toString('base64') },
+      },
     }),
     userDataDir: tempDir(),
     safeStorage: fakeSafeStorage,
@@ -466,7 +472,9 @@ test('a machine that is offline says so, and says the local voice is covering it
   const speech = createSpeech({
     config: fakeConfig({
       agentSpeechEngine: 'gemini',
-      agentSpeechKey: { mode: 'sealed', cipher: Buffer.from('sealed:test-key').toString('base64') },
+      agentSpeechKeys: {
+        gemini: { mode: 'sealed', cipher: Buffer.from('sealed:test-key').toString('base64') },
+      },
     }),
     userDataDir: tempDir(),
     safeStorage: fakeSafeStorage,
@@ -592,15 +600,20 @@ test('status reports whether a key exists and never what it is', () => {
   const config = fakeConfig({ agentSpeechEngine: 'gemini' });
   const speech = createSpeech({ config, userDataDir: tempDir(), safeStorage: fakeSafeStorage });
 
-  assert.deepEqual(speech.status(), { engine: 'gemini', hasKey: false, model: DEFAULT_MODEL });
+  assert.deepEqual(speech.status(), {
+    engine: 'gemini',
+    keys: { gemini: false, xai: false },
+    active: 'local',
+    model: DEFAULT_MODEL,
+  });
 
-  speech.setKey('a-real-key');
+  speech.setKey('gemini', 'a-real-key');
   const after = speech.status();
-  assert.equal(after.hasKey, true);
+  assert.equal(after.keys.gemini, true);
   assert.ok(!JSON.stringify(after).includes('a-real-key'));
 
   // Stored sealed, never in the clear.
-  const stored = config.get('agentSpeechKey');
+  const stored = config.get('agentSpeechKeys').gemini;
   assert.equal(stored.mode, 'sealed');
   assert.ok(!Buffer.from(stored.cipher, 'base64').toString('utf8').startsWith('a-real-key'));
 });
@@ -609,13 +622,13 @@ test('an empty key forgets the stored one', () => {
   const config = fakeConfig({ agentSpeechEngine: 'gemini' });
   const speech = createSpeech({ config, userDataDir: tempDir(), safeStorage: fakeSafeStorage });
 
-  speech.setKey('a-real-key');
-  assert.equal(speech.status().hasKey, true);
+  speech.setKey('gemini', 'a-real-key');
+  assert.equal(speech.status().keys.gemini, true);
 
-  const res = speech.setKey('');
+  const res = speech.setKey('gemini', '');
   assert.equal(res.ok, true);
   assert.equal(res.hasKey, false);
-  assert.equal(config.get('agentSpeechKey'), null);
+  assert.deepEqual(config.get('agentSpeechKeys'), {});
 });
 
 test('a machine with no secure storage is refused rather than written to in the clear', () => {
@@ -626,10 +639,10 @@ test('a machine with no secure storage is refused rather than written to in the 
     safeStorage: { isEncryptionAvailable: () => false },
   });
 
-  const res = speech.setKey('a-real-key');
+  const res = speech.setKey('gemini', 'a-real-key');
   assert.equal(res.ok, false);
   assert.match(res.error, /secure storage/i);
-  assert.equal(config.get('agentSpeechKey'), undefined);
+  assert.equal(config.get('agentSpeechKeys'), undefined);
 });
 
 test('a key can live in the environment instead', async () => {
@@ -642,7 +655,7 @@ test('a key can live in the environment instead', async () => {
   const speech = createSpeech({
     config: fakeConfig({
       agentSpeechEngine: 'gemini',
-      agentSpeechKey: { mode: 'env', name: 'LANCHAT_TEST_SPEECH_KEY' },
+      agentSpeechKeys: { gemini: { mode: 'env', name: 'LANCHAT_TEST_SPEECH_KEY' } },
     }),
     userDataDir: tempDir(),
     safeStorage: fakeSafeStorage,

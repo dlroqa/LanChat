@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { audioContext } from './sounds.js';
 import { clampVolume } from './agentMusic.js';
-import { voicesFor, localVoicesFor, localUserVoice, voiceForTurn } from './agentVoice.js';
+import {
+  VOICES,
+  USER_VOICE,
+  voicesFor,
+  ringVoices,
+  localVoicesFor,
+  localUserVoice,
+  voiceForTurn,
+} from './agentVoice.js';
 
 // Reading a session aloud, turn by turn.
 //
@@ -691,6 +699,10 @@ export function useAgentSpeech({
   agentIds = null,
   turns = null,
   synthesize = null,
+  // The active provider's roster, or null for Gemini's, which is the one this
+  // window holds. xAI's is fetched from its API because its published lists
+  // disagree with each other.
+  ring = null,
 } = {}) {
   const ref = useRef(null);
   const [, bump] = useState(0);
@@ -703,7 +715,17 @@ export function useAgentSpeech({
   // Who speaks in what. Recomputed only when the cast or the machine's voices
   // change, and both rings at once so the online and local paths agree about
   // which agent is which.
-  const voices = useMemo(() => voicesFor(ids), [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Who speaks in what, on whichever provider is active. Gemini's ring is the
+  // one written down; anything else deals from the roster it was given and keeps
+  // its last voice back for you.
+  const ringKey = (ring || []).join(' ');
+  const dealt = useMemo(
+    () =>
+      ring && ring.length
+        ? ringVoices(ids, ring)
+        : { voices: voicesFor(ids), userVoice: USER_VOICE, ring: VOICES },
+    [key, ringKey] // eslint-disable-line react-hooks/exhaustive-deps
+  );
   const lang = typeof navigator === 'undefined' ? null : navigator.language;
   const myLocalVoice = useMemo(() => localUserVoice(localVoices, lang), [localVoices, lang]);
   const locals = useMemo(
@@ -749,7 +771,7 @@ export function useAgentSpeech({
       id: msg.id,
       text: msg.text,
       mine,
-      voice: voiceForTurn({ agentId: msg.agentId, mine }, voices),
+      voice: voiceForTurn({ agentId: msg.agentId, mine }, dealt.voices, dealt.ring, dealt.userVoice),
       localVoice: mine ? myLocalVoice : locals.get(msg.agentId) || myLocalVoice || null,
     };
   };
@@ -766,7 +788,7 @@ export function useAgentSpeech({
     // behind however the effects happen to be ordered.
     player.sync((turns || []).map(turnOf), { sessionId });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [player, enabled, sessionId, turns, key, myLocalVoice, localVoices]);
+  }, [player, enabled, sessionId, turns, key, ringKey, myLocalVoice, localVoices]);
 
   return {
     status: player.status,

@@ -135,10 +135,13 @@ contextBridge.exposeInMainWorld('lanchat', {
   // setConfig, because between them they decide whether the agents' words leave
   // this machine. `speechStatus` reports whether a key is stored; there is no
   // call anywhere that hands the key itself back to the window.
-  speak: (text, voice) => invoke('lanchat:speak', { text, voice }),
+  speak: (text, voice, language) => invoke('lanchat:speak', { text, voice, language }),
   speechStatus: () => invoke('lanchat:speechStatus'),
+  speechVoices: () => invoke('lanchat:speechVoices'),
   setSpeechEngine: (engine) => invoke('lanchat:setSpeechEngine', { engine }),
-  setSpeechKey: (key) => invoke('lanchat:setSpeechKey', { key }),
+  // Named per provider: there is no "the" key any more, and one provider must
+  // never be handed another's.
+  setSpeechKey: (provider, key) => invoke('lanchat:setSpeechKey', { provider, key }),
 
   // Documents an agent is asked to read. Both return a verdict per file — name,
   // size and either `ok` or the reason — never the text, which is read in main

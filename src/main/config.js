@@ -66,20 +66,25 @@ const DEFAULTS = Object.freeze({
   agentSpeechEnabled: true,
   agentSpeechVolume: 0.9,
   // `agentSpeechEngine` is where the words go, and it is the opt-in. 'local' is
-  // the window's voices; 'gemini' sends the agents' words to Google to be read
-  // in a far better one. Nothing but a deliberate act in Settings sets it: it is
-  // read-only to the renderer and has its own IPC channel, exactly like
-  // acceptLan, so no bulk save of unrelated preferences can turn it on as a side
-  // effect. Deliberately *not* given the agentMusicVersion treatment either —
-  // that trick re-enables a free bundled feature after an update, and using it
-  // to switch a paid network call back on is exactly what it must never do.
+  // the window's voices; 'gemini' and 'xai' send the agents' words to Google or
+  // to xAI to be read in a far better one. Nothing but a deliberate act in
+  // Settings sets it: it is read-only to the renderer and has its own IPC
+  // channel, exactly like acceptLan, so no bulk save of unrelated preferences
+  // can turn it on as a side effect. Deliberately *not* given the
+  // agentMusicVersion treatment either — that trick re-enables a free bundled
+  // feature after an update, and using it to switch a paid network call back on
+  // is exactly what it must never do.
   agentSpeechEngine: 'local',
   agentSpeechModel: null, // null = the current default in main/speech.js
-  // The Gemini API key, sealed by the OS keychain — { mode, cipher } or
-  // { mode, name } for an environment variable. Never in PUBLIC_KEYS and so
-  // never in the renderer: Settings is told whether a key exists, never what it
-  // is. See speech.js keyOf(), which is agents/registry.js secretFor() verbatim.
-  agentSpeechKey: null,
+  // An API key per provider, each sealed by the OS keychain — { mode, cipher },
+  // or { mode, name } for an environment variable. Never in PUBLIC_KEYS and so
+  // never in the renderer: Settings is told whether each one exists, never what
+  // it is. See speech.js keyOf(), which is agents/registry.js secretFor()
+  // verbatim.
+  //
+  // Held apart on purpose: a key for one provider must never be sent to the
+  // other, which is a thing a single field makes easy to get wrong.
+  agentSpeechKeys: {},
   pttEnabled: true,
   pttKey: null, // null = platform default (Command on macOS, Control elsewhere)
   pttCustomCode: null, // KeyboardEvent.code when pttKey === 'custom'
@@ -125,7 +130,14 @@ const DEFAULTS = Object.freeze({
 // Settings a previous version stored that are no longer read by anything. See
 // the prune in load() for why these are removed from the file rather than simply
 // dropped from DEFAULTS.
-const RETIRED_KEYS = Object.freeze(['dictationCliPath', 'dictationModelReady']);
+const RETIRED_KEYS = Object.freeze([
+  'dictationCliPath',
+  'dictationModelReady',
+  // Superseded by agentSpeechKeys, which holds one per provider. Retired only
+  // *after* migrate() below has carried its value across — see the ordering
+  // note there, which is the difference between an upgrade and a lost key.
+  'agentSpeechKey',
+]);
 
 class Config {
   // `appVersion` is app.getVersion(); omitted (tests, tools) it simply means no
@@ -172,6 +184,12 @@ class Config {
     // A list rather than a pair of deletes: this is the prune step, and the next
     // key to be retired belongs here instead of in new code. Dictation moved from
     // the FluidAudio CLI to the FluidVoice app in 0.7.9.
+    // Carried across before the prune below, and the order is the whole of it:
+    // `agentSpeechKey` is now retired, so a migration running after that loop
+    // would find nothing left to migrate and would silently destroy a key
+    // somebody had pasted in. Run first, then retired.
+    if (this.migrate()) dirty = true;
+
     for (const key of RETIRED_KEYS) {
       if (key in this.data) {
         delete this.data[key];
@@ -180,6 +198,42 @@ class Config {
     }
     if (dirty) this.save();
     return this.data;
+  }
+
+  // Settings an older version wrote in a shape this one no longer reads.
+  //
+  // Returns whether anything moved, so load() knows to write the file back.
+  // Every step here has to be safe to run twice: load() runs on every start, and
+  // a half-migrated file is the one state nobody tests by hand.
+  migrate() {
+    let moved = false;
+
+    // A copy of our own, always.
+    //
+    // load() spreads DEFAULTS into `data`, and a spread copies the *reference*
+    // to a nested object — so every Config built from a file without this key
+    // would share the single `{}` literal in DEFAULTS, and the first key saved
+    // anywhere would appear in all of them. Also normalises a hand-edited file
+    // holding something that is not an object, so speech.js always has
+    // something safe to read. Not a change worth writing back on its own.
+    const stored = this.data.agentSpeechKeys;
+    const keys = stored && typeof stored === 'object' && !Array.isArray(stored) ? { ...stored } : {};
+    this.data.agentSpeechKeys = keys;
+
+    // 0.8.10 and earlier kept a single sealed API key, which was always Gemini's
+    // because Gemini was the only provider. It becomes the Gemini entry.
+    //
+    // Copied rather than moved: the RETIRED_KEYS prune in load() removes the old
+    // field a moment later, so there is one rule about what deletes it. An entry
+    // that already exists is never overwritten — on a machine that migrated and
+    // has since saved a new key, the new one wins.
+    const old = this.data.agentSpeechKey;
+    if (old && typeof old === 'object' && !keys.gemini) {
+      keys.gemini = old;
+      moved = true;
+    }
+
+    return moved;
   }
 
   save() {
