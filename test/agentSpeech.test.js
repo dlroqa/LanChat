@@ -45,13 +45,14 @@ const {
   PLAYING,
   PAUSED,
   GEMINI,
+  XAI,
   LOCAL,
 } = new Function(
   'clampVolume',
   'audioContext',
   `${strip(fs.readFileSync(path.join(LIB, 'agentSpeech.js'), 'utf8'))}
    return { AgentSpeech, MAX_LIST, MAX_UTTERANCE_MS, PREVIEW_LINE, previewVoice, chunkText,
-            LOCAL_CHUNK_CHARS, SYNTH_POLL_MS, SYNTH_GRACE_MS, IDLE, PLAYING, PAUSED, GEMINI, LOCAL };`
+            LOCAL_CHUNK_CHARS, SYNTH_POLL_MS, SYNTH_GRACE_MS, IDLE, PLAYING, PAUSED, GEMINI, XAI, LOCAL };`
 )(clampVolume, () => null);
 
 // ------------------------------------------------------------------- the stage
@@ -922,16 +923,32 @@ test('the engine reported is the one that actually spoke', async () => {
   const s = stage();
   const l = wedgedSynth();
 
-  // Audio came back: Gemini.
+  // Audio came back with no engine named (a bare url, the shape the audition
+  // uses): Gemini, the default for a caller that does not report one.
   const online = player(s, { synth: l.synth, utterance: l.utterance });
   online.sync(turns('one'));
   online.playFrom();
   await settle();
   assert.equal(online.engine, GEMINI);
 
+  // Audio came back naming xAI: the transport must say what actually spoke, not
+  // assume Gemini. This is the bug the screenshot showed — "Reading with xAI" in
+  // Settings, "· Gemini" in the panel.
+  const grok = new AgentSpeech({
+    synthesize: async () => ({ url: 'file:///one.wav', engine: 'xai' }),
+    context: s.context,
+    element: s.element,
+    synth: l.synth,
+    utterance: l.utterance,
+  });
+  grok.sync(turns('one'));
+  grok.playFrom();
+  await settle();
+  assert.equal(grok.engine, XAI, 'the engine named by main is the one reported');
+
   // Nothing came back — the engine is off, or the key failed, or the machine is
-  // offline. It is read locally, and it says local even though Gemini is what
-  // was asked for.
+  // offline. It is read locally, and it says local even though an online engine
+  // is what was asked for.
   const fell = new AgentSpeech({
     synthesize: async () => null,
     context: s.context,
@@ -942,7 +959,86 @@ test('the engine reported is the one that actually spoke', async () => {
   fell.sync(turns('one'));
   fell.playFrom();
   await settle();
-  assert.equal(fell.engine, LOCAL, 'a silent fallback must not claim to be Gemini');
+  assert.equal(fell.engine, LOCAL, 'a silent fallback must not claim to be an online engine');
+});
+
+// ------------------------------------------------------------ the loading state
+
+test('pending is true while a turn is being fetched and false once it settles', async () => {
+  const s = stage();
+  const d = deferredSynth();
+  const p = player(s, { synthesize: d.synthesize });
+  p.sync(turns('one', 'two'));
+
+  p.playFrom();
+  await settle();
+  assert.equal(p.pending, true, 'the fetch is in flight — the bar should show');
+
+  d.calls[0].resolve('file:///one.wav');
+  await settle();
+  assert.equal(p.pending, false, 'the audio arrived — the bar goes');
+});
+
+test('a fetch abandoned by a cursor move does not leave pending stuck on', async () => {
+  const s = stage();
+  const d = deferredSynth();
+  const p = player(s, { synthesize: d.synthesize });
+  p.sync(turns('one', 'two'));
+
+  p.playFrom();
+  await settle();
+  assert.equal(p.pending, true);
+
+  // The cursor moves before the first turn's audio arrives. The second fetch now
+  // owns the loading state; the first, resolving late, must not clear it.
+  p.next();
+  await settle();
+  assert.equal(p.pending, true, 'the second turn is now the one being fetched');
+
+  d.calls[0].resolve('file:///one.wav'); // the abandoned one, arriving late
+  await settle();
+  assert.equal(p.pending, true, 'a stale result must not blank the current bar');
+
+  d.calls[1].resolve('file:///two.wav');
+  await settle();
+  assert.equal(p.pending, false);
+});
+
+test('clear stops a pending fetch from holding the bar on', async () => {
+  const s = stage();
+  const d = deferredSynth();
+  const p = player(s, { synthesize: d.synthesize });
+  p.sync(turns('one'));
+
+  p.playFrom();
+  await settle();
+  assert.equal(p.pending, true);
+
+  p.clear();
+  assert.equal(p.pending, false, 'nobody is listening — the bar is gone');
+
+  // The abandoned fetch resolving afterwards must not turn it back on.
+  d.calls[0].resolve('file:///one.wav');
+  await settle();
+  assert.equal(p.pending, false);
+});
+
+test('a local-only reading never raises the loading bar', async () => {
+  const s = stage();
+  const l = wedgedSynth();
+  // No synthesize at all: the local path has nothing to fetch, so there is no
+  // gap and nothing to show.
+  const p = new AgentSpeech({
+    synthesize: null,
+    context: s.context,
+    element: s.element,
+    synth: l.synth,
+    utterance: l.utterance,
+  });
+  p.sync(turns('one'));
+  p.playFrom();
+  await settle();
+  assert.equal(p.pending, false);
 });
 
 test('nothing has spoken yet is not a claim about either engine', () => {
@@ -957,4 +1053,93 @@ test('the audition uses the real player and can be stopped', async () => {
   assert.equal(typeof stop, 'function');
   assert.ok(PREVIEW_LINE.length > 20, 'long enough to hear the character of a voice');
   stop();
+});
+
+// ------------------------------------------------ preparing the whole session
+
+test('with preload on, the whole session is synthesised before a word plays', async () => {
+  const s = stage();
+  const d = deferredSynth();
+  const p = player(s, { synthesize: d.synthesize });
+  p.setPreload(true);
+  p.sync(turns('one', 'two', 'three'));
+
+  p.playFrom();
+  await settle();
+  assert.deepEqual(p.prefetch, { done: 0, total: 3 }, 'preparing, none done yet');
+  assert.deepEqual(s.played, [], 'nothing plays while the run is being prepared');
+
+  d.calls[0].resolve('file:///one.wav');
+  await settle();
+  assert.deepEqual(p.prefetch, { done: 1, total: 3 }, 'the bar moves as each turn is warmed');
+  assert.deepEqual(s.played, [], 'still nothing playing');
+
+  d.calls[1].resolve('file:///two.wav');
+  await settle();
+  d.calls[2].resolve('file:///three.wav');
+  await settle();
+  assert.equal(p.prefetch, null, 'the run is warm, the prepare phase is over');
+
+  // Playback then reads from the warm cache — one fetch per turn, which in the
+  // app is a disk-cache hit. The first turn is the one now in flight.
+  assert.deepEqual(s.played, []);
+  d.calls[3].resolve('file:///one.wav');
+  await settle();
+  assert.deepEqual(s.played, ['file:///one.wav'], 'and now it plays, from the top');
+});
+
+test('cancelling a preload stops it without discarding the session', async () => {
+  const s = stage();
+  const d = deferredSynth();
+  const p = player(s, { synthesize: d.synthesize });
+  p.setPreload(true);
+  p.sync(turns('one', 'two', 'three'));
+
+  p.playFrom();
+  await settle();
+  assert.deepEqual(p.prefetch, { done: 0, total: 3 });
+
+  // The button, pressed mid-prepare, calls it off.
+  p.toggle();
+  assert.equal(p.prefetch, null, 'the prepare is abandoned');
+  assert.equal(p.status, IDLE);
+  assert.equal(p.count, 3, 'the session is still there to play');
+
+  // A late fetch from the abandoned prepare must not restart it.
+  d.calls[0].resolve('file:///one.wav');
+  await settle();
+  assert.equal(p.prefetch, null);
+  assert.deepEqual(s.played, []);
+});
+
+test('a skip during preload falls back to reading that turn straight away', async () => {
+  const s = stage();
+  const d = deferredSynth();
+  const p = player(s, { synthesize: d.synthesize });
+  p.setPreload(true);
+  p.sync(turns('one', 'two', 'three'));
+
+  p.playFrom();
+  await settle();
+  assert.deepEqual(p.prefetch, { done: 0, total: 3 });
+
+  p.next(); // skipping cancels the prepare and reads the next turn the plain way
+  await settle();
+  assert.equal(p.prefetch, null, 'the prepare is abandoned');
+  assert.equal(p.status, PLAYING);
+  assert.equal(p.index, 1, 'and the cursor has moved on');
+  assert.equal(p.pending, true, 'which is now fetched a turn at a time');
+});
+
+test('preload off starts the first turn at once, without a prepare phase', async () => {
+  const s = stage();
+  const d = deferredSynth();
+  const p = player(s, { synthesize: d.synthesize });
+  // preload defaults off
+  p.sync(turns('one', 'two'));
+
+  p.playFrom();
+  await settle();
+  assert.equal(p.prefetch, null, 'no prepare phase');
+  assert.equal(p.pending, true, 'the first turn is fetched straight away');
 });

@@ -132,8 +132,22 @@ window.lanchat = {
     keys[provider] = Boolean(key && key.trim());
     return { ok: true, speech: status() };
   },
-  speechVoices: async () => ({ ok: true, provider: engine, voices: [] }),
-  speak: async () => ({ ok: false, reason: 'local', fallback: true }),
+  // Only xAI publishes a roster; main answers [] for the others. This is what
+  // lets the audition ask for a voice the chosen engine actually owns rather than
+  // a Gemini name it will reject.
+  speechVoices: async () => ({
+    ok: true,
+    provider: engine,
+    voices: engine === 'xai' ? ['Ara', 'Eve', 'Leo', 'Rex', 'Sal'] : [],
+  }),
+  // Records the voice it was asked for, and answers the way main does: an engine
+  // with a key speaks and names itself; anything else reads locally.
+  speak: async (text, voice) => {
+    window.__lastSpeak = { text, voice };
+    const active = engine !== 'local' && keys[engine];
+    if (active) return { ok: true, path: 'file:///preview.wav', engine, cached: false };
+    return { ok: false, reason: 'local', fallback: true };
+  },
 };
 </script>
 <script>${bundle}</script>
@@ -237,6 +251,8 @@ const out = {};
   out.hasToggle = Boolean(row('Read discussions aloud'));
   out.volumeRow = [...document.querySelectorAll('.volume-field label')]
     .some((l) => l.textContent.includes('Speech volume'));
+  // The gapless-reading preference: its own switch, worded for the tradeoff.
+  out.preloadToggle = Boolean(row('Prepare the whole session first'));
 
   // Its own category, with the same rule under the title every other category
   // in Settings has.
@@ -299,6 +315,21 @@ const out = {};
   await wait(250);
   out.xaiWithKeyState = state();
 
+  // The audition, on xAI with a key. It must ask for a voice xAI actually owns —
+  // this is the whole bug: it used to ask for the Gemini name 'Zephyr', which xAI
+  // rejects, so the preview fell silently to the system voice. And it must say,
+  // in words, what really spoke.
+  const hearBtn = [...document.querySelectorAll('button')].find((b) => b.title === 'Hear a voice');
+  hearBtn.click();
+  await wait(300);
+  out.xaiPreviewVoice = window.__lastSpeak ? window.__lastSpeak.voice : null;
+  out.xaiPreviewIsRosterVoice = ['Ara', 'Eve', 'Leo', 'Rex', 'Sal'].includes(out.xaiPreviewVoice);
+  out.xaiPreviewNotZephyr = out.xaiPreviewVoice !== 'Zephyr';
+  out.xaiPreviewLine = [...document.querySelectorAll('.speech-engine-state')].map((n) => n.textContent)[1] || null;
+  // Stop it so nothing bleeds into the next frame.
+  [...document.querySelectorAll('button')].find((b) => b.title === 'Stop')?.click();
+  await wait(80);
+
   // Back to Gemini: its key is still saved, which is the point of holding them
   // apart rather than in one field.
   setSelect($('#speech-engine'), 'gemini');
@@ -341,6 +372,16 @@ const out = {};
   await drawThread(() => {}, 'm1', true);
   out.bubblePausedLabel = $('.bubble-speak').getAttribute('aria-label');
 
+  // The handle the pane scrolls to as the reading advances. Every bubble carries
+  // its own id; ChatPane queries for the one the cursor is on and centres it,
+  // reusing the search-centring arithmetic. ChatPane itself is not mounted here
+  // (it pulls in the whole composer stack); this proves the query target every
+  // bubble must emit for that to find anything, and that it is the message id.
+  out.bubbleScrollHandles = document.querySelectorAll('.bubble-row[data-speaking-id]').length;
+  out.bubbleScrollHandleIds = [...document.querySelectorAll('.bubble-row[data-speaking-id]')].map((n) =>
+    n.getAttribute('data-speaking-id')
+  );
+
   // ---- the transport ----
   await drawPanel(TRANSPORT);
   out.transportButtons = document.querySelectorAll('.conn-transport .transport-btn').length;
@@ -370,6 +411,31 @@ const out = {};
   await drawPanel({ ...TRANSPORT, paused: true, position: 3, engine: 'gemini' });
   out.pausedPos = $('.transport-pos').textContent;
   out.pausedLabel = $('.transport-play').getAttribute('aria-label');
+
+  // xAI names itself now, where the screenshot showed a reading by xAI reported
+  // as "· Gemini". And the loading bar: hidden at rest, shown while a turn is
+  // being fetched, and it must not shift the line beneath it either way.
+  await drawPanel({ ...TRANSPORT, playing: true, position: 3, engine: 'xai' });
+  out.xaiTransportPos = $('.transport-pos').textContent;
+  out.loadBarAtRest = seen($('.transport-load'));
+  const posRest = $('.transport-pos').getBoundingClientRect().top;
+
+  await drawPanel({ ...TRANSPORT, playing: true, position: 3, engine: 'xai', pending: true });
+  out.loadBarWhenPending = seen($('.transport-load'));
+  out.loadBarHasSpan = Boolean($('.transport-load > span'));
+  out.loadBarRole = $('.transport-load').getAttribute('role');
+  const posPending = $('.transport-pos').getBoundingClientRect().top;
+  out.posUnshiftedByBar = Math.abs(posPending - posRest) < 0.5;
+
+  // Preparing the whole session before it plays: the same bar, filled to a known
+  // proportion, and the line names it with a moving count.
+  await drawPanel({ ...TRANSPORT, playing: true, position: 3, engine: 'xai', prefetch: { done: 3, total: 12 } });
+  out.prefetchPos = $('.transport-pos').textContent;
+  out.prefetchBarShown = seen($('.transport-load'));
+  out.prefetchDeterminate = $('.transport-load').classList.contains('filling');
+  out.prefetchBarWidth = $('.transport-load > span').style.width;
+  const posPrefetch = $('.transport-pos').getBoundingClientRect().top;
+  out.posUnshiftedByPrefetch = Math.abs(posPrefetch - posRest) < 0.5;
 
   // An empty session says why it is off rather than leaving it to be guessed.
   await drawPanel({ ...TRANSPORT, count: 0 });

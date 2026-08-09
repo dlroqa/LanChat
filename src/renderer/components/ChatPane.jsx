@@ -301,12 +301,39 @@ export default function ChatPane({
     searchingRef.current = searching;
   }, [searching]);
 
+  // Bringing the turn being read into view as the reading advances — "2 of 6"
+  // puts the second bubble on screen, "4 of 6" the fourth. Centred by measuring
+  // rather than with scrollIntoView, exactly as the search hit above is, and for
+  // the same reason: scrollIntoView would also scroll whatever contains the
+  // pane. A search in progress owns the view, so a reading never drags it.
+  useEffect(() => {
+    if (!speakingId || searchingRef.current) return;
+    const scroller = scrollRef.current;
+    const bubble = scroller?.querySelector(`[data-speaking-id="${speakingId}"]`);
+    if (!scroller || !bubble) return;
+    const box = scroller.getBoundingClientRect();
+    const seen = bubble.getBoundingClientRect();
+    scroller.scrollTop += seen.top - box.top - (box.height - seen.height) / 2;
+  }, [speakingId]);
+
+  // Whether a reading is centred on a turn that is not the newest one. While it
+  // is, the bottom-pinning below stands down: an agent answering during a
+  // read-through of the back catalogue must not yank the view off turn 2 of 6.
+  // In a live dialogue the spoken turn *is* the newest, so this is false and
+  // pinning behaves exactly as it always did.
+  const readingBack =
+    Boolean(speakingId) && messages.length > 0 && messages[messages.length - 1]?.id !== speakingId;
+  const readingBackRef = useRef(false);
+  useEffect(() => {
+    readingBackRef.current = readingBack;
+  }, [readingBack]);
+
   useEffect(() => {
     const el = scrollRef.current;
-    // Nothing may move the view while a search is walking it: an agent answering
-    // mid-search would otherwise pull the conversation out from under the hit
-    // being read.
-    if (el && !searchingRef.current) el.scrollTop = el.scrollHeight;
+    // Nothing may move the view while a search is walking it, or while a reading
+    // is centred on an earlier turn: either would pull the conversation out from
+    // under what is being read.
+    if (el && !searchingRef.current && !readingBackRef.current) el.scrollTop = el.scrollHeight;
   }, [messages, typing, awaiting]);
 
   const onScroll = () => {
@@ -317,7 +344,8 @@ export default function ChatPane({
   // Stable, so a card is not handed a new callback on every render of the pane.
   const keepAtBottom = useCallback(() => {
     const el = scrollRef.current;
-    if (el && atBottom.current && !searchingRef.current) el.scrollTop = el.scrollHeight;
+    if (el && atBottom.current && !searchingRef.current && !readingBackRef.current)
+      el.scrollTop = el.scrollHeight;
   }, []);
 
   if (!peer) {

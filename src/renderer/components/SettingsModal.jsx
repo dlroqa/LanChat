@@ -14,7 +14,7 @@ const DEFAULT_STUN = 'stun:stun.l.google.com:19302';
 const DEFAULT_DICTATION_PORT = 47733;
 
 // Settings: audio/video sources, discovery toggles, optional STUN, network info.
-export default function SettingsModal({ config, self, peers, soundUrl, onSave, onClose }) {
+export default function SettingsModal({ config, self, peers, soundUrl, onSave, onClose, onEngineChange }) {
   const [enableTailscale, setTs] = useState(config.enableTailscale);
   // Applied immediately rather than batched into Save, like openAtLogin below:
   // this decides who may open a socket to this machine, and a setting like that
@@ -44,6 +44,9 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
     customAgentMusicPath: config.customAgentMusicPath,
     agentSpeechEnabled: config.agentSpeechEnabled,
     agentSpeechVolume: config.agentSpeechVolume,
+    // How a reading is paced, not where the words go, so this one is an ordinary
+    // preference and rides the save with the rest.
+    agentSpeechPreload: config.agentSpeechPreload,
     // agentSpeechEngine is deliberately not here. It decides whether the agents'
     // words leave this machine, so it is applied the moment it changes rather
     // than sitting in a draft — the same treatment, for the same reason, as
@@ -166,6 +169,10 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
         value={sounds}
         soundUrl={soundUrl}
         onChange={(patch) => setSounds((v) => ({ ...v, ...patch }))}
+        // The engine travels on its own IPC channel, not on the config this
+        // window holds, so App is told directly when it moves and can re-ask for
+        // the new provider's roster without waiting for Settings to close.
+        onEngineChange={onEngineChange}
       />
 
       <div className="section-head">Agents</div>

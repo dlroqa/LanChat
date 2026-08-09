@@ -64,6 +64,7 @@ export const PAUSED = 'paused';
 // listening should be told which of the two they are hearing rather than left to
 // work it out.
 export const GEMINI = 'gemini';
+export const XAI = 'xai';
 export const LOCAL = 'local';
 
 // How much text goes into one utterance on the local path.
@@ -176,7 +177,20 @@ export class AgentSpeech {
     // Which voice really said the last thing said — not which one is configured.
     // Gemini switched on but unreachable reads locally, and the window says so
     // rather than leaving somebody to wonder which they are hearing.
-    this.engine = null; // GEMINI | LOCAL | null
+    this.engine = null; // GEMINI | XAI | LOCAL | null
+    // Whether a turn is being fetched right now. True only across the online
+    // synthesis await in _speak, so the transport can show a loading bar for the
+    // gap where the reading says "playing" but no sound has arrived yet. A cache
+    // hit sets and clears it within a tick and never draws the bar — see the CSS
+    // delay on .transport-load.
+    this.pending = false;
+    // Whether to synthesise the whole session before playing a word, so a
+    // read-through has no gap between turns. A preference, set from Settings.
+    this.preload = false;
+    // The progress of that pre-synthesis while it runs: { done, total }, or null
+    // when there is none. Distinct from `pending`, which is the per-turn gap of
+    // an ordinary reading — the two never show at once.
+    this.prefetch = null;
     // The session this list belongs to. Held here so that being handed a
     // different one is what resets the player, rather than the caller having
     // remembered to clear it first — see sync().
@@ -253,6 +267,7 @@ export class AgentSpeech {
       this.seen.clear();
       this.index = 0;
       this.engine = null;
+      this._setPending(false);
       this._setStatus(IDLE);
     }
 
@@ -285,7 +300,12 @@ export class AgentSpeech {
   playFrom(startId = null) {
     if (!this.list.length) return false;
     const at = startId == null ? 0 : this.list.findIndex((t) => t.id === startId);
-    return this._goto(at >= 0 ? at : 0);
+    const from = at >= 0 ? at : 0;
+    // With the preference on, warm the whole run first so nothing between the
+    // turns is silent. Only worth it when there is an engine to fetch from — a
+    // local reading has no gap to close, and _preloadThenPlay would await nothing.
+    if (this.preload && this.synthesize) return this._preloadThenPlay(from);
+    return this._goto(from);
   }
 
   // A turn has just been said, live. Read it only if nothing else is being read
@@ -308,6 +328,7 @@ export class AgentSpeech {
     this.seen.clear();
     this.index = 0;
     this.engine = null;
+    this._setPending(false);
     this.sessionId = null;
     this._setStatus(IDLE);
   }
@@ -316,12 +337,24 @@ export class AgentSpeech {
 
   // Play, pause, or carry on — whichever the button means right now.
   toggle() {
+    // Pressed while the session is still being pre-synthesised, the button means
+    // "stop preparing". Cancelled to a standstill rather than paused: a
+    // half-warmed run has nowhere to carry on from, and the list is kept so play
+    // can start it again. The generation bump stops the loop at its next await.
+    if (this.prefetch) {
+      this.gen += 1;
+      this._stopAudio();
+      this._setStatus(IDLE);
+      return false;
+    }
     if (this.status === PLAYING) return this.pause();
     if (this.status === PAUSED) return this.resume();
     if (!this.list.length) return false;
     // A finished reading starts again from the top rather than replaying its
     // last turn, which is what pressing play on a finished thing should do.
-    return this._goto(this.index >= this.list.length ? 0 : this.index);
+    const from = this.index >= this.list.length ? 0 : this.index;
+    if (this.preload && this.synthesize) return this._preloadThenPlay(from);
+    return this._goto(from);
   }
 
   pause() {
@@ -410,35 +443,86 @@ export class AgentSpeech {
     return true;
   }
 
-  async _speak(turn, gen) {
-    let url = null;
-    if (this.synthesize) {
+  // Synthesise every turn from `from` to the end before playing a word, so a
+  // read-through has no silent gap between turns. Each fetch warms main's disk
+  // cache; the ordinary playback that follows reads from it in a tick, which is
+  // why _goto below is the plain one — the gap it would have shown is already
+  // gone. Cancellable at every await: a session change, a skip or the button
+  // (see toggle) bumps the generation, and the loop leaves without playing.
+  async _preloadThenPlay(from) {
+    const gen = (this.gen += 1);
+    this._stopAudio();
+    this.index = from;
+    // A reading is under way even while it is being prepared: this ducks the
+    // music once, lights the first turn, and shows the pause button.
+    this._setStatus(PLAYING);
+    const total = this.list.length - from;
+    this._setPrefetch({ done: 0, total });
+    for (let i = from; i < this.list.length; i += 1) {
+      if (gen !== this.gen) return;
+      const turn = this.list[i];
       try {
-        url = await this.synthesize(turn.text, turn.voice);
+        await this.synthesize(turn.text, turn.voice);
       } catch {
-        url = null;
+        // A turn that will not synthesise is one that reads locally at play time,
+        // exactly as it would without this pass. Not a reason to abandon the rest.
+      }
+      if (gen !== this.gen) return;
+      this._setPrefetch({ done: i - from + 1, total });
+    }
+    if (gen !== this.gen) return;
+    // Everything is warm. Play it the ordinary way, from the top of the run.
+    this._goto(from);
+  }
+
+  async _speak(turn, gen) {
+    // What synthesize returns: a { url, engine } pair for an online turn, a bare
+    // url string for a caller that does not report an engine (the Settings
+    // audition), or null for "use the window's own voice". Both shapes are read
+    // below so an older caller keeps working.
+    let out = null;
+    if (this.synthesize) {
+      // A turn is being fetched. The transport shows a loading bar for exactly
+      // this gap — the reading says "playing" but no sound has arrived yet.
+      this._setPending(true);
+      try {
+        out = await this.synthesize(turn.text, turn.voice);
+      } catch {
+        out = null;
+      } finally {
+        // Cleared only if this synthesis is still the one being waited on. A
+        // cursor that moved started another _speak which now owns the loading
+        // state, and clearing it here would blank a bar that belongs to the next
+        // turn. An abandoned synthesis needs no clearing: the _stopAudio that
+        // abandoned it already reset the flag.
+        if (gen === this.gen) this._setPending(false);
       }
     }
-    // The cursor moved, or the session did, while Gemini was thinking. Whatever
-    // came back belongs to a turn nobody is waiting for.
+    // The cursor moved, or the session did, while the engine was thinking.
+    // Whatever came back belongs to a turn nobody is waiting for.
     if (gen !== this.gen) return;
     // Paused before the audio arrived: hold it rather than overriding somebody
     // who has just asked for quiet.
     if (this.status === IDLE) return;
 
-    if (url) this._playUrl(url);
+    const url = typeof out === 'string' ? out : out?.url || null;
+    const engine = typeof out === 'string' ? null : out?.engine || null;
+    if (url) this._playUrl(url, engine);
     else this._playLocal(turn);
   }
 
-  _playUrl(url) {
+  _playUrl(url, engine) {
     if (!this._build()) {
       this._finish();
       return;
     }
     this.mode = 'url';
-    // Audio came back, so this turn really was Gemini. Recorded here rather than
-    // read off the setting, which can say Gemini while the key is missing.
-    this.engine = GEMINI;
+    // Audio came back from an online engine. Which one is recorded from what main
+    // answered — not read off the setting, which can say xAI while the key is
+    // missing, and a fallback would then name the wrong voice. The default holds
+    // only for a caller that reports no engine (the Settings audition), whose
+    // engine field the transport never shows.
+    this.engine = engine || GEMINI;
     try {
       this.el.src = url;
       this.gain.gain.value = this.volume;
@@ -618,6 +702,36 @@ export class AgentSpeech {
     this.chunkDone = null;
     this.chunks = [];
     this.chunkAt = 0;
+    // No turn is in flight once the audio is silenced. _speak arms this again for
+    // the one it is about to fetch; anything stopped is not being fetched. A
+    // pre-synthesis pass is stopped the same way — this is the one place both
+    // loading states are put down, so cancelling a reading cannot leave either on.
+    this._setPending(false);
+    this._setPrefetch(null);
+  }
+
+  // The loading state, announced only when it changes so a cache hit — which sets
+  // it true and false within a tick — cannot drive a render storm.
+  _setPending(next) {
+    const value = Boolean(next);
+    if (value === this.pending) return;
+    this.pending = value;
+    this._announce();
+  }
+
+  // The pre-synthesis progress, announced only when it moves.
+  _setPrefetch(next) {
+    const same =
+      next === this.prefetch ||
+      (next && this.prefetch && next.done === this.prefetch.done && next.total === this.prefetch.total);
+    if (same) return;
+    this.prefetch = next;
+    this._announce();
+  }
+
+  // Whether to synthesise the whole session before playing it.
+  setPreload(v) {
+    this.preload = Boolean(v);
   }
 
   _setStatus(next) {
@@ -703,6 +817,9 @@ export function useAgentSpeech({
   // window holds. xAI's is fetched from its API because its published lists
   // disagree with each other.
   ring = null,
+  // Synthesise the whole session before playing it, so a read-through has no gap
+  // between turns. A preference, off by default.
+  preload = false,
 } = {}) {
   const ref = useRef(null);
   const [, bump] = useState(0);
@@ -749,6 +866,10 @@ export function useAgentSpeech({
   useEffect(() => {
     player.setVolume(vol);
   }, [player, vol]);
+
+  useEffect(() => {
+    player.setPreload(preload);
+  }, [player, preload]);
 
   // Leaving the session, or switching the feature off, stops it talking.
   useEffect(() => {
@@ -804,6 +925,14 @@ export function useAgentSpeech({
     // switched on without a usable key still reads locally, and this is what
     // lets the window say so rather than claim otherwise.
     engine: player.engine,
+    // Whether the next turn is being fetched right now. The transport draws a
+    // loading bar for this, so the silent gap between "playing" and the first
+    // sound is not mistaken for a reading that has stalled.
+    pending: player.pending,
+    // The progress of pre-synthesising a whole session before it plays, when
+    // that preference is on: { done, total } while it runs, else null. The
+    // transport fills the same bar to this proportion and names it.
+    prefetch: player.prefetch,
 
     // The live path: an agent has just answered. The turn is already in the list
     // (the effect above put it there); this only decides whether to start.

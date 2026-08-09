@@ -65,6 +65,13 @@ const DEFAULTS = Object.freeze({
   // find it.
   agentSpeechEnabled: true,
   agentSpeechVolume: 0.9,
+  // Whether to synthesise the whole session before playing a word of it, so a
+  // read-through has no silent gap between turns while each is fetched. Off by
+  // default: the ordinary reading starts the moment you press play and fetches
+  // as it goes, which is what most people want; this trades a wait at the start
+  // for no waits after it, and only an online engine has a gap to close. An
+  // ordinary preference, so unlike the engine it rides the normal save.
+  agentSpeechPreload: false,
   // `agentSpeechEngine` is where the words go, and it is the opt-in. 'local' is
   // the window's voices; 'gemini' and 'xai' send the agents' words to Google or
   // to xAI to be read in a far better one. Nothing but a deliberate act in

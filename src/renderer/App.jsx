@@ -2049,11 +2049,15 @@ export default function App() {
   // holds; xAI publishes its own and it is asked for, because its documentation
   // and its announcement list different voices.
   //
-  // Re-asked whenever Settings closes, because that is where the engine and the
-  // key are changed and neither reaches this component's config: the engine has
-  // its own IPC channel and the key never leaves main at all. Cheap to ask —
-  // main keeps the roster for the life of the process and drops it only when a
-  // key changes, so all but the first of these is answered without a socket.
+  // Re-asked whenever the engine changes or Settings closes, because that is
+  // where the engine and the key are changed and neither reaches this
+  // component's config: the engine has its own IPC channel and the key never
+  // leaves main at all. `config.agentSpeechEngine` in this window is not
+  // refreshed by that channel, so a bump counter stands in for it —
+  // SpeechSettings raises it the moment the dropdown moves. Cheap to ask: main
+  // keeps the roster for the life of the process and drops it only when a key
+  // changes, so all but the first of these is answered without a socket.
+  const [speechEngineSeq, setSpeechEngineSeq] = useState(0);
   const [speechRing, setSpeechRing] = useState(null);
   useEffect(() => {
     if (!config.agentSpeechEnabled) return undefined;
@@ -2065,7 +2069,7 @@ export default function App() {
     return () => {
       live = false;
     };
-  }, [config.agentSpeechEnabled, config.agentSpeechEngine, modal]);
+  }, [config.agentSpeechEnabled, speechEngineSeq, modal]);
 
   // Who this session actually asks.
   //
@@ -2100,11 +2104,18 @@ export default function App() {
     // as an error. The file is served by the same local endpoint that already
     // serves thumbnails and custom sounds.
     ring: speechRing,
+    // Synthesise the whole session before playing, for a reading with no gap
+    // between turns. A plain preference, so it travels on the ordinary config.
+    preload: config.agentSpeechPreload === true,
     synthesize: async (text, voice) => {
       // The language travels with the request: xAI requires one on every call,
       // and this window is the only thing that knows what this machine reads in.
       const result = await api.speak(text, voice, navigator.language);
-      return result?.ok ? soundUrl(result.path) : null;
+      // The engine main actually used travels back with the path, so the
+      // transport can name what spoke rather than assume Gemini — the setting
+      // can say xAI while the key is missing, and the reading falls to the local
+      // voice, which the panel must be able to say.
+      return result?.ok ? { url: soundUrl(result.path), engine: result.engine } : null;
     },
   });
 
@@ -2468,6 +2479,8 @@ export default function App() {
                     ? {
                         playing: speech.playing,
                         paused: speech.paused,
+                        pending: speech.pending,
+                        prefetch: speech.prefetch,
                         position: speech.position,
                         count: speech.count,
                         engine: speech.engine,
@@ -2499,6 +2512,11 @@ export default function App() {
           peers={peers}
           soundUrl={soundUrl}
           onSave={saveSettings}
+          // The engine moved on its own channel, so this window's config never
+          // hears about it. Bumping the counter re-asks main for the new
+          // provider's roster the moment the dropdown changes, rather than
+          // waiting for Settings to close.
+          onEngineChange={() => setSpeechEngineSeq((n) => n + 1)}
           // Settings is where the user goes to fix an unreachable FluidVoice, and
           // its Check button asks the very same question. Re-asking on the way out
           // is what stops the card contradicting a panel that just said

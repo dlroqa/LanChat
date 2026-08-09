@@ -76,6 +76,10 @@ const SETTABLE_KEYS = Object.freeze([
   'customAgentMusicPath',
   'agentSpeechEnabled',
   'agentSpeechVolume',
+  // A plain preference — whether to synthesise a whole session before playing it
+  // — so unlike the engine it rides the ordinary save. It changes only how a
+  // reading is paced, never whether the words leave the machine.
+  'agentSpeechPreload',
   'pttEnabled',
   'pttKey',
   'pttCustomCode',

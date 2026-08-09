@@ -37,7 +37,7 @@ const PROVIDERS = [
 
 const byId = (id) => PROVIDERS.find((p) => p.id === id) || PROVIDERS[0];
 
-export default function SpeechSettings({ value, onChange, soundUrl }) {
+export default function SpeechSettings({ value, onChange, soundUrl, onEngineChange }) {
   // The engine and the keys do not travel on `onChange` with the volume slider.
   // They have channels of their own in main, because between them they decide
   // whether the agents' words leave this machine, and a switch like that must
@@ -55,6 +55,15 @@ export default function SpeechSettings({ value, onChange, soundUrl }) {
   const [keyError, setKeyError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [auditioning, setAuditioning] = useState(false);
+  // The active provider's roster, so the audition asks for a voice that provider
+  // owns rather than a Gemini name every engine was once given. Empty for Gemini
+  // and local, which the audition already covers with its own default; only xAI
+  // publishes a list, and main answers [] for anything else.
+  const [roster, setRoster] = useState([]);
+  // What the audition is doing and what actually spoke, so pressing the button
+  // is not a leap of faith: a key that xAI refuses reads locally, and this is
+  // where that becomes visible instead of sounding like success.
+  const [preview, setPreview] = useState(null); // { state, engine, error } | null
   const stopVoice = useRef(null);
 
   const provider = byId(engine);
@@ -78,6 +87,25 @@ export default function SpeechSettings({ value, onChange, soundUrl }) {
     };
   }, []);
 
+  // The voice the audition asks for. Fetched per engine, and per key, because a
+  // provider gains a roster the moment a key is saved. Main keeps it for the
+  // life of the process, so this is a socket only the first time. A provider
+  // that publishes no list (Gemini, local) answers [], and the audition falls
+  // back to its own default voice below.
+  useEffect(() => {
+    let live = true;
+    api
+      .speechVoices?.()
+      .then((res) => live && setRoster(res?.voices?.length ? res.voices : []))
+      .catch(() => live && setRoster([]));
+    return () => {
+      live = false;
+    };
+    // `hasKey` rather than keys[engine] directly: the roster changes the moment a
+    // provider gains or loses its key, and a member expression cannot be checked
+    // statically here.
+  }, [engine, hasKey]);
+
   async function setEngine(next) {
     setBusy(true);
     setKeyError(null);
@@ -86,6 +114,10 @@ export default function SpeechSettings({ value, onChange, soundUrl }) {
     try {
       const res = await api.setSpeechEngine(next);
       absorb(res?.speech);
+      // App holds no copy of the engine — it moved on its own channel — so it is
+      // told directly, here, to re-ask for the new provider's roster rather than
+      // waiting for this modal to close.
+      onEngineChange?.();
     } finally {
       setBusy(false);
     }
@@ -134,22 +166,58 @@ export default function SpeechSettings({ value, onChange, soundUrl }) {
         ? 'Reading with this computer’s voices.'
         : `No ${provider.label.split(' — ')[0]} key saved — reading with this computer’s voices until you add one.`;
 
+  // What to call a voice in a sentence: "this computer’s voices" for the local
+  // engine, and the provider's short name otherwise. The one place that maps an
+  // engine id to a name, so the audition line and the setting line agree.
+  const spokeName = (id) => (id === 'local' ? 'this computer’s voices' : byId(id).label.split(' — ')[0]);
+
+  // What the audition did, in words. Absent until the button is pressed; while
+  // it plays it names what it is trying, and when the reply lands it names what
+  // actually spoke — which is not always the same engine, and that gap is the
+  // whole reason this line exists.
+  const previewLine = !preview
+    ? null
+    : preview.state === 'pending'
+      ? `Auditioning ${spokeName(engine)}…`
+      : preview.state === 'spoke'
+        ? `Spoken by ${spokeName(preview.engine)}.`
+        : `${preview.error} This computer’s voices read it instead.`;
+  const previewWorking = preview?.state === 'spoke' && preview.engine !== 'local';
+
   function endVoicePreview() {
     stopVoice.current?.();
     stopVoice.current = null;
     setAuditioning(false);
+    setPreview(null);
   }
 
   function toggleVoicePreview() {
     if (auditioning) return endVoicePreview();
+    setPreview({ state: 'pending', engine: null, error: null });
     stopVoice.current = previewVoice({
-      voice: VOICES[0],
+      // A voice the chosen engine actually owns. xAI rejects a Gemini name and
+      // reads locally, which used to make an xAI audition sound like the system
+      // voice; roster[0] is one of its own. Gemini and local publish no roster,
+      // so they keep the default.
+      voice: roster[0] || VOICES[0],
       volume: value.agentSpeechVolume ?? 0.9,
       // The audition takes the same route a real turn does, so a key that does
       // not work is found out here rather than in the middle of a discussion.
       synthesize: async (text, voice) => {
         const res = await api.speak(text, voice, navigator.language);
-        return res?.ok ? soundUrl(res.path) : null;
+        if (res?.ok) {
+          setPreview({ state: 'spoke', engine: res.engine, error: null });
+          return soundUrl(res.path);
+        }
+        // A real failure carries a sentence; a chosen-local or no-key engine
+        // carries none, and reading locally is its expected outcome rather than
+        // a fall from anything.
+        if (res?.error) {
+          setPreview({ state: 'fell-back', engine: null, error: res.error });
+          return null;
+        }
+        setPreview({ state: 'spoke', engine: 'local', error: null });
+        return null;
       },
     });
     setAuditioning(true);
@@ -160,6 +228,7 @@ export default function SpeechSettings({ value, onChange, soundUrl }) {
   useEffect(() => () => stopVoice.current?.(), []);
   useEffect(() => {
     if (auditioning) endVoicePreview();
+    else setPreview(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine, value.agentSpeechEnabled]);
 
@@ -209,6 +278,15 @@ export default function SpeechSettings({ value, onChange, soundUrl }) {
         <div className={`speech-engine-state ${working ? 'on' : ''}`} role="status">
           {line}
         </div>
+        {previewLine && (
+          <div
+            className={`speech-engine-state ${previewWorking ? 'on' : ''}`}
+            role="status"
+            aria-live="polite"
+          >
+            {previewLine}
+          </div>
+        )}
       </div>
 
       {provider.key && (
@@ -262,6 +340,28 @@ export default function SpeechSettings({ value, onChange, soundUrl }) {
           value={value.agentSpeechVolume ?? 0.9}
           disabled={!on}
           onChange={(e) => onChange({ agentSpeechVolume: Number(e.target.value) })}
+        />
+      </div>
+
+      {/* Trading a wait at the start for none in the middle. Off by default,
+          because the ordinary reading starts the moment you press play; this is
+          for a read-through where the silence between turns matters more than
+          getting the first word out quickly. Only an online voice has a gap to
+          close, so the note says so rather than leaving it to be discovered. */}
+      <div className="switch">
+        <div>
+          <div style={{ fontWeight: 500 }}>Prepare the whole session first</div>
+          <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>
+            Synthesises every turn before playing, so there is no pause between them. It waits once at the
+            start instead. Affects the online voices only.
+          </div>
+        </div>
+        <button
+          className={`toggle ${value.agentSpeechPreload === true ? 'on' : ''}`}
+          onClick={() => onChange({ agentSpeechPreload: !(value.agentSpeechPreload === true) })}
+          disabled={!on}
+          aria-pressed={value.agentSpeechPreload === true}
+          aria-label="Prepare the whole session first"
         />
       </div>
     </div>

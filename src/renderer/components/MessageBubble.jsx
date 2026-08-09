@@ -161,6 +161,10 @@ export default function MessageBubble({
       className={`bubble-row ${out ? 'out' : 'in'} ${grouped ? 'grouped' : ''} ${
         going ? 'erasing' : ''
       } ${dissolving ? 'dissolving' : ''} ${color && !out ? 'agent' : ''}`}
+      // The handle the pane scrolls to as the reading advances. Every bubble
+      // carries its own id; the pane queries for the one the cursor is on, the
+      // same way search hits are found by data-hit.
+      data-speaking-id={msg.id}
       // The one place the colour is named. Everything that uses it — the fill,
       // the edge, the speaker's name — reads it back out of this variable, so an
       // agent's colour reaches all three from a single source and a bubble with

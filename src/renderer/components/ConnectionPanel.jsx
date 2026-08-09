@@ -377,18 +377,31 @@ function SessionPanel({ peer, streaming, awaiting, typing, commits, speech }) {
 // because they are the same decision, and two buttons where one of them is
 // always wrong is how a transport gets misread.
 //
-// The position line is not decoration. Speaking has no progress bar and a long
-// turn is silent while it is being synthesised, so "3 of 12" is the only thing
-// that distinguishes a reading that is working from one that has stalled.
+// The position line is not decoration. A long turn is silent while it is being
+// synthesised, and the loading bar below the buttons covers exactly that gap —
+// so between the two, a reading that is working is never mistaken for one that
+// has stalled.
 // What to call the voice that spoke. "This computer" rather than the name of a
 // platform speech engine nobody outside a browser has heard of.
 function engineName(engine) {
   if (engine === 'gemini') return 'Gemini';
+  if (engine === 'xai') return 'xAI';
   if (engine === 'local') return 'This computer';
   return null;
 }
 
-function Transport({ playing, paused, position, count, engine, onToggle, onNext, onPrev }) {
+function Transport({
+  playing,
+  paused,
+  pending,
+  prefetch,
+  position,
+  count,
+  engine,
+  onToggle,
+  onNext,
+  onPrev,
+}) {
   const empty = !count;
   // Why it is off, said on the control rather than left to be guessed at.
   const why = empty ? 'Nothing has been said in this session yet' : undefined;
@@ -426,19 +439,46 @@ function Transport({ playing, paused, position, count, engine, onToggle, onNext,
           <SkipForward size={16} />
         </button>
       </div>
+      {/* The gap the position line cannot show. Two shapes on one bar: while the
+          whole session is being synthesised ahead of play it fills to a known
+          proportion; while an ordinary reading fetches its next turn it slides,
+          the duration being unknown. Always in the layout so nothing below it
+          moves when it lights, and a CSS delay keeps a cache hit from flashing
+          it. A progressbar, not a bare colour, so the state is announced. */}
+      <div
+        className={`transport-load ${pending || prefetch ? 'on' : ''} ${prefetch ? 'filling' : ''}`}
+        role="progressbar"
+        aria-label={prefetch ? 'Synthesising the whole session' : 'Preparing the next turn'}
+        aria-valuenow={prefetch ? Math.round((prefetch.done / Math.max(1, prefetch.total)) * 100) : undefined}
+        aria-valuetext={
+          prefetch
+            ? `${prefetch.done} of ${prefetch.total} prepared`
+            : pending
+              ? 'Preparing the next turn'
+              : 'Ready'
+        }
+      >
+        <span
+          style={prefetch ? { width: `${(prefetch.done / Math.max(1, prefetch.total)) * 100}%` } : undefined}
+        />
+      </div>
       {/* Polite rather than assertive: worth hearing when it changes, not worth
           cutting into whatever a screen reader is already saying. */}
       <div className="transport-pos" role="status" aria-live="polite">
-        {empty
-          ? 'Nothing to read yet'
-          : playing || paused
-            ? // The engine is named from what actually spoke, not from the
-              // setting — Gemini switched on but unreachable reads locally, and
-              // this is where that becomes visible without opening Settings.
-              `${position} of ${count}${engineName(engine) ? ` · ${engineName(engine)}` : ''}${
-                paused ? ' · paused' : ''
-              }`
-            : `${count} turn${count === 1 ? '' : 's'}`}
+        {prefetch
+          ? // Preparing the whole run before a word of it plays, so there is a
+            // wait to account for and a count to show it moving.
+            `Synthesising all · ${prefetch.done} of ${prefetch.total}`
+          : empty
+            ? 'Nothing to read yet'
+            : playing || paused
+              ? // The engine is named from what actually spoke, not from the
+                // setting — Gemini switched on but unreachable reads locally, and
+                // this is where that becomes visible without opening Settings.
+                `${position} of ${count}${engineName(engine) ? ` · ${engineName(engine)}` : ''}${
+                  paused ? ' · paused' : ''
+                }`
+              : `${count} turn${count === 1 ? '' : 's'}`}
       </div>
     </div>
   );

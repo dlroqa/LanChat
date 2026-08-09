@@ -4459,9 +4459,55 @@ input[type='range']:disabled::-webkit-slider-thumb {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
-/* Speaking has no progress bar and a long turn is silent while it is being
-   synthesised, so this line is the only thing that tells a reading that is
-   working from one that has stalled. */
+/* The bar that fills the silent gap while a turn is being fetched. It always
+   holds its row — opacity carries it in and out — so nothing below it moves when
+   synthesis starts. The .25s delay is the whole trick that keeps a cache hit,
+   which resolves in a tick, from ever drawing it: no JS timer, so none can leak.
+   The span slides on a transform, never a width, so it cannot reflow the panel. */
+.transport-load {
+  height: 3px;
+  margin-top: 8px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--border-soft);
+  opacity: 0;
+  transition: opacity 0.15s ease 0.25s;
+}
+.transport-load > span {
+  display: block;
+  height: 100%;
+  width: 40%;
+  border-radius: inherit;
+  background: var(--primary);
+  transform: translateX(-100%);
+}
+.transport-load.on {
+  opacity: 1;
+}
+.transport-load.on > span {
+  animation: transport-slide 1.1s ease-in-out 0.25s infinite;
+}
+@keyframes transport-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+/* The determinate face: synthesising the whole session before it plays is a
+   known number of turns, so the bar fills to that proportion instead of sliding.
+   The width is set inline from done/total; here the slide is switched off and
+   the span pinned to the left so width is all that moves. */
+.transport-load.filling > span {
+  animation: none;
+  transform: none;
+  width: 0;
+  transition: width 0.2s ease;
+}
+/* A long turn is silent while it is being synthesised; the bar above covers that
+   gap, and this line names where the reading is and who is speaking. Between the
+   two, a reading that is working is never mistaken for one that has stalled. */
 .transport-pos {
   margin-top: 6px;
   text-align: center;
@@ -5287,6 +5333,22 @@ input[type='range']:disabled::-webkit-slider-thumb {
   .stat-tint-commit .stat-tint-wash {
     animation: none;
     opacity: 1;
+  }
+  /* The loading bar stops sliding and simply fills: the state is "a turn is
+     being fetched", and that has to survive the motion being gone. A still, lit
+     bar says it as well as a moving one. */
+  .transport-load.on > span {
+    animation: none;
+    width: 100%;
+    transform: none;
+    opacity: 0.6;
+  }
+  /* The determinate bar still reports its proportion — the number is the point —
+     but jumps to it rather than easing. Its inline width wins over the 100%
+     above, so only the transition is dropped here. */
+  .transport-load.filling > span {
+    transition: none;
+    opacity: 0.6;
   }
 }
 
