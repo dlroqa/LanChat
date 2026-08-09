@@ -28,6 +28,37 @@ const path = require('node:path');
 // from inside an archive, which is what makes them ordinary files to delete.
 const ORT = ['node_modules', 'onnxruntime-node', 'bin', 'napi-v6'];
 
+// Where electron-builder just put the app's resources.
+//
+// **Not the same shape on every platform**, which cost a release: on Windows and
+// Linux it is `<appOutDir>/resources`, but a macOS build is a bundle and puts
+// them at `<appOutDir>/LanChat.app/Contents/Resources`. Pruning that looked for
+// the Linux path found nothing on macOS, returned quietly, and shipped every
+// platform's binaries inside the dmg — 645 MB of artifacts against 207 MB for
+// the other two, and nothing in the build log to say so.
+//
+// Hence also the throw below rather than another quiet return. A resources
+// directory that is not where it should be is a broken assumption about the
+// packager, and the one thing it must not do is look like success.
+function resourcesDir(context) {
+  if (context.electronPlatformName === 'darwin' || context.electronPlatformName === 'mas') {
+    const app = `${context.packager.appInfo.productFilename}.app`;
+    return path.join(context.appOutDir, app, 'Contents', 'Resources');
+  }
+  return path.join(context.appOutDir, 'resources');
+}
+
+function unpackedDir(context) {
+  const resources = resourcesDir(context);
+  if (!fs.existsSync(resources)) {
+    throw new Error(`afterPack: no resources directory at ${resources} — the packager's layout changed`);
+  }
+  const unpacked = path.join(resources, 'app.asar.unpacked');
+  // A build with nothing unpacked is a build with no native payload at all,
+  // which is a legitimate state and not this function's business.
+  return fs.existsSync(unpacked) ? unpacked : null;
+}
+
 // ------------------------------------------------------------- WASM pruning
 //
 // The second backend. onnxruntime-web is the same runtime compiled to
@@ -50,7 +81,9 @@ const ORT_WEB_KEEP = new Set([
 ]);
 
 function pruneOnnxWeb(context) {
-  const dir = path.join(context.appOutDir, 'resources', 'app.asar.unpacked', ...ORT_WEB);
+  const unpacked = unpackedDir(context);
+  if (!unpacked) return;
+  const dir = path.join(unpacked, ...ORT_WEB);
   if (!fs.existsSync(dir)) return;
 
   let removed = 0;
@@ -73,8 +106,10 @@ function pruneOnnxWeb(context) {
 }
 
 function pruneOnnx(context) {
-  const root = path.join(context.appOutDir, 'resources', 'app.asar.unpacked', ...ORT);
-  if (!fs.existsSync(root)) return; // a build without the offline voice
+  const unpacked = unpackedDir(context);
+  if (!unpacked) return; // a build without the offline voice
+  const root = path.join(unpacked, ...ORT);
+  if (!fs.existsSync(root)) return;
 
   const keepPlatform = context.electronPlatformName === 'mas' ? 'darwin' : context.electronPlatformName;
   const keepArch = context.arch === undefined ? process.arch : archName(context.arch);

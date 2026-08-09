@@ -82,12 +82,23 @@ test('its native modules stay ABI-stable with Electron', () => {
 const afterPack = require('../build/afterPack.js');
 const { pruneOnnx, pruneOnnxWeb } = afterPack;
 
+// Where electron-builder really puts resources, which is **not** the same shape
+// on every platform: a macOS build is a bundle. Getting this wrong shipped a
+// 645 MB macOS artifact against 207 MB for the other two, because the pruner
+// looked for the Linux path, found nothing, and returned quietly. The fake build
+// therefore has to be as platform-shaped as the real one, or it proves nothing
+// about the platform that broke.
+function resourcesOf(dir, platform) {
+  return platform === 'darwin' || platform === 'mas'
+    ? path.join(dir, 'LanChat.app', 'Contents', 'Resources')
+    : path.join(dir, 'resources');
+}
+
 // A stand-in for what electron-builder leaves on disk: every platform's binaries
 // unpacked beside the asar.
-function fakeBuild(dir) {
+function fakeBuild(dir, platform = 'linux') {
   const root = path.join(
-    dir,
-    'resources',
+    resourcesOf(dir, platform),
     'app.asar.unpacked',
     'node_modules',
     'onnxruntime-node',
@@ -122,12 +133,17 @@ const ARCH = { x64: 1, arm64: 3 };
 
 async function pack(platform, arch) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lanchat-pack-'));
-  const root = fakeBuild(dir);
+  const root = fakeBuild(dir, platform);
   // The pruner directly, not the whole afterPack: the darwin path of that goes
   // on to run codesign, which on a macOS runner really executes against a
   // directory holding no .app. Signing is a separate job with its own failure
   // mode and is not what these cases are about.
-  pruneOnnx({ appOutDir: dir, electronPlatformName: platform, arch: ARCH[arch] });
+  pruneOnnx({
+    appOutDir: dir,
+    electronPlatformName: platform,
+    arch: ARCH[arch],
+    packager: { appInfo: { productFilename: 'LanChat' } },
+  });
   const left = [];
   for (const p of fs.readdirSync(root)) {
     for (const a of fs.readdirSync(path.join(root, p))) left.push(`${p}/${a}`);
@@ -167,7 +183,7 @@ test('packaging a build without the offline voice is not an error', async () => 
   // A tree with no unpacked onnxruntime at all — which is what a build would
   // look like if the dependency were ever removed. afterPack must not throw.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lanchat-pack-'));
-  fs.mkdirSync(path.join(dir, 'resources'), { recursive: true });
+  fs.mkdirSync(resourcesOf(dir, 'linux'), { recursive: true });
   pruneOnnx({ appOutDir: dir, electronPlatformName: 'linux', arch: ARCH.x64 });
   pruneOnnxWeb({ appOutDir: dir, electronPlatformName: 'linux', arch: ARCH.x64 });
   fs.rmSync(dir, { recursive: true, force: true });
@@ -209,7 +225,13 @@ test('the WebAssembly runtime is reachable and carries its .wasm', () => {
 test('packaging keeps the three WebAssembly files and drops the rest', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lanchat-pack-'));
   fakeBuild(dir);
-  const web = path.join(dir, 'resources', 'app.asar.unpacked', 'node_modules', 'onnxruntime-web', 'dist');
+  const web = path.join(
+    resourcesOf(dir, 'linux'),
+    'app.asar.unpacked',
+    'node_modules',
+    'onnxruntime-web',
+    'dist'
+  );
   fs.mkdirSync(web, { recursive: true });
   // What the package really contains: every variant, and a map for each.
   for (const name of [
@@ -241,7 +263,13 @@ test('packaging refuses to ship a WebAssembly runtime missing a piece', async ()
   // nothing to explain it, so the build stops instead.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lanchat-pack-'));
   fakeBuild(dir);
-  const web = path.join(dir, 'resources', 'app.asar.unpacked', 'node_modules', 'onnxruntime-web', 'dist');
+  const web = path.join(
+    resourcesOf(dir, 'linux'),
+    'app.asar.unpacked',
+    'node_modules',
+    'onnxruntime-web',
+    'dist'
+  );
   fs.mkdirSync(web, { recursive: true });
   fs.writeFileSync(path.join(web, 'ort.node.min.js'), Buffer.alloc(16));
   fs.writeFileSync(path.join(web, 'ort.webgl.min.js'), Buffer.alloc(16));
@@ -249,6 +277,50 @@ test('packaging refuses to ship a WebAssembly runtime missing a piece', async ()
   assert.throws(
     () => pruneOnnxWeb({ appOutDir: dir, electronPlatformName: 'linux', arch: ARCH.x64 }),
     /WebAssembly fallback would not load/
+  );
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('packaging a macOS bundle prunes inside the .app, not beside it', async () => {
+  // The bug this test exists for. A macOS build puts its resources at
+  // LanChat.app/Contents/Resources; a pruner written against the Linux layout
+  // finds nothing there and returns quietly, so every platform's binaries ship
+  // inside the dmg. It cost a 645 MB macOS artifact against 207 MB elsewhere,
+  // and the build log said nothing at all.
+  for (const platform of ['darwin', 'mas']) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lanchat-pack-'));
+    const root = fakeBuild(dir, platform);
+    pruneOnnx({
+      appOutDir: dir,
+      electronPlatformName: platform,
+      arch: ARCH.x64,
+      packager: { appInfo: { productFilename: 'LanChat' } },
+    });
+
+    const left = [];
+    for (const p of fs.readdirSync(root)) {
+      for (const a of fs.readdirSync(path.join(root, p))) left.push(`${p}/${a}`);
+    }
+    assert.deepEqual(left, ['darwin/x64'], `${platform} pruned inside the bundle`);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a layout the packager does not recognise is loud, not quiet', () => {
+  // The other half of the same lesson: the quiet return is what let the macOS
+  // bug ship. A resources directory that is not where it should be means an
+  // assumption about electron-builder has stopped holding, and the one thing it
+  // must not do is look like a successful prune.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lanchat-pack-'));
+  assert.throws(
+    () =>
+      pruneOnnx({
+        appOutDir: dir,
+        electronPlatformName: 'linux',
+        arch: ARCH.x64,
+        packager: { appInfo: { productFilename: 'LanChat' } },
+      }),
+    /no resources directory/
   );
   fs.rmSync(dir, { recursive: true, force: true });
 });
