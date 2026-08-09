@@ -45,6 +45,11 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
+// The offline engine's pinned revision and voice roster. Required for its
+// constants only — nothing here loads a model, and requiring this file pulls in
+// no native code.
+const kokoroManifest = require('./tts/manifest.js');
+
 // The current TTS model. Both preview 2.5 models still answer on this path; this
 // is the one Google's own examples now use.
 const DEFAULT_MODEL = 'gemini-3.1-flash-tts-preview';
@@ -295,6 +300,15 @@ const XAI_FALLBACK_VOICES = Object.freeze(['Ara', 'Eve', 'Leo', 'Rex', 'Sal']);
 // sends one; this is what to use when it has not.
 const DEFAULT_LANGUAGE = 'en';
 
+// Kokoro is not like the other two, and the table has one shape for the
+// difference: instead of `build` and `decode`, a row may carry `synthesize`,
+// which is handed the same arguments and answers with the finished bytes. A row
+// with one has no endpoint, opens no socket, and never reaches request().
+//
+// `needsKey: false` is the other half. The opt-in gate below asks each row what
+// standing between the user and speech means for it — for Gemini and xAI that is
+// an API key, and for a model on this machine's own disk it is whether the
+// weights are there. The gate itself is unchanged and still refuses by default.
 const PROVIDERS = Object.freeze({
   gemini: Object.freeze({
     label: 'Gemini',
@@ -369,6 +383,37 @@ const PROVIDERS = Object.freeze({
       return Buffer.isBuffer(body) && body.length ? body : null;
     },
   }),
+
+  kokoro: Object.freeze({
+    label: 'Kokoro',
+    ext: '.wav',
+    // No endpoint, and no key. The whole model is on this machine, which is the
+    // point of it: an agent's words are read aloud without a byte leaving the
+    // building, which is what the rest of LanChat already promises about
+    // everything else it does.
+    needsKey: false,
+    // The model is 86 MB and is not shipped inside the app, so "can this engine
+    // speak" is a question about the disk rather than about a key. Answered by
+    // weights.ready() through the engine handed in below; with no engine wired
+    // — which is every test that does not ask for one — it is simply not ready,
+    // and the reading falls to the local voice exactly as a missing key does.
+    ready(engine) {
+      return Boolean(engine?.ready?.());
+    },
+    // The model, not the network. `speed` is the one control this engine has
+    // that the online two do not, and it travels here rather than in the text.
+    async synthesize({ engine, voice, text, speed }) {
+      const { pcm } = await engine.synthesize({ text, voice, speed });
+      return pcm && pcm.length ? wavOf(pcm, DEFAULT_RATE) : null;
+    },
+    // The cache key's model component. A recording is only reusable if it came
+    // from the same weights, so the pinned revision and quantisation stand in
+    // for Gemini's model name — change either and every cached turn is
+    // correctly treated as belonging to a different voice.
+    model() {
+      return `${kokoroManifest.MODEL}@${kokoroManifest.REVISION.slice(0, 12)}`;
+    },
+  }),
 });
 
 // The providers a person may choose, and the one that is not a provider at all.
@@ -395,10 +440,15 @@ function engineOf(raw) {
 // time. Both, because a test that only cares about one engine should not have to
 // name the others — and the singular form is what the Gemini tests were already
 // written against.
+// `kokoro` is the offline engine — the object from tts/kokoro.js, or null. It is
+// injected rather than constructed here for the same reason the endpoints are:
+// so this module can be tested without one, and so nothing native is loaded by
+// the mere act of requiring the speech service.
 function createSpeech({
   config,
   userDataDir,
   safeStorage,
+  kokoro = null,
   endpoint = null,
   endpoints: endpointsIn = {},
   timeouts = {},
@@ -407,8 +457,13 @@ function createSpeech({
   const dir = path.join(userDataDir, 'speech');
   const endpoints = {};
   for (const [name, spec] of Object.entries(PROVIDERS)) {
+    if (!spec.endpoint) continue; // an engine on this machine has nowhere to point
     endpoints[name] = endpointsIn[name] || endpoint || spec.endpoint;
   }
+
+  // What a row that runs locally is handed. One place, so a second such engine
+  // needs no new plumbing.
+  const localEngines = { kokoro };
 
   // The key for one provider, or null. Two modes, exactly as agents/registry.js
   // stores an agent's secret: an environment variable named in config, or a
@@ -442,15 +497,41 @@ function createSpeech({
   // alone means no key is read, no name resolved and no socket opened. A chosen
   // provider with no usable key is not online either — it reads locally, and the
   // window is told so rather than left to wonder.
+  // The order matters and is unchanged: the engine is read first, so leaving it
+  // alone still means no key is read, no name resolved and no socket opened.
+  // What a chosen engine must then prove differs by row — a key for the two that
+  // are somebody else's service, weights on disk for the one that is not — and
+  // `needsKey` is how the row says which. A row that cannot prove it is not
+  // online either, and reads locally.
   function activeProvider() {
     const chosen = engine();
     if (chosen === 'local') return null;
+    const spec = PROVIDERS[chosen];
+    if (!spec) return null;
+    if (spec.needsKey === false) return spec.ready(localEngines[chosen]) ? chosen : null;
     return keyOf(chosen) ? chosen : null;
   }
 
-  function modelOf() {
+  // The model name that goes into the cache key and into a provider's request.
+  //
+  // `agentSpeechModel` is a Gemini setting and always was — it is the only row
+  // whose request carries a model name. A row that pins its own weights answers
+  // for itself instead, so a user who once typed a Gemini model into Settings
+  // does not thereby change the cache key of a model on their own disk.
+  function modelOf(provider = null) {
+    const spec = provider ? PROVIDERS[provider] : null;
+    if (spec && typeof spec.model === 'function') return spec.model();
     const raw = config.get('agentSpeechModel');
     return typeof raw === 'string' && raw.trim() ? raw.trim() : DEFAULT_MODEL;
+  }
+
+  // How fast the offline engine reads. A plain preference with a plain default,
+  // bounded here rather than trusted, because it is multiplied into the model's
+  // own duration prediction and a zero would ask for audio of infinite length.
+  function speedOf() {
+    const raw = Number(config.get('agentSpeechSpeed'));
+    if (!Number.isFinite(raw)) return 1;
+    return Math.min(2, Math.max(0.5, raw));
   }
 
   // One file per (provider, model, voice, text). Hashed rather than named after
@@ -517,9 +598,37 @@ function createSpeech({
     const spec = PROVIDERS[provider];
     const label = spec.label;
 
-    const model = modelOf();
+    const model = modelOf(provider);
     const file = cachePath(provider, model, name, bounded);
     if (fs.existsSync(file)) return { ok: true, path: file, cached: true, engine: provider };
+
+    // An engine that runs here answers for itself: no request, no status line, no
+    // decode. Everything after this branch — the cache write, the sweep, the
+    // shape of the answer — is the same code for every engine, which is the
+    // point of putting the difference in the row rather than at the call site.
+    if (typeof spec.synthesize === 'function') {
+      let bytes = null;
+      try {
+        bytes = await spec.synthesize({
+          engine: localEngines[provider],
+          voice: name,
+          text: bounded,
+          speed: speedOf(),
+          language,
+        });
+      } catch (err) {
+        return {
+          ok: false,
+          error: `${label} could not read that.`,
+          detail: detailOf(err.message),
+          fallback: true,
+        };
+      }
+      if (!bytes || !bytes.length) {
+        return { ok: false, error: `${label} returned no audio.`, fallback: true };
+      }
+      return write(file, bytes, provider);
+    }
 
     const built = spec.build({
       endpoint: endpoints[provider],
@@ -574,6 +683,16 @@ function createSpeech({
       };
     }
 
+    return write(file, bytes, provider);
+  }
+
+  // Finished audio to the cache, whoever made it.
+  //
+  // Lifted out of speak() unchanged when the offline engine arrived, so that the
+  // atomic write, the sweep and the shape of the answer are one implementation
+  // rather than one per engine — a second copy is how two engines end up with
+  // subtly different ideas of what a cached file is.
+  function write(file, bytes, provider) {
     try {
       fs.mkdirSync(dir, { recursive: true });
       // Written beside the target and renamed, so a run that dies mid-write
@@ -603,6 +722,13 @@ function createSpeech({
 
   async function voices() {
     const provider = activeProvider();
+    // Kokoro's roster is written down in its manifest, in the order the window
+    // deals it out — and publishing it here is the whole of what makes a session
+    // read by this engine sound like a conversation between several people
+    // rather than one voice reading a transcript. The renderer needs no branch
+    // for it: `ringVoices` already deals whatever roster arrives, keeping the
+    // last name back for the user's own turns.
+    if (provider === 'kokoro') return { ok: true, provider, voices: [...kokoroManifest.RING] };
     // Gemini's roster is a fixed, documented set the window already holds, and
     // the local voices belong to the platform. Only xAI publishes a list to ask
     // for, so only xAI is asked.
@@ -637,10 +763,35 @@ function createSpeech({
   // never a key itself.
   function status() {
     const keys = {};
-    for (const name of Object.keys(PROVIDERS)) keys[name] = Boolean(keyOf(name));
+    // Only rows that take one. A row with no key must not appear here as a
+    // provider whose key is missing — Settings reads this map to decide whether
+    // to show a key field at all, and "false" is indistinguishable from "not
+    // set yet" unless the row is simply absent.
+    for (const [name, spec] of Object.entries(PROVIDERS)) {
+      if (spec.needsKey !== false) keys[name] = Boolean(keyOf(name));
+    }
     return {
       engine: engine(),
       keys,
+      // What the offline engine needs before it can speak, for the one row in
+      // Settings that shows a download rather than a key field.
+      kokoro: {
+        ready: Boolean(kokoro?.ready?.()),
+        // Whether this machine could run the model even with the weights here.
+        // False only on a build carrying neither runtime, where the honest thing
+        // is to say so rather than to offer a 89 MB download that will never
+        // speak.
+        supported: kokoro ? kokoro.supported() : false,
+        // 'native' | 'wasm' | null. A machine with no native ONNX Runtime for
+        // its platform still speaks, through WebAssembly — slower, but the
+        // difference is speed rather than silence, and Settings says which.
+        backend: kokoro?.backend?.() ?? null,
+        bytes: kokoro?.bytesOnDisk?.() ?? 0,
+        total: kokoroManifest.TOTAL_BYTES,
+        voices: [...kokoroManifest.RING],
+        labels: { ...kokoroManifest.VOICE_LABELS },
+      },
+      speed: speedOf(),
       // Whether the chosen engine can actually speak. The difference between
       // "Gemini" and "Gemini, but reading locally because there is no key" —
       // which is the distinction the window exists to make plain.
@@ -655,6 +806,11 @@ function createSpeech({
   // that will not turn on.
   function setKey(provider, raw) {
     if (!PROVIDERS[provider]) return { ok: false, error: 'Unknown speech provider.' };
+    // An engine that runs on this machine has no account to hold a key for, and
+    // storing one would be a secret kept for nobody.
+    if (PROVIDERS[provider].needsKey === false) {
+      return { ok: false, error: `${PROVIDERS[provider].label} does not use an API key.` };
+    }
     const value = typeof raw === 'string' ? raw.trim() : '';
     const all = config.get('agentSpeechKeys');
     const keys = { ...(all && typeof all === 'object' ? all : {}) };

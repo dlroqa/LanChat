@@ -37,7 +37,7 @@ function load() {
   return new Function(
     `${body}
      return { AGENT_HUES, VOICES, USER_VOICE, colorOf, paletteFor, ringFor, slotFor, voiceOf,
-              voicesFor, voiceForTurn, localVoicesFor, localUserVoice };`
+              voicesFor, voiceForTurn, ringVoices, localVoicesFor, localUserVoice };`
   )();
 }
 
@@ -51,9 +51,14 @@ const {
   voiceOf,
   voicesFor,
   voiceForTurn,
+  ringVoices,
   localVoicesFor,
   localUserVoice,
 } = load();
+
+// The roster main publishes for the offline engine, read from its manifest
+// rather than copied, so a change to the ring is a change to this test too.
+const KOKORO_RING = require('../src/main/tts/manifest.js').RING;
 
 // A pool of stable, realistic ids.
 const ids = (n, prefix = 'agent') => Array.from({ length: n }, (_, i) => `${prefix}-${i}`);
@@ -402,4 +407,72 @@ test('more agents than the machine has voices wraps rather than failing', () => 
   const dealt = localVoicesFor(ids(5, 'few'), available, 'en');
   assert.equal(dealt.size, 5);
   for (const name of dealt.values()) assert.ok(['A', 'B'].includes(name));
+});
+
+// ------------------------------------------------- a provider's own roster
+//
+// `ringVoices` is what makes a session read by a provider other than Gemini
+// sound like a conversation between several people rather than one narrator
+// reading a transcript. Until the offline engine arrived nothing tested it
+// directly, and it is the single function the whole feature leans on: main
+// publishes a list, this deals it, and no other renderer code knows or cares
+// which engine produced it.
+
+test('a provider roster is dealt out with one voice held back for you', () => {
+  const room = ids(4, 'roster');
+  const { voices, userVoice, ring } = ringVoices(room, KOKORO_RING);
+
+  // Four agents, four different voices.
+  assert.equal(voices.size, 4);
+  assert.equal(new Set(voices.values()).size, 4);
+
+  // The last name in the published list reads your own turns, and is never
+  // dealt to an agent — so the narrator never sounds like a participant.
+  assert.equal(userVoice, KOKORO_RING.at(-1));
+  assert.ok(![...voices.values()].includes(userVoice));
+  assert.deepEqual(ring, KOKORO_RING.slice(0, -1));
+});
+
+test('the same agent gets the same voice in every window', () => {
+  const room = ids(5, 'stable-roster');
+  const first = ringVoices(room, KOKORO_RING).voices;
+  // Order of the cast must not decide who gets what: two windows resolve the
+  // same session's agents in whatever order they happen to hold them.
+  const again = ringVoices([...room].reverse(), KOKORO_RING).voices;
+  for (const id of room) assert.equal(again.get(id), first.get(id));
+});
+
+test('a full room is dealt every agent voice exactly once', () => {
+  // Twelve agents against twelve agent voices: the collision rule has to place
+  // all of them without repeating, which is the case that would otherwise only
+  // ever be hit by somebody with a very busy session.
+  const room = ids(12, 'full');
+  const { voices } = ringVoices(room, KOKORO_RING);
+  assert.equal(new Set(voices.values()).size, 12);
+  assert.deepEqual([...voices.values()].sort(), KOKORO_RING.slice(0, -1).sort());
+});
+
+test('an agent outside the resolved cast still speaks', () => {
+  // The 0.8.9 bug, on a published roster rather than on Gemini's: a session set
+  // to "all agents" does not keep its cast, and an unnamed voice used to send
+  // the turn to the local engine however good the engine was.
+  const { voices, userVoice, ring } = ringVoices(ids(3, 'cast'), KOKORO_RING);
+  const stranger = voiceForTurn({ agentId: 'nobody-told-us', mine: false }, voices, ring, userVoice);
+  assert.ok(ring.includes(stranger), 'a stranger gets a real voice from the ring');
+
+  // And your own turn is always the held-back one.
+  assert.equal(voiceForTurn({ agentId: null, mine: true }, voices, ring, userVoice), userVoice);
+});
+
+test('a roster of one is shared rather than leaving agents mute', () => {
+  const { voices, userVoice } = ringVoices(ids(3, 'lonely'), ['only_voice']);
+  assert.equal(userVoice, 'only_voice');
+  for (const id of ids(3, 'lonely')) assert.equal(voices.get(id), 'only_voice');
+});
+
+test('an empty roster deals nothing, so the window falls back to its own voices', () => {
+  const { voices, userVoice, ring } = ringVoices(ids(3, 'empty'), []);
+  assert.equal(voices.size, 0);
+  assert.equal(userVoice, null);
+  assert.deepEqual(ring, []);
 });

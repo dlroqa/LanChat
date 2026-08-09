@@ -386,6 +386,10 @@ function SessionPanel({ peer, streaming, awaiting, typing, commits, speech }) {
 function engineName(engine) {
   if (engine === 'gemini') return 'Gemini';
   if (engine === 'xai') return 'xAI';
+  // Also on this computer, but a named model rather than the platform's own
+  // voices — and worth naming, because the difference is audible and is the
+  // whole reason somebody downloaded it.
+  if (engine === 'kokoro') return 'Kokoro';
   if (engine === 'local') return 'This computer';
   return null;
 }

@@ -18,6 +18,31 @@ icon: build/icon.png
 # WebRTC needs the built renderer; ensure it exists before packaging (npm run dist does this).
 asar: true
 
+# The offline reading voice needs a native library, and a .node binary cannot be
+# dlopen'd from inside an asar — the loader needs a real path on disk. Electron
+# redirects reads of unpacked paths transparently, so `require('onnxruntime-node')`
+# still resolves; this only decides where the bytes physically live. The first
+# thing in this app to need unpacking.
+#
+# Note what is *not* here: no `files` entry for onnxruntime-node or phonemizer.
+# Dependencies in package.json are packed automatically — that is how ws has
+# always shipped without being named — and naming node_modules in the `files`
+# allowlist above makes electron-builder fall back to packing the whole tree,
+# putting src/renderer, test/ and scripts/ back in the asar. Measured, not
+# guessed: it took the asar from 3.4 MB to 15 MB. The same trap applies to a
+# per-platform `files:` list containing only exclusions, which gets `**/*`
+# prepended and has exactly the same effect. Pruning therefore happens in
+# build/afterPack.js, where the target platform and architecture are known
+# facts rather than glob macros.
+asarUnpack:
+  - node_modules/onnxruntime-node/**
+  # The WebAssembly backend, unpacked for a different reason than the native one:
+  # its Node entry does a dynamic ESM import of ort-wasm-simd-threaded.mjs, and
+  # ESM resolution inside an asar is not a thing to rely on. Unpacked it is an
+  # ordinary file on disk and the question does not arise. build/afterPack.js
+  # prunes it to three files first, so this is ~12 MB rather than ~137 MB.
+  - node_modules/onnxruntime-web/**
+
 # Ad-hoc signs the macOS bundle so Apple Silicon will launch it (see the script).
 afterPack: build/afterPack.js
 

@@ -11,6 +11,8 @@ const { createRemoteAgents } = require('./agents/remote');
 const { createSessions, isSessionId } = require('./sessions');
 const { createDictation } = require('./dictation');
 const { createSpeech, engineOf } = require('./speech');
+const { createKokoro } = require('./tts/kokoro');
+const { createWeights } = require('./tts/weights');
 const { NoteStore } = require('./notes');
 const { createTasks, isTaskId } = require('./tasks');
 const { ScheduleRegistry } = require('./tasks/schedules');
@@ -80,6 +82,10 @@ const SETTABLE_KEYS = Object.freeze([
   // — so unlike the engine it rides the ordinary save. It changes only how a
   // reading is paced, never whether the words leave the machine.
   'agentSpeechPreload',
+  // How fast the offline engine reads. As plain a preference as the volume
+  // slider beside it, and for the same reason: it changes how a reading sounds,
+  // never where the words go.
+  'agentSpeechSpeed',
   'pttEnabled',
   'pttKey',
   'pttCustomCode',
@@ -171,10 +177,29 @@ function createIpc({
   // crosses the wire.
   const dictation = createDictation({ config });
 
+  // The offline reading voice: Kokoro, run on this machine through ONNX Runtime.
+  //
+  // Constructed here but inert — building it starts no process, loads no model
+  // and touches no native code. All of that waits for the first turn it is asked
+  // to speak, and it is only ever asked once somebody has downloaded the weights
+  // and chosen it in Settings. Progress from a download rides the same bus every
+  // other long job in main reports on.
+  const kokoro = createKokoro({
+    weights: createWeights({
+      userDataDir,
+      onProgress: (p) => bus.emit('tts-progress', p),
+    }),
+    config,
+  });
+
   // Text-to-speech for session discussions. Unlike dictation above this one can
   // cross the wire — but only once somebody has switched the engine to 'gemini'
   // and pasted a key. Left alone it opens no socket at all; see speech.js.
-  const speech = createSpeech({ config, userDataDir, safeStorage });
+  //
+  // Kokoro is the exception that proves the rule: it is an engine that can be
+  // chosen without anything ever leaving the machine, which is why it is handed
+  // in here rather than reached for inside.
+  const speech = createSpeech({ config, userDataDir, safeStorage, kokoro });
 
   // Notes: the Task Bar's own writing. Local to this machine, never sent, and
   // stored in halves — see src/main/notes.js for why the bodies are not in the
@@ -250,6 +275,10 @@ function createIpc({
   bus.on('tailnet-status', (s) => emit('tailnet-status', s));
   bus.on('file-progress', (p) => emit('file-progress', p));
   bus.on('update-progress', (p) => emit('update-progress', p));
+  // Downloading the offline voice model, on the same one channel as every other
+  // long job so Settings watches it the way UpdateSection already watches an
+  // update.
+  bus.on('tts-progress', (p) => emit('tts-progress', p));
   bus.on('link-stats', (s) => emit('link-stats', s));
   bus.on('pip', (on) => emit('pip', on));
   bus.on('update-log', (m) => emit('toast', { level: 'info', text: m }));
@@ -1419,6 +1448,52 @@ function createIpc({
   ipcMain.handle('lanchat:setSpeechKey', (_e, { provider, key } = {}) => {
     const result = speech.setKey(provider, key);
     return { ...result, speech: speech.status() };
+  });
+
+  // Fetching the offline voice model — 93 MB, once, when the user asks.
+  //
+  // Deliberately not on first launch. Nothing is downloaded until somebody
+  // presses the button, which keeps the app's promise about itself intact: a
+  // person who never wants a reading voice never spends the bandwidth, and there
+  // is no background fetch to explain.
+  //
+  // One at a time, and cancellable. A second press while one is running is
+  // answered rather than starting a competing download over the same files.
+  let ttsDownload = null;
+  ipcMain.handle('lanchat:downloadSpeechModel', async () => {
+    if (ttsDownload) return { ok: false, error: 'That download is already running.' };
+    const controller = new AbortController();
+    ttsDownload = controller;
+    try {
+      const result = await kokoro.download({ signal: controller.signal });
+      // Pressing Download is the request, so a finished download selects the
+      // engine it just fetched. Only from 'local', though: somebody who is part
+      // way through setting up Gemini and downloads this as well has not asked
+      // to be switched off it.
+      if (result.ok && engineOf(config.get('agentSpeechEngine')) === 'local') {
+        config.set({ agentSpeechEngine: 'kokoro' });
+      }
+      return { ...result, speech: speech.status(), config: publicConfig(config) };
+    } finally {
+      ttsDownload = null;
+    }
+  });
+
+  ipcMain.handle('lanchat:cancelSpeechModel', () => {
+    ttsDownload?.abort();
+    return { ok: true };
+  });
+
+  // Giving the disk back. The engine falls to the local voice by itself the
+  // moment the weights are gone — activeProvider() asks whether they are there
+  // on every turn — but the setting is moved too, so Settings does not show an
+  // engine that cannot speak.
+  ipcMain.handle('lanchat:removeSpeechModel', () => {
+    const result = kokoro.remove();
+    if (result.ok && engineOf(config.get('agentSpeechEngine')) === 'kokoro') {
+      config.set({ agentSpeechEngine: 'local' });
+    }
+    return { ...result, speech: speech.status(), config: publicConfig(config) };
   });
 
   // ---- device identity and known peers ----

@@ -92,6 +92,20 @@ const DEFAULTS = Object.freeze({
   // Held apart on purpose: a key for one provider must never be sent to the
   // other, which is a thing a single field makes easy to get wrong.
   agentSpeechKeys: {},
+  // How fast the offline engine reads, 0.5 to 2. Only Kokoro has this control —
+  // the two online engines have no speed parameter — so it does nothing until
+  // that engine is chosen. An ordinary preference on the ordinary save: it
+  // changes how something sounds, not where anything goes.
+  agentSpeechSpeed: 1,
+  // Which graph optimisation level ONNX Runtime survived on this machine.
+  //
+  // Not a preference and not in the bridge — it is a fact about the hardware,
+  // discovered the only way it can be. ONNX Runtime's default level segfaults
+  // while loading a quantised model on CPUs without AVX-family instructions, and
+  // a segfault cannot be caught, only observed from the parent process. So the
+  // engine probes once, writes down what worked, and never pays for the crash
+  // again. Null means "not yet asked". See main/tts/kokoro.js.
+  speechModelOptimization: null,
   pttEnabled: true,
   pttKey: null, // null = platform default (Command on macOS, Control elsewhere)
   pttCustomCode: null, // KeyboardEvent.code when pttKey === 'custom'

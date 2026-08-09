@@ -142,6 +142,12 @@ contextBridge.exposeInMainWorld('lanchat', {
   // Named per provider: there is no "the" key any more, and one provider must
   // never be handed another's.
   setSpeechKey: (provider, key) => invoke('lanchat:setSpeechKey', { provider, key }),
+  // The offline voice's weights: fetched on request and never before, and
+  // removable again. Progress arrives on the ordinary event channel as
+  // 'tts-progress', the same way an update download reports.
+  downloadSpeechModel: () => invoke('lanchat:downloadSpeechModel'),
+  cancelSpeechModel: () => invoke('lanchat:cancelSpeechModel'),
+  removeSpeechModel: () => invoke('lanchat:removeSpeechModel'),
 
   // Documents an agent is asked to read. Both return a verdict per file — name,
   // size and either `ok` or the reason — never the text, which is read in main

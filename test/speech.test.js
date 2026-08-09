@@ -600,12 +600,27 @@ test('status reports whether a key exists and never what it is', () => {
   const config = fakeConfig({ agentSpeechEngine: 'gemini' });
   const speech = createSpeech({ config, userDataDir: tempDir(), safeStorage: fakeSafeStorage });
 
-  assert.deepEqual(speech.status(), {
-    engine: 'gemini',
-    keys: { gemini: false, xai: false },
-    active: 'local',
-    model: DEFAULT_MODEL,
-  });
+  const status = speech.status();
+
+  // The four fields Settings has always read. Asserted field by field rather
+  // than as a whole object so that adding a row to the table — Kokoro's download
+  // state, below — does not fail a test about API keys.
+  assert.equal(status.engine, 'gemini');
+  assert.deepEqual(status.keys, { gemini: false, xai: false });
+  assert.equal(status.active, 'local');
+  assert.equal(status.model, DEFAULT_MODEL);
+
+  // Kokoro takes no key, so it must not appear in the key map at all: Settings
+  // reads that map to decide whether to draw a key field, and `false` there
+  // would mean "needs a key you have not given" rather than "needs no key".
+  assert.ok(!('kokoro' in status.keys));
+
+  // With no offline engine wired in, it is simply not ready — the same answer a
+  // missing key gives, and the same fallback.
+  assert.equal(status.kokoro.ready, false);
+  assert.equal(status.kokoro.bytes, 0);
+  assert.ok(status.kokoro.total > 0);
+  assert.equal(status.kokoro.voices.length, 13);
 
   speech.setKey('gemini', 'a-real-key');
   const after = speech.status();

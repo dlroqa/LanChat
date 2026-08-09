@@ -25,6 +25,9 @@
     "test:coverage": "node --test --experimental-test-coverage --test-force-exit"
   },
   "dependencies": {
+    "onnxruntime-node": "1.23.2",
+    "onnxruntime-web": "1.23.2",
+    "phonemizer": "^1.2.1",
     "ws": "^8.18.0"
   },
   "devDependencies": {

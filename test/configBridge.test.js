@@ -187,7 +187,10 @@ test('no API key is ever handed to the renderer', () => {
   // What Settings is told instead: which providers have a key, which engine is
   // chosen, and which one can really speak. Never a key.
   const status = call('lanchat:speechStatus');
-  assert.deepEqual(Object.keys(status).sort(), ['active', 'engine', 'keys', 'model']);
+  assert.deepEqual(Object.keys(status).sort(), ['active', 'engine', 'keys', 'kokoro', 'model', 'speed']);
+  // Only the engines that are somebody else's service appear in the key map.
+  // Kokoro runs here and has no account, so it has no entry — see status() in
+  // main/speech.js for why absent and false are not the same answer.
   assert.deepEqual(status.keys, { gemini: false, xai: false });
   assert.equal(status.active, 'local');
 

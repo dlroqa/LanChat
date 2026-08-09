@@ -65,6 +65,7 @@ export const PAUSED = 'paused';
 // work it out.
 export const GEMINI = 'gemini';
 export const XAI = 'xai';
+export const KOKORO = 'kokoro';
 export const LOCAL = 'local';
 
 // How much text goes into one utterance on the local path.

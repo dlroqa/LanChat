@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Play, Stop } from '../lib/icons.jsx';
+import { Play, Stop, Download } from '../lib/icons.jsx';
 import { previewVoice } from '../lib/agentSpeech.js';
 import { VOICES } from '../lib/agentVoice.js';
+import { formatBytes } from '../lib/util.js';
 
 const api = window.lanchat;
 
@@ -32,6 +33,16 @@ const PROVIDERS = [
     label: 'xAI — Grok',
     key: { label: 'xAI API key', id: 'speech-key-xai' },
     sends: 'xAI',
+  },
+  {
+    // The fourth engine, and the first that is neither the platform's nor
+    // somebody's API: an open model that runs here. No key, because there is no
+    // account — what stands between it and speaking is 93 MB on disk, which is
+    // why this row shows a download where the two above show a key field.
+    id: 'kokoro',
+    label: 'Kokoro — on this computer',
+    key: null,
+    local: true,
   },
 ];
 
@@ -66,6 +77,15 @@ export default function SpeechSettings({ value, onChange, soundUrl, onEngineChan
   const [preview, setPreview] = useState(null); // { state, engine, error } | null
   const stopVoice = useRef(null);
 
+  // The offline model: whether it is here, how much of it, and what went wrong
+  // getting it. Seeded from the same status call as everything else, then kept
+  // current by the progress events below.
+  const [model, setModel] = useState({ ready: false, supported: true, bytes: 0, total: 0 });
+  const [fetching, setFetching] = useState(false);
+  const [got, setGot] = useState(null); // { received, total } while downloading
+  const [modelError, setModelError] = useState(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+
   const provider = byId(engine);
   const hasKey = Boolean(keys[engine]);
   const on = value.agentSpeechEnabled === true;
@@ -77,6 +97,7 @@ export default function SpeechSettings({ value, onChange, soundUrl, onEngineChan
     setEngineState(byId(status.engine).id);
     setKeys(status.keys || {});
     setActive(status.active || 'local');
+    if (status.kokoro) setModel(status.kokoro);
   }
 
   useEffect(() => {
@@ -85,6 +106,17 @@ export default function SpeechSettings({ value, onChange, soundUrl, onEngineChan
     return () => {
       live = false;
     };
+  }, []);
+
+  // Download progress, on the one event channel main reports every long job on —
+  // the same one UpdateSection watches. Subscribed for the life of the panel
+  // rather than only while downloading, so a download that was already running
+  // when Settings opened shows its progress instead of looking stalled.
+  useEffect(() => {
+    if (!api.onEvent) return undefined;
+    return api.onEvent((evt) => {
+      if (evt?.type === 'tts-progress') setGot(evt.payload);
+    });
   }, []);
 
   // The voice the audition asks for. Fetched per engine, and per key, because a
@@ -141,6 +173,53 @@ export default function SpeechSettings({ value, onChange, soundUrl, onEngineChan
     }
   }
 
+  // Getting the model. The only thing in this panel that downloads anything, and
+  // it happens on a press rather than on a launch.
+  async function fetchModel() {
+    setFetching(true);
+    setModelError(null);
+    setGot({ received: model.bytes || 0, total: model.total });
+    try {
+      const res = await api.downloadSpeechModel?.();
+      if (!res?.ok) {
+        // The cause and the way out, rather than "failed" — the button beside
+        // this line becomes Retry.
+        setModelError(
+          res?.detail ? `${res.error} ${res.detail}` : res?.error || 'The download did not finish.'
+        );
+        return;
+      }
+      absorb(res.speech);
+      // Main selects this engine once the weights are whole, so the panel asks
+      // App to re-fetch the roster exactly as changing the dropdown does.
+      onEngineChange?.();
+    } finally {
+      setFetching(false);
+      setGot(null);
+    }
+  }
+
+  function cancelModel() {
+    api.cancelSpeechModel?.();
+  }
+
+  async function removeModel() {
+    setConfirmRemove(false);
+    setBusy(true);
+    setModelError(null);
+    try {
+      const res = await api.removeSpeechModel?.();
+      if (!res?.ok) {
+        setModelError(res?.error || 'The model could not be removed.');
+        return;
+      }
+      absorb(res.speech);
+      onEngineChange?.();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function forgetKey() {
     setBusy(true);
     setKeyError(null);
@@ -164,7 +243,16 @@ export default function SpeechSettings({ value, onChange, soundUrl, onEngineChan
       ? `Reading with ${byId(active).label.split(' — ')[0]}.`
       : engine === 'local'
         ? 'Reading with this computer’s voices.'
-        : `No ${provider.label.split(' — ')[0]} key saved — reading with this computer’s voices until you add one.`;
+        : provider.local
+          ? // The same sentence shape as a missing key, because it is the same
+            // situation: an engine chosen but not yet able to speak, reading
+            // locally in the meantime rather than failing. Except when this
+            // machine could never run it, which is not something waiting to be
+            // fixed and should not be worded as though it were.
+            model.supported === false
+            ? 'Kokoro cannot run on this computer — reading with this computer’s voices.'
+            : 'Kokoro is not downloaded yet — reading with this computer’s voices until it is.'
+          : `No ${provider.label.split(' — ')[0]} key saved — reading with this computer’s voices until you add one.`;
 
   // What to call a voice in a sentence: "this computer’s voices" for the local
   // engine, and the provider's short name otherwise. The one place that maps an
@@ -183,6 +271,12 @@ export default function SpeechSettings({ value, onChange, soundUrl, onEngineChan
         ? `Spoken by ${spokeName(preview.engine)}.`
         : `${preview.error} This computer’s voices read it instead.`;
   const previewWorking = preview?.state === 'spoke' && preview.engine !== 'local';
+
+  // How far the download has got. Counted against the manifest's total rather
+  // than the reply's, so resuming a part-finished download starts at the share
+  // already on disk instead of at zero.
+  const modelTotal = got?.total || model.total || 0;
+  const modelPct = modelTotal ? Math.min(100, Math.round(((got?.received || 0) / modelTotal) * 100)) : 0;
 
   function endVoicePreview() {
     stopVoice.current?.();
@@ -289,6 +383,136 @@ export default function SpeechSettings({ value, onChange, soundUrl, onEngineChan
         )}
       </div>
 
+      {/* A machine with no native library for its platform and architecture is
+          not offered a download it could never use.
+
+          Every platform LanChat ships has one — the runtime is pinned to a
+          version that publishes all of them, and test/ttsPackaging.test.js holds
+          that pin — so this is a guard against a broken build rather than a
+          state anybody should reach. It still says so plainly instead of hiding
+          the row: a missing feature with no explanation is worse than a missing
+          feature with one. */}
+      {provider.local && model.supported === false && (
+        <div className="field">
+          <div className="hint" role="status">
+            This build has no Kokoro for {navigator.platform || 'this computer'}. That is a fault in the build
+            rather than a limit of your machine — the other voices all still work.
+          </div>
+        </div>
+      )}
+
+      {provider.local && model.supported !== false && (
+        <div className="field">
+          <label htmlFor="speech-model">Voice model</label>
+          <div className="row" id="speech-model">
+            {/* One primary action at a time, and it says which of the four
+                states this is in rather than being a button that means
+                different things silently. */}
+            {model.ready ? (
+              confirmRemove ? (
+                <>
+                  <button className="btn danger" disabled={busy} onClick={removeModel}>
+                    Remove {formatBytes(model.total)}?
+                  </button>
+                  <button className="btn ghost" disabled={busy} onClick={() => setConfirmRemove(false)}>
+                    Keep
+                  </button>
+                </>
+              ) : (
+                // An ordinary button rather than the primary one: destructive,
+                // so it should not be the loudest thing on the row — but not a
+                // ghost either, because alone on its row a borderless button
+                // reads as a caption rather than as something you can press.
+                // The danger colour arrives on the confirmation below, which is
+                // where the destruction actually is.
+                <button className="btn" disabled={!on || busy} onClick={() => setConfirmRemove(true)}>
+                  Remove
+                </button>
+              )
+            ) : fetching ? (
+              <button className="btn ghost" onClick={cancelModel}>
+                Stop
+              </button>
+            ) : (
+              <button className="btn primary" disabled={!on || busy} onClick={fetchModel}>
+                <Download size={16} />
+                {modelError ? 'Try again' : `Download ${formatBytes(model.total)}`}
+              </button>
+            )}
+          </div>
+
+          {/* The bar keeps its space whether or not it is filling, so the panel
+              does not jump a row taller the moment a download starts. */}
+          <div style={{ marginTop: 10, minHeight: 22 }}>
+            {fetching && (
+              <>
+                <div
+                  className="progress"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={modelPct}
+                  aria-label="Downloading the voice model"
+                >
+                  <span style={{ width: `${modelPct}%` }} />
+                </div>
+                <div className="hint" aria-live="polite">
+                  {modelPct}% of {formatBytes(model.total)}
+                </div>
+              </>
+            )}
+            {!fetching && model.ready && (
+              <div className="hint">
+                {formatBytes(model.total)} on this computer. {model.voices?.length ?? 13} voices.
+                {/* Said only when it is the slower of the two, because on every
+                    other machine the runtime is an implementation detail nobody
+                    needs to think about. Where it does apply it is the answer to
+                    "why is this slower than my colleague's" — which is otherwise
+                    an unanswerable question. */}
+                {model.backend === 'wasm' &&
+                  ' Running through WebAssembly on this platform, which is slower than usual.'}
+              </div>
+            )}
+          </div>
+
+          {/* The sentence that is the reason to choose this engine at all — the
+              exact counterpart of "sent to Google" beside the key fields above.
+              LanChat's promise is that peers talk directly and nothing goes
+              through anybody's server; this is the reading voice that keeps it. */}
+          <div style={{ fontSize: 12, color: 'var(--fg-faint)', marginTop: 6 }}>
+            Kokoro runs on this computer. The agents&rsquo; replies are read without a word of them leaving
+            it, and it keeps working with no network at all. The model is downloaded once, from Hugging Face,
+            and checked against a known fingerprint before it is used.
+          </div>
+
+          {/* Below the control it belongs to, in the danger colour *and* in
+              words, so the failure is not carried by colour alone. */}
+          {modelError && (
+            <div style={{ fontSize: 12, color: 'var(--danger)', marginTop: 6 }} role="alert">
+              {modelError}
+            </div>
+          )}
+        </div>
+      )}
+
+      {provider.local && model.ready && model.supported !== false && (
+        <div className="field volume-field">
+          <label htmlFor="speech-speed">
+            Reading speed <span className="volume-pct">{(value.agentSpeechSpeed ?? 1).toFixed(2)}×</span>
+          </label>
+          <input
+            id="speech-speed"
+            type="range"
+            min="0.5"
+            max="2"
+            step="0.05"
+            value={value.agentSpeechSpeed ?? 1}
+            disabled={!on}
+            onChange={(e) => onChange({ agentSpeechSpeed: Number(e.target.value) })}
+          />
+        </div>
+      )}
+
       {provider.key && (
         <div className="field">
           <label htmlFor={provider.key.id}>{provider.key.label}</label>
@@ -353,7 +577,7 @@ export default function SpeechSettings({ value, onChange, soundUrl, onEngineChan
           <div style={{ fontWeight: 500 }}>Prepare the whole session first</div>
           <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>
             Synthesises every turn before playing, so there is no pause between them. It waits once at the
-            start instead. Affects the online voices only.
+            start instead. Does nothing for this computer&rsquo;s own voices, which have nothing to fetch.
           </div>
         </div>
         <button

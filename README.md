@@ -25,6 +25,8 @@ A simple, peer-to-peer **LAN & Tailscale chat** app — text, voice, video, and 
 | 👥 **Group video calls** | Call several people at once — a direct peer-to-peer mesh, no server. Best for small groups (up to ~5 others). |
 | 📻 **Push to talk** | Hold ⌘ (Ctrl on Windows/Linux) to transmit instantly — walkie-talkie style, no ringing. |
 | 🎤 **Dictation** *(macOS)* | Speak instead of typing, in any thread. Tap the microphone on the side panel or hold a key, and the words land in the message box for you to read before they go. Transcribed on your own Mac by the [FluidVoice](https://github.com/altic-dev/FluidVoice) app, using whichever engine and custom dictionary you set up there — the audio never touches disk and never leaves the machine. |
+| 🔈 **Sessions read aloud** | The other direction: a session of agents can be listened to instead of watched. Each agent is dealt a voice of its own, so four of them talking sounds like four people rather than one narrator reading a transcript — and the voice reading *your* questions is held back from the cast, so you never sound like a participant. In a Discussion each turn is spoken as it lands; any session can be played back from any turn, with the word being said lit in the bubble as it goes. |
+| 🗣️ **An offline voice** | **Settings → TTS** offers four voices, and the interesting one needs no account and no network. **Kokoro** is an open-source speech model (82M parameters, Apache-2.0) that runs on your own machine: press **Download**, wait for 89 MB once, and from then on your agents are read aloud with nothing leaving the building — on a plane, on a locked-down network, forever. It is checked against a known fingerprint before it is ever loaded, and it brings thirteen distinct voices with it. There is a reading-speed slider. If you would rather, **Gemini** or **xAI** will read instead with an API key of yours — and whatever you choose, anything that goes wrong falls back to your computer's own voices rather than to silence, with the panel naming which one actually spoke. |
 | 🎚️ **Source selection** | Choose your microphone and camera — in Settings, or switch live mid-call. |
 | 📺 **Docked call panel** | Video plays portrait in the right panel; one button expands it full screen. |
 | 🪟 **Picture-in-picture** | Minimise during a video call and it shrinks to a floating tile in the top-right corner, always on top. |
@@ -251,6 +253,40 @@ talk → Dictation key** and two things change: push-to-talk goes back to being 
 dictation can write into a conversation with a person as well as an agent — there is a toggle for
 that, which stays disabled until the two keys really are different, since one key cannot open the
 radio and start the recorder in the same thread.
+
+### Reading a session aloud
+
+The inverse of dictation, and it works on every platform. A session of agents can be listened to
+rather than read: press play on the right-hand panel to hear the whole thing from the top, or the
+speaker on any single turn to start from there. In a session set to **Discussion**, each answer is
+spoken as it arrives.
+
+Everyone gets their own voice. The cast is dealt from a ring, the same way each agent gets its own
+colour, so four agents in a room sound like four people — and the voice that reads *your* questions
+is held back from that ring, so the narrator never sounds like a participant. The word currently
+being spoken is lit inside the message as it goes.
+
+**Choosing a voice.** **Settings → TTS** has four:
+
+| | |
+|---|---|
+| **This computer's voices** | The default. Whatever your operating system already has. Free, instant, offline — and it sounds like it. |
+| **Kokoro — on this computer** | An open-source speech model that runs locally. Press **Download** once for 89 MB and it works from then on, including with no network at all. Nothing you say or your agents say ever leaves the machine. Thirteen voices, and a reading-speed slider. |
+| **Gemini — Google** | Excellent, needs an API key of yours, and sends each turn to Google to be read. |
+| **xAI — Grok** | The same trade, with xAI. |
+
+**About the offline one.** Kokoro is 82M parameters, Apache-2.0, and is downloaded on demand — never
+at first launch, and never before you ask. Every file is checked against a fingerprint written into
+the app before it is loaded, and the download resumes rather than restarts if it is interrupted.
+**Remove** gives the disk space back. It runs in a process of its own, so a long turn never freezes
+the window, and the model is unloaded after a few minutes of quiet rather than sitting in memory.
+
+On most machines it uses a native runtime; on any platform that has no native build it falls back to
+a WebAssembly one automatically, which is slower and says so in Settings, but sounds the same.
+
+**When something is missing.** An engine you have chosen but cannot use — no API key yet, weights not
+downloaded, no network — reads with your computer's own voices instead of failing, and the panel says
+plainly which one actually spoke. The setting is never changed behind your back.
 
 ### Talking to people on another tailnet (Tailscale device sharing)
 

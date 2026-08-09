@@ -109,22 +109,57 @@ function buildPage(bundle) {
 // the authority on the engine, so setSpeechEngine answers the way ipc.js does.
 let engine = 'local';
 const keys = { gemini: false, xai: false };
+// Kokoro's weights, as main reports them. Readiness is what activeProvider()
+// asks instead of asking for a key, so an engine chosen without them reads
+// locally in exactly the same way one chosen without a key does.
+const RING = ['af_bella','am_fenrir','bf_emma','bm_george','af_nicole','am_michael',
+              'af_aoede','bm_fable','bf_isabella','am_puck','af_sarah','bm_lewis','af_heart'];
+const model = { ready: false, supported: true, backend: 'wasm', bytes: 0, total: 92826202, voices: RING };
+// The download the test drives by hand: it never finishes on its own, so the
+// harness can photograph it mid-flight.
+let resolveDownload = null;
+let failDownload = false;
+const listeners = new Set();
+const fire = (type, payload) => listeners.forEach((fn) => fn({ type, payload }));
 // What main really answers: the chosen engine, which providers hold a key, and
 // which one can actually speak — a provider chosen without a key reads locally.
 const status = () => ({
   engine,
   keys: { ...keys },
-  active: engine !== 'local' && keys[engine] ? engine : 'local',
+  active:
+    engine === 'kokoro'
+      ? (model.ready ? 'kokoro' : 'local')
+      : engine !== 'local' && keys[engine] ? engine : 'local',
+  kokoro: { ...model },
+  speed: 1,
   model: 'test-model',
 });
 window.lanchat = {
   pickSound: async () => null,
   speechStatus: async () => status(),
+  // The one event channel every long job in main reports on.
+  onEvent: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+  downloadSpeechModel: () => new Promise((resolve) => {
+    resolveDownload = () => {
+      if (failDownload) return resolve({ ok: false, error: 'Could not download the voice model.', detail: 'the connection stalled' });
+      model.ready = true;
+      model.bytes = model.total;
+      engine = 'kokoro';
+      resolve({ ok: true, speech: status() });
+    };
+  }),
+  cancelSpeechModel: async () => ({ ok: true }),
+  removeSpeechModel: async () => {
+    model.ready = false;
+    model.bytes = 0;
+    engine = 'local';
+    return { ok: true, speech: status() };
+  },
   // The preload signature, not the IPC one: preload.js takes these as plain
   // arguments and wraps them on the way through. engineOf() in main is what
   // refuses an unknown engine, so the stub refuses one the same way.
   setSpeechEngine: async (next) => {
-    engine = ['gemini', 'xai'].includes(next) ? next : 'local';
+    engine = ['gemini', 'xai', 'kokoro'].includes(next) ? next : 'local';
     return { agentSpeechEngine: engine, speech: status() };
   },
   setSpeechKey: async (provider, key) => {
@@ -138,7 +173,10 @@ window.lanchat = {
   speechVoices: async () => ({
     ok: true,
     provider: engine,
-    voices: engine === 'xai' ? ['Ara', 'Eve', 'Leo', 'Rex', 'Sal'] : [],
+    voices:
+      engine === 'xai' ? ['Ara', 'Eve', 'Leo', 'Rex', 'Sal']
+      : engine === 'kokoro' && model.ready ? RING
+      : [],
   }),
   // Records the voice it was asked for, and answers the way main does: an engine
   // with a key speaks and names itself; anything else reads locally.
@@ -338,6 +376,92 @@ const out = {};
   // Stop it so nothing bleeds into the next frame.
   [...document.querySelectorAll('button')].find((b) => b.title === 'Stop')?.click();
   await wait(80);
+
+  // ---- Kokoro: the engine with no key and a download instead ----
+  //
+  // Four states, and each has to be distinguishable on screen: not downloaded,
+  // downloading, ready, and failed. This is the part a DOM stand-in cannot
+  // check, because what matters is that the row swaps its primary action and
+  // that the panel does not jump a row taller when the bar appears.
+  setSelect($('#speech-engine'), 'kokoro');
+  await wait(250);
+  out.kokoroSelected = $('#speech-engine').value;
+  // No key box, ever — there is no account to have one for.
+  out.kokoroKeyBoxes = document.querySelectorAll('input[type=password]').length;
+  // And no claim that anything is sent, because nothing is.
+  out.kokoroSaysSentAway = /sent to (Google|xAI)/.test(panelText());
+  out.kokoroSaysLocal = panelText().includes('runs on this computer');
+  out.kokoroSaysVerified = panelText().includes('known fingerprint');
+  // Chosen but not downloaded: the same "reading locally until…" shape a
+  // keyless Gemini gets, rather than looking broken.
+  out.kokoroColdState = state();
+  out.kokoroColdAccented = $('.speech-engine-state').classList.contains('on');
+  const dlBtn = () => [...document.querySelectorAll('#speech-model button')][0];
+  out.kokoroDownloadLabel = dlBtn()?.textContent.trim() || null;
+  out.kokoroDownloadIsPrimary = dlBtn()?.classList.contains('primary') || false;
+  // No speed slider until there is a model to apply it to.
+  out.kokoroSpeedBeforeDownload = Boolean($('#speech-speed'));
+  const heightCold = $('#settings').getBoundingClientRect().height;
+
+  // Downloading: a real progress bar, announced, with a way to stop.
+  dlBtn().click();
+  await wait(120);
+  fire('tts-progress', { received: 41000000, total: 92826202, file: 'model.onnx' });
+  await wait(120);
+  const bar = $('#settings .progress');
+  out.kokoroBar = Boolean(bar);
+  out.kokoroBarRole = bar?.getAttribute('role') || null;
+  out.kokoroBarNow = bar?.getAttribute('aria-valuenow') || null;
+  out.kokoroBarFill = bar ? bar.querySelector('span').style.width : null;
+  out.kokoroPctText = [...document.querySelectorAll('#settings .hint')].map((n) => n.textContent).join(' | ');
+  out.kokoroStopLabel = dlBtn()?.textContent.trim() || null;
+  // The bar's row is reserved, so arriving at it does not shove the rest of the
+  // panel down.
+  out.kokoroHeightJump = Math.round($('#settings').getBoundingClientRect().height - heightCold);
+
+  // Ready: the size on disk, the voice count, a speed slider, and Remove.
+  resolveDownload();
+  await wait(300);
+  out.kokoroReadyState = state();
+  out.kokoroReadyAccented = $('.speech-engine-state').classList.contains('on');
+  out.kokoroReadyHint = [...document.querySelectorAll('#settings .hint')].map((n) => n.textContent).join(' | ');
+  // A machine falling back to the WebAssembly runtime is told so. Without this
+  // line "why is this slower than my colleague's?" has no answer on screen —
+  // and it is said only on the machines it applies to, because everywhere else
+  // the runtime is an implementation detail.
+  out.kokoroSaysWasm = panelText().includes('WebAssembly');
+  out.kokoroSpeedAfterDownload = Boolean($('#speech-speed'));
+  out.kokoroSpeedRange = $('#speech-speed') ? [$('#speech-speed').min, $('#speech-speed').max] : null;
+  out.kokoroRemoveLabel = dlBtn()?.textContent.trim() || null;
+  // Destructive, so it is the quiet button rather than the loud one.
+  out.kokoroRemoveIsPlain = dlBtn() ? !dlBtn().classList.contains("primary") && !dlBtn().classList.contains("ghost") : false;
+
+  // Removing 93 MB somebody waited for asks first.
+  dlBtn().click();
+  await wait(120);
+  out.kokoroConfirmLabel = dlBtn()?.textContent.trim() || null;
+  out.kokoroConfirmIsDanger = dlBtn()?.classList.contains('danger') || false;
+  [...document.querySelectorAll('#speech-model button')].find((b) => b.textContent.trim() === 'Keep')?.click();
+  await wait(120);
+  out.kokoroKeptAfterCancel = dlBtn()?.textContent.trim() || null;
+
+  // Failed: the cause, in the danger colour and in words, with a way out.
+  await window.lanchat.removeSpeechModel();
+  setSelect($('#speech-engine'), 'local');
+  await wait(120);
+  setSelect($('#speech-engine'), 'kokoro');
+  await wait(250);
+  failDownload = true;
+  dlBtn().click();
+  await wait(120);
+  resolveDownload();
+  await wait(300);
+  const alert = $('#settings [role=alert]');
+  out.kokoroErrorText = alert?.textContent || null;
+  out.kokoroErrorIsAlert = Boolean(alert);
+  out.kokoroErrorColoured = alert ? getComputedStyle(alert).color : null;
+  out.kokoroRetryLabel = dlBtn()?.textContent.trim() || null;
+  failDownload = false;
 
   // Back to Gemini: its key is still saved, which is the point of holding them
   // apart rather than in one field.
