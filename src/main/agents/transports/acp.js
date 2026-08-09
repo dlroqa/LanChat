@@ -29,6 +29,12 @@ const SUPPORTED_PROTOCOL_VERSIONS = [1];
 const MAX_PROTOCOL_VERSION = Math.max(...SUPPORTED_PROTOCOL_VERSIONS);
 
 const DEFAULT_TIMEOUT_MS = 180000;
+// Progress can keep a healthy agentic turn alive, but never without bound.
+const DEFAULT_MAX_RUN_MS = 15 * 60 * 1000;
+// After cancellation, a prompt response is the acknowledgement that permits
+// this session to be reused. Silence for this long retires the child instead.
+const DEFAULT_CANCEL_GRACE_MS = 5000;
+const DEFAULT_PROCESS_KILL_GRACE_MS = 2000;
 
 // How long a permission request may sit unanswered before it is refused for us.
 //
@@ -66,8 +72,18 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
   const args = Array.isArray(config.args) && config.args.length ? config.args.map(String) : ['acp'];
   const cwd = config.cwd || process.cwd();
   const budget = timeoutMs || DEFAULT_TIMEOUT_MS;
+  const promptInactivityBudget =
+    Number(config.promptInactivityMs) > 0 ? Number(config.promptInactivityMs) : budget;
   const approvalBudget =
     Number(config.approvalTimeoutMs) > 0 ? Number(config.approvalTimeoutMs) : DEFAULT_APPROVAL_TIMEOUT_MS;
+  const cancelGraceBudget =
+    Number(config.cancelGraceMs) > 0 ? Number(config.cancelGraceMs) : DEFAULT_CANCEL_GRACE_MS;
+  const processKillGraceBudget =
+    Number(config.processKillGraceMs) > 0 ? Number(config.processKillGraceMs) : DEFAULT_PROCESS_KILL_GRACE_MS;
+  const maxRunBudget =
+    Number(config.maxRunMs) > 0
+      ? Number(config.maxRunMs)
+      : Math.max(DEFAULT_MAX_RUN_MS, promptInactivityBudget);
 
   let child = null;
   let sessionId = null;
@@ -75,7 +91,7 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
   let buffer = '';
   let stderrTail = '';
   let authMethods = [];
-  const pending = new Map(); // json-rpc id -> {resolve, reject, timer, method}
+  const pending = new Map(); // json-rpc id -> call lifecycle entry
   const openApprovals = new Map(); // our approval id -> {rpcId, timer}
   let liveHandlers = null; // handlers for the in-flight prompt
   // Requests that went unanswered during the current run. Counted rather than
@@ -87,7 +103,33 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
     child.stdin.write(`${JSON.stringify(obj)}\n`);
   }
 
-  // Every call is on the clock, except while a human is being asked something.
+  // Remove an unresponsive process from service before killing it. Its event
+  // handlers are generation-guarded in start(), so a late exit or stdout chunk
+  // from this process cannot clear or write into the replacement.
+  function retireChild() {
+    const doomed = child;
+    if (!doomed) return;
+    for (const [approvalId] of [...openApprovals]) {
+      closeApproval(approvalId, 'deny', 'ended');
+    }
+    child = null;
+    sessionId = null;
+    buffer = '';
+    try {
+      doomed.kill('SIGTERM');
+    } catch {}
+    const forceKill = setTimeout(() => {
+      if (doomed.exitCode !== null || doomed.signalCode !== null) return;
+      try {
+        doomed.kill('SIGKILL');
+      } catch {}
+    }, processKillGraceBudget);
+    if (typeof forceKill.unref === 'function') forceKill.unref();
+  }
+
+  // Each call's normal clock is paused while a human is being asked something.
+  // A prompt's separate hard maximum is deliberately not paused: an active run
+  // cannot retain the child forever, even through repeated approval requests.
   //
   // Held and released together rather than per call: what is being waited on is
   // a person, and every outstanding call is waiting on them equally. Releasing
@@ -101,14 +143,106 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
     }
   }
 
+  function armBudget(rpcId, entry) {
+    entry.timer = setTimeout(
+      () => {
+        if (entry.method === 'session/prompt') beginPromptTimeout(rpcId, entry, 'inactivity');
+        else if (pending.delete(rpcId)) entry.reject(new Error(`ACP call '${entry.method}' timed out.`));
+      },
+      entry.method === 'session/prompt' ? promptInactivityBudget : budget
+    );
+  }
+
+  function clearEntryTimers(entry) {
+    if (entry.timer) clearTimeout(entry.timer);
+    if (entry.hardTimer) clearTimeout(entry.hardTimer);
+    if (entry.graceTimer) clearTimeout(entry.graceTimer);
+    entry.timer = null;
+    entry.hardTimer = null;
+    entry.graceTimer = null;
+  }
+
+  // A prompt timing out is not evidence that the agent stopped. Cancel it and
+  // keep the call parked briefly so its final `cancelled` response can prove the
+  // session is ready for another prompt. The user still receives the timeout —
+  // the cancellation response is acknowledgement, not an answer to the work.
+  function beginPromptTimeout(rpcId, entry, reason) {
+    if (entry.expired || !pending.has(rpcId)) return;
+    entry.expired = true;
+    entry.failure = new Error(
+      reason === 'maximum'
+        ? `ACP call '${entry.method}' exceeded the maximum run time.`
+        : `ACP call '${entry.method}' timed out.`
+    );
+    clearEntryTimers(entry);
+    // The deadline is a terminal policy boundary. Deny every open permission
+    // before cancellation so a late click cannot authorize more work while the
+    // expired prompt is winding down.
+    for (const approvalId of [...openApprovals.keys()]) {
+      closeApproval(approvalId, 'deny', 'timed-out');
+    }
+    try {
+      write({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId } });
+    } catch {
+      if (pending.delete(rpcId)) {
+        retireChild();
+        entry.reject(entry.failure);
+      }
+      return;
+    }
+    entry.graceTimer = setTimeout(() => {
+      if (pending.delete(rpcId)) {
+        retireChild();
+        entry.reject(entry.failure);
+      }
+    }, cancelGraceBudget);
+  }
+
   function releaseBudgets() {
     if (openApprovals.size) return; // somebody is still being asked
     for (const [rpcId, entry] of pending) {
-      if (entry.timer) continue;
-      entry.timer = setTimeout(() => {
-        if (pending.delete(rpcId)) entry.reject(new Error(`ACP call '${entry.method}' timed out.`));
-      }, budget);
+      if (entry.timer || entry.expired) continue;
+      armBudget(rpcId, entry);
     }
+  }
+
+  // A prompt is allowed to run for as long as it keeps making progress. ACP
+  // updates name the session rather than the JSON-RPC request, and this
+  // transport holds exactly one session, so the one outstanding prompt is the
+  // call whose inactivity clock they refresh. An update naming another session
+  // is not activity here and is ignored entirely.
+  function updateShowsProgress(update) {
+    if (!update || typeof update !== 'object') return false;
+    if (update.sessionUpdate === 'agent_message_chunk') {
+      return typeof update.content?.text === 'string' && update.content.text.length > 0;
+    }
+    return (
+      update.sessionUpdate === 'tool_call' ||
+      update.sessionUpdate === 'tool_call_update' ||
+      update.sessionUpdate === 'plan'
+    );
+  }
+
+  function touchPromptBudget(updateSessionId, update) {
+    if (updateSessionId && sessionId && updateSessionId !== sessionId) return false;
+    for (const [rpcId, entry] of pending) {
+      if (entry.method !== 'session/prompt') continue;
+      if (entry.expired) return false;
+      if (updateShowsProgress(update) && entry.timer && !openApprovals.size) {
+        clearTimeout(entry.timer);
+        armBudget(rpcId, entry);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  function promptAcceptsPermission(requestSessionId) {
+    if (requestSessionId && sessionId && requestSessionId !== sessionId) return false;
+    for (const entry of pending.values()) {
+      if (entry.method === 'session/prompt') return !entry.expired;
+    }
+    return false;
   }
 
   // Empty the call table, cancelling each entry's clock as it goes. The timers
@@ -118,8 +252,8 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
   // `failure` is null when nothing is waiting to be told (stop()).
   function failPending(failure) {
     for (const [, entry] of pending) {
-      if (entry.timer) clearTimeout(entry.timer);
-      if (failure) entry.reject(failure);
+      clearEntryTimers(entry);
+      if (failure) entry.reject(entry.failure || failure);
     }
     pending.clear();
   }
@@ -127,20 +261,30 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
   function call(method, params) {
     const rpcId = nextId++;
     return new Promise((resolve, reject) => {
-      const entry = { resolve, reject, method, timer: null };
+      const entry = {
+        resolve,
+        reject,
+        method,
+        timer: null,
+        hardTimer: null,
+        graceTimer: null,
+        expired: false,
+        failure: null,
+      };
       pending.set(rpcId, entry);
       // Started only if nothing is currently waiting on a human. A call made
       // while a question is open starts paused, exactly as one paused mid-flight
       // does, rather than being the one call the hold does not cover.
       if (!openApprovals.size) {
-        entry.timer = setTimeout(() => {
-          if (pending.delete(rpcId)) reject(new Error(`ACP call '${method}' timed out.`));
-        }, budget);
+        armBudget(rpcId, entry);
+      }
+      if (method === 'session/prompt') {
+        entry.hardTimer = setTimeout(() => beginPromptTimeout(rpcId, entry, 'maximum'), maxRunBudget);
       }
       try {
         write({ jsonrpc: '2.0', id: rpcId, method, params: params || {} });
       } catch (err) {
-        if (entry.timer) clearTimeout(entry.timer);
+        clearEntryTimers(entry);
         pending.delete(rpcId);
         reject(err);
       }
@@ -178,15 +322,17 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
       // A response to one of our calls.
       const entry = pending.get(msg.id);
       if (!entry) return;
-      clearTimeout(entry.timer);
+      clearEntryTimers(entry);
       pending.delete(msg.id);
-      if (msg.error) entry.reject(new Error(msg.error.message || 'ACP error'));
+      if (entry.expired) entry.reject(entry.failure);
+      else if (msg.error) entry.reject(new Error(msg.error.message || 'ACP error'));
       else entry.resolve(msg.result);
       return;
     }
 
     if (msg.method === 'session/update') {
       const update = msg.params?.update || {};
+      if (!touchPromptBudget(msg.params?.sessionId, update)) return;
       const text = update.content?.text || '';
       if (update.sessionUpdate === 'agent_message_chunk' && text) liveHandlers?.onDelta?.(text);
       else if (update.sessionUpdate === 'tool_call')
@@ -203,6 +349,18 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
         label: o.name,
         kind: o.kind,
       }));
+      if (!promptAcceptsPermission(msg.params?.sessionId)) {
+        try {
+          write({
+            jsonrpc: '2.0',
+            id: msg.id,
+            result: { outcome: { outcome: 'cancelled' } },
+          });
+        } catch (error) {
+          console.warn(`[acp:${name}] failed to deny stale permission request: ${error.message}`);
+        }
+        return;
+      }
       const approvalId = `acp-${msg.id}`;
       // The question is now the thing being waited on, so the run stops being
       // charged for the wait.
@@ -267,16 +425,25 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
     const file = resolveExecutable(command);
     stderrTail = '';
     authMethods = [];
-    child = spawn(file, args, { cwd, env: childEnv(), shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
-    child.stdout.setEncoding('utf8');
-    child.stdout.on('data', onStdout);
-    child.stderr.setEncoding('utf8');
+    const spawned = spawn(file, args, {
+      cwd,
+      env: childEnv(),
+      shell: false,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    child = spawned;
+    spawned.stdout.setEncoding('utf8');
+    spawned.stdout.on('data', (chunk) => {
+      if (child === spawned) onStdout(chunk);
+    });
+    spawned.stderr.setEncoding('utf8');
     // Kept rather than discarded: an agent that dies during startup says why
     // here and nowhere else, and without it the only symptom is a timeout.
-    child.stderr.on('data', (chunk) => {
-      stderrTail = (stderrTail + chunk).slice(-STDERR_TAIL_CHARS);
+    spawned.stderr.on('data', (chunk) => {
+      if (child === spawned) stderrTail = (stderrTail + chunk).slice(-STDERR_TAIL_CHARS);
     });
-    child.on('error', (err) => {
+    spawned.on('error', (err) => {
+      if (child !== spawned) return;
       // A missing command is the one failure with a fix the user can act on,
       // and Node's own text ("spawn hermes ENOENT") does not hint at it. The
       // command name is local, so it travels as detail.
@@ -284,7 +451,8 @@ function createAcpTransport({ id, name, config, timeoutMs }) {
         err.code === 'ENOENT' ? localError('The agent could not be started.', notFoundMessage(file)) : err;
       failPending(failure);
     });
-    child.on('exit', () => {
+    spawned.on('exit', () => {
+      if (child !== spawned) return;
       child = null;
       sessionId = null;
       // Any question still on a screen died with the process. Taken off the

@@ -85,8 +85,15 @@ function transportFor(config) {
   return createAcpTransport({
     id: 'agent:test',
     name: 'Stub',
-    config: { command: process.execPath, args: [agentScript()], ...config },
-    timeoutMs: config.timeoutMs,
+    config: {
+      command: process.execPath,
+      args: [agentScript()],
+      ...config,
+      promptInactivityMs: config.timeoutMs,
+    },
+    // Keep cold child startup independent from the deliberately tiny prompt
+    // clocks used to exercise approval behavior.
+    timeoutMs: 60000,
   });
 }
 
