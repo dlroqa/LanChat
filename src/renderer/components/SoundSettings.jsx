@@ -143,6 +143,17 @@ export default function SoundSettings({ value, onChange, soundUrl }) {
     }
   }
 
+  // Whether Gemini is not merely chosen but usable. The switch says what was
+  // asked for; this says what will happen.
+  const geminiActive = engine === 'gemini' && hasKey;
+  const engineLine = !value.agentSpeechEnabled
+    ? 'Nothing is read aloud.'
+    : geminiActive
+      ? 'Reading with Gemini.'
+      : engine === 'gemini'
+        ? 'No key saved — reading with this computer’s voices until you add one.'
+        : 'Reading with this computer’s voices.';
+
   function endVoicePreview() {
     stopVoice.current?.();
     stopVoice.current = null;
@@ -374,19 +385,36 @@ export default function SoundSettings({ value, onChange, soundUrl }) {
         />
       </div>
 
+      {/* One switch rather than a two-item dropdown. Which engine speaks is a
+          yes-or-no question, and a boolean cannot be in both states or neither
+          — where a dropdown left it possible to have Gemini selected, no key
+          saved, and no idea which voice you were actually hearing. */}
+      <div className="switch">
+        <div>
+          <div style={{ fontWeight: 500 }}>Use Gemini voices</div>
+          <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>
+            Natural voices from Google. Needs an API key. Off means this computer&rsquo;s own voices, which
+            send nothing anywhere.
+          </div>
+        </div>
+        <button
+          className={`toggle ${engine === 'gemini' ? 'on' : ''}`}
+          onClick={() => setEngine(engine === 'gemini' ? 'local' : 'gemini')}
+          disabled={!value.agentSpeechEnabled || busy}
+          aria-pressed={engine === 'gemini'}
+          aria-label="Use Gemini voices"
+        />
+      </div>
+
+      {/* What is really going to speak, which is not always what the switch
+          says: Gemini with no key reads locally, and being told that is the
+          difference between a setting that looks broken and one that is waiting
+          for something. */}
       <div className="field">
-        <label htmlFor="speech-engine">Voice</label>
         <div className="row">
-          <select
-            id="speech-engine"
-            value={engine}
-            onChange={(e) => setEngine(e.target.value)}
-            style={{ flex: 1 }}
-            disabled={!value.agentSpeechEnabled || busy}
-          >
-            <option value="local">This computer&rsquo;s voices</option>
-            <option value="gemini">Gemini — natural voices, needs a key</option>
-          </select>
+          <div className={`speech-engine-state ${geminiActive ? 'on' : ''}`} role="status">
+            {engineLine}
+          </div>
           <button
             className="btn"
             title={auditioning ? 'Stop' : 'Hear a voice'}
@@ -396,11 +424,6 @@ export default function SoundSettings({ value, onChange, soundUrl }) {
             {auditioning ? <Stop size={15} /> : <Play size={15} />}
           </button>
         </div>
-        {engine === 'local' && (
-          <div style={{ fontSize: 12, color: 'var(--fg-faint)', marginTop: 6 }}>
-            Whatever voices this computer already has. Nothing is sent anywhere.
-          </div>
-        )}
       </div>
 
       {engine === 'gemini' && (
@@ -436,7 +459,7 @@ export default function SoundSettings({ value, onChange, soundUrl }) {
               words go, in words, next to the switch that sends them. */}
           <div style={{ fontSize: 12, color: 'var(--fg-faint)', marginTop: 6 }}>
             The agents&rsquo; replies in a discussion are sent to Google to be read. Nothing else is, and
-            nothing at all is while this is set to your computer&rsquo;s voices.
+            nothing at all is while this switch is off.
           </div>
           {keyError && <div style={{ fontSize: 12, color: 'var(--danger)', marginTop: 6 }}>{keyError}</div>}
         </div>

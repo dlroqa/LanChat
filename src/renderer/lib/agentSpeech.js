@@ -51,6 +51,66 @@ export const IDLE = 'idle';
 export const PLAYING = 'playing';
 export const PAUSED = 'paused';
 
+// Which voice actually said it. Reported from what happened rather than from the
+// setting: Gemini switched on but unreachable still reads locally, and a person
+// listening should be told which of the two they are hearing rather than left to
+// work it out.
+export const GEMINI = 'gemini';
+export const LOCAL = 'local';
+
+// How much text goes into one utterance on the local path.
+//
+// This is a workaround for a named Chromium fault, not a style choice. Long text
+// handed to speechSynthesis fails silently *and wedges the API for the whole
+// window* (crbug 41346274), after which cancel() and the next speak() do nothing
+// — which is what made a session change appear to leave the previous session
+// still playing. Agent turns are long, and nothing bounded this path: the cap in
+// main/speech.js bounds only what is sent to Gemini.
+//
+// So a turn is spoken in sentence-sized pieces. Two hundred characters is far
+// below where the fault appears, and it also keeps each piece well inside the
+// ~15s window after which Chromium stops a long utterance — which is why no
+// pause/resume keepalive is needed on top.
+export const LOCAL_CHUNK_CHARS = 200;
+
+// How often to ask the synth whether it is still speaking, and how long to wait
+// before the first ask.
+//
+// The watchdog exists because `onend` is not reliable — see the utterance held
+// in _playLocal — and an event that never arrives cannot be waited for. The
+// grace period is what stops an utterance that has not started yet from being
+// mistaken for one that has finished; 100ms is the interval the same workaround
+// is documented with elsewhere, for exactly that false positive.
+export const SYNTH_POLL_MS = 250;
+export const SYNTH_GRACE_MS = 100;
+
+// Splitting a turn into utterance-sized pieces, at sentence ends.
+//
+// The rule is boundText's in main/speech.js — break after `. `, `! ` or `? ` —
+// so the two paths cut text the same way and a turn does not stop mid-clause in
+// one engine and not the other. A sentence longer than the budget is broken at
+// the last space inside it rather than mid-word, and a single unbroken run of
+// characters is cut where it must be.
+export function chunkText(raw, limit = LOCAL_CHUNK_CHARS) {
+  const text = String(raw == null ? '' : raw).trim();
+  if (!text) return [];
+  if (text.length <= limit) return [text];
+
+  const out = [];
+  let rest = text;
+  while (rest.length > limit) {
+    const head = rest.slice(0, limit);
+    const stop = Math.max(head.lastIndexOf('. '), head.lastIndexOf('! '), head.lastIndexOf('? '));
+    // +1 keeps the full stop with the sentence it ends.
+    let at = stop > 0 ? stop + 1 : head.lastIndexOf(' ');
+    if (at <= 0) at = limit;
+    out.push(rest.slice(0, at).trim());
+    rest = rest.slice(at).trim();
+  }
+  if (rest) out.push(rest);
+  return out.filter(Boolean);
+}
+
 // A turn, in the one shape the list holds. Anything without words is not a turn:
 // a file, a notice and an empty string are all things there is nothing to say
 // about.
@@ -79,6 +139,11 @@ export class AgentSpeech {
     utterance = (text) => new SpeechSynthesisUtterance(text),
     onSpeaking = null,
     onChange = null,
+    // The watchdog's clock, injectable for the same reason everything else here
+    // is: a test should be able to drive it without waiting out real seconds.
+    setInterval: setIntervalFn = (fn, ms) => setInterval(fn, ms),
+    clearInterval: clearIntervalFn = (id) => clearInterval(id),
+    now = () => Date.now(),
   } = {}) {
     this.synthesize = synthesize;
     this.makeContext = context;
@@ -87,6 +152,9 @@ export class AgentSpeech {
     this.makeUtterance = utterance;
     this.onSpeaking = onSpeaking;
     this.onChange = onChange;
+    this.setInterval = setIntervalFn;
+    this.clearInterval = clearIntervalFn;
+    this.now = now;
 
     this.list = [];
     // Where the reading has got to. Ranges over 0..list.length, and the value
@@ -97,6 +165,22 @@ export class AgentSpeech {
     this.status = IDLE;
     // Which path is making noise, so resume() knows what to resume.
     this.mode = null; // 'url' | 'local' | null
+    // Which voice really said the last thing said — not which one is configured.
+    // Gemini switched on but unreachable reads locally, and the window says so
+    // rather than leaving somebody to wonder which they are hearing.
+    this.engine = null; // GEMINI | LOCAL | null
+    // The session this list belongs to. Held here so that being handed a
+    // different one is what resets the player, rather than the caller having
+    // remembered to clear it first — see sync().
+    this.sessionId = null;
+    // The utterance being spoken, held so Chromium cannot collect it before it
+    // finishes. See _speakChunk.
+    this.utterance = null;
+    this.chunks = [];
+    this.chunkAt = 0;
+    this.localVoice = null;
+    this.watchdog = null;
+    this.chunkDone = null;
 
     this.el = null;
     this.source = null;
@@ -144,7 +228,26 @@ export class AgentSpeech {
   // The cursor follows the *turn* it was on rather than the index, so a message
   // arriving above it — or an error being swept out of the transcript — cannot
   // silently move the reading onto a different sentence.
-  sync(turns) {
+  sync(turns, { sessionId = undefined } = {}) {
+    // A different session is a different conversation, and nothing of the last
+    // one survives it: not the list, not the cursor, not the audio, and not the
+    // window's shared synth queue.
+    //
+    // Done here, by the player, rather than by a caller remembering to clear
+    // first. The refresh used to depend on two React effects firing in the right
+    // order, which is invisible and easy to break; holding the session next to
+    // the list it belongs to makes it a property of the thing itself.
+    if (sessionId !== undefined && sessionId !== this.sessionId) {
+      this.sessionId = sessionId;
+      this.gen += 1;
+      this._stopAudio();
+      this.list = [];
+      this.seen.clear();
+      this.index = 0;
+      this.engine = null;
+      this._setStatus(IDLE);
+    }
+
     const next = (turns || []).map(toTurn).filter(Boolean).slice(0, MAX_LIST);
     const onId = this.currentTurn?.id ?? null;
     const before = this.list.length;
@@ -196,6 +299,8 @@ export class AgentSpeech {
     this.list = [];
     this.seen.clear();
     this.index = 0;
+    this.engine = null;
+    this.sessionId = null;
     this._setStatus(IDLE);
   }
 
@@ -214,10 +319,12 @@ export class AgentSpeech {
   pause() {
     if (this.status !== PLAYING) return false;
     this._setStatus(PAUSED);
-    // The cap is not running while nothing is being said. Without this, a turn
-    // paused for six minutes would be skipped the moment it was resumed.
+    // Neither clock runs while nothing is being said. Without this, a turn
+    // paused for six minutes would be skipped the moment it was resumed, and the
+    // watchdog would be polling a synth that is quiet on purpose.
     clearTimeout(this.timer);
     this.timer = null;
+    this._stopWatchdog();
     try {
       if (this.mode === 'local') this.synth?.pause();
       else this.el?.pause();
@@ -230,8 +337,15 @@ export class AgentSpeech {
     this._setStatus(PLAYING);
     this._arm();
     try {
-      if (this.mode === 'local') this.synth?.resume();
-      else this.el?.play();
+      if (this.mode === 'local') {
+        this.synth?.resume();
+        // The watchdog was stopped while nothing was being said; it goes back on
+        // the piece it left, or a chunk whose `onend` never fires would leave a
+        // resumed reading stuck exactly as it did before.
+        if (this.chunkDone) this._startWatchdog(this.gen, this.chunkDone);
+      } else {
+        this.el?.play();
+      }
     } catch {
       this._finish();
     }
@@ -314,6 +428,9 @@ export class AgentSpeech {
       return;
     }
     this.mode = 'url';
+    // Audio came back, so this turn really was Gemini. Recorded here rather than
+    // read off the setting, which can say Gemini while the key is missing.
+    this.engine = GEMINI;
     try {
       this.el.src = url;
       this.gain.gain.value = this.volume;
@@ -339,27 +456,89 @@ export class AgentSpeech {
       return;
     }
     this.mode = 'local';
+    this.engine = LOCAL;
+    // Sentence-sized pieces, because a whole agent turn wedges the API. See
+    // LOCAL_CHUNK_CHARS.
+    this.chunks = chunkText(turn.text);
+    this.chunkAt = 0;
+    this.localVoice = turn.localVoice || null;
+    if (!this.chunks.length) {
+      this._finish();
+      return;
+    }
+    if (this.status !== PAUSED) this._arm();
+    this._speakChunk();
+  }
+
+  // One piece of a turn. Calls itself through to the next, and only the last
+  // finishes the turn.
+  _speakChunk() {
+    const gen = this.gen;
+    let u;
     try {
-      const u = this.makeUtterance(turn.text);
+      u = this.makeUtterance(this.chunks[this.chunkAt]);
       u.volume = this.volume;
       // The platform's voices are objects, not names, so the caller passes the
       // name it chose and it is matched here against what the window has now —
       // the list can arrive late, and a voice that has gone is a default voice
       // rather than a failure.
-      if (turn.localVoice && typeof this.synth.getVoices === 'function') {
-        const found = (this.synth.getVoices() || []).find((v) => v && v.name === turn.localVoice);
+      if (this.localVoice && typeof this.synth.getVoices === 'function') {
+        const found = (this.synth.getVoices() || []).find((v) => v && v.name === this.localVoice);
         if (found) u.voice = found;
       }
-      u.onend = () => this._finish();
-      u.onerror = () => this._finish();
-      if (this.status !== PAUSED) this._arm();
+      const done = () => {
+        // The cursor moved, or the session did, while this was being said.
+        if (gen !== this.gen) return;
+        this._stopWatchdog();
+        this.utterance = null;
+        this.chunkAt += 1;
+        if (this.chunkAt < this.chunks.length && this.status !== IDLE) this._speakChunk();
+        else if (this.chunkAt >= this.chunks.length) this._finish();
+      };
+      u.onend = done;
+      u.onerror = done;
+      // Kept so resume() can put the watchdog back on the piece it left.
+      this.chunkDone = done;
+
+      // **The utterance is held on the instance, and that is the whole of the
+      // fix for the reading stopping after the first bubble.** Chromium can
+      // garbage-collect an utterance that only its own handlers reference, and
+      // when it does, `onend` never fires and nothing ever advances the reading
+      // (crbug 41380697). A local variable is exactly that case.
+      this.utterance = u;
+
+      // The window has one speechSynthesis queue, shared by everything in it. A
+      // wedged or stale utterance left in it is what bled across a session
+      // change, so it is emptied before anything new goes in.
+      this.synth.cancel();
       this.synth.speak(u);
-      // speechSynthesis has no way to queue an utterance without starting it, so
-      // a turn that arrived while paused is spoken and stopped immediately.
       if (this.status === PAUSED) this.synth.pause();
+      else this._startWatchdog(gen, done);
     } catch {
       this._finish();
     }
+  }
+
+  // Asking the synth whether it is still going, because it cannot be relied on
+  // to say so. If it reports neither speaking nor pending, the piece is over
+  // whatever the events did — see SYNTH_POLL_MS.
+  _startWatchdog(gen, done) {
+    this._stopWatchdog();
+    if (typeof this.synth.speaking !== 'boolean') return;
+    const first = this.now() + SYNTH_GRACE_MS;
+    this.watchdog = this.setInterval(() => {
+      if (gen !== this.gen || this.status !== PLAYING) return;
+      // Not yet: an utterance that has not started is not one that has ended.
+      if (this.now() < first) return;
+      if (this.synth.speaking || this.synth.pending) return;
+      done();
+    }, SYNTH_POLL_MS);
+  }
+
+  _stopWatchdog() {
+    if (this.watchdog == null) return;
+    this.clearInterval(this.watchdog);
+    this.watchdog = null;
   }
 
   // Built on first use, so a window where nothing is ever spoken never claims the
@@ -413,6 +592,7 @@ export class AgentSpeech {
     clearTimeout(this.timer);
     this.timer = null;
     this.mode = null;
+    this._stopWatchdog();
     try {
       if (this.el) {
         this.el.onended = null;
@@ -420,9 +600,16 @@ export class AgentSpeech {
         this.el.pause();
       }
     } catch {}
+    // Dropped only once the synth has been told to stop. Released the other way
+    // round, a collected utterance could still fire into a reading that has
+    // moved on.
     try {
       this.synth?.cancel();
     } catch {}
+    this.utterance = null;
+    this.chunkDone = null;
+    this.chunks = [];
+    this.chunkAt = 0;
   }
 
   _setStatus(next) {
@@ -574,9 +761,12 @@ export function useAgentSpeech({
   // speaking in the wrong voice.
   useEffect(() => {
     if (!enabled) return;
-    player.sync((turns || []).map(turnOf));
+    // The session travels with the list. Handing the player a different one is
+    // what resets it, so a switch cannot leave the previous session's reading
+    // behind however the effects happen to be ordered.
+    player.sync((turns || []).map(turnOf), { sessionId });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [player, enabled, turns, key, myLocalVoice, localVoices]);
+  }, [player, enabled, sessionId, turns, key, myLocalVoice, localVoices]);
 
   return {
     status: player.status,
@@ -588,6 +778,10 @@ export function useAgentSpeech({
     position: Math.min(player.index + 1, player.count),
     count: player.count,
     speaking: player.speaking,
+    // Which voice actually said the last thing said. Not the setting: Gemini
+    // switched on without a usable key still reads locally, and this is what
+    // lets the window say so rather than claim otherwise.
+    engine: player.engine,
 
     // The live path: an agent has just answered. The turn is already in the list
     // (the effect above put it there); this only decides whether to start.

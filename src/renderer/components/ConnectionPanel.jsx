@@ -380,7 +380,15 @@ function SessionPanel({ peer, streaming, awaiting, typing, commits, speech }) {
 // The position line is not decoration. Speaking has no progress bar and a long
 // turn is silent while it is being synthesised, so "3 of 12" is the only thing
 // that distinguishes a reading that is working from one that has stalled.
-function Transport({ playing, paused, position, count, onToggle, onNext, onPrev }) {
+// What to call the voice that spoke. "This computer" rather than the name of a
+// platform speech engine nobody outside a browser has heard of.
+function engineName(engine) {
+  if (engine === 'gemini') return 'Gemini';
+  if (engine === 'local') return 'This computer';
+  return null;
+}
+
+function Transport({ playing, paused, position, count, engine, onToggle, onNext, onPrev }) {
   const empty = !count;
   // Why it is off, said on the control rather than left to be guessed at.
   const why = empty ? 'Nothing has been said in this session yet' : undefined;
@@ -424,7 +432,12 @@ function Transport({ playing, paused, position, count, onToggle, onNext, onPrev 
         {empty
           ? 'Nothing to read yet'
           : playing || paused
-            ? `${position} of ${count}${paused ? ' · paused' : ''}`
+            ? // The engine is named from what actually spoke, not from the
+              // setting — Gemini switched on but unreachable reads locally, and
+              // this is where that becomes visible without opening Settings.
+              `${position} of ${count}${engineName(engine) ? ` · ${engineName(engine)}` : ''}${
+                paused ? ' · paused' : ''
+              }`
             : `${count} turn${count === 1 ? '' : 's'}`}
       </div>
     </div>

@@ -31,13 +31,28 @@ const { clampVolume } = new Function(
    return { clampVolume };`
 )();
 
-const { AgentSpeech, MAX_LIST, MAX_UTTERANCE_MS, PREVIEW_LINE, previewVoice, IDLE, PLAYING, PAUSED } =
-  new Function(
-    'clampVolume',
-    'audioContext',
-    `${strip(fs.readFileSync(path.join(LIB, 'agentSpeech.js'), 'utf8'))}
-   return { AgentSpeech, MAX_LIST, MAX_UTTERANCE_MS, PREVIEW_LINE, previewVoice, IDLE, PLAYING, PAUSED };`
-  )(clampVolume, () => null);
+const {
+  AgentSpeech,
+  MAX_LIST,
+  MAX_UTTERANCE_MS,
+  PREVIEW_LINE,
+  previewVoice,
+  chunkText,
+  LOCAL_CHUNK_CHARS,
+  SYNTH_POLL_MS,
+  SYNTH_GRACE_MS,
+  IDLE,
+  PLAYING,
+  PAUSED,
+  GEMINI,
+  LOCAL,
+} = new Function(
+  'clampVolume',
+  'audioContext',
+  `${strip(fs.readFileSync(path.join(LIB, 'agentSpeech.js'), 'utf8'))}
+   return { AgentSpeech, MAX_LIST, MAX_UTTERANCE_MS, PREVIEW_LINE, previewVoice, chunkText,
+            LOCAL_CHUNK_CHARS, SYNTH_POLL_MS, SYNTH_GRACE_MS, IDLE, PLAYING, PAUSED, GEMINI, LOCAL };`
+)(clampVolume, () => null);
 
 // ------------------------------------------------------------------- the stage
 
@@ -620,6 +635,319 @@ test('the window is told whenever the position moves, not only the status', asyn
   // The status is still 'playing' — only the turn changed. Announcing only on a
   // status change would freeze the position line and the lit bubble on turn one.
   assert.ok(draws > atFirst, 'moving to the next turn must redraw');
+});
+
+// ------------------------------------------- the local voice, made reliable
+//
+// Two documented Chromium faults sat behind "it reads the first bubble and
+// stops" and "switching session leaves the old one playing". Both are pinned
+// here, because both are invisible until somebody listens to a long discussion.
+
+// A synth that reports its state honestly and — like the real one when an
+// utterance has been collected — never fires onend.
+function wedgedSynth() {
+  const spoken = [];
+  const synth = {
+    speaking: false,
+    pending: false,
+    cancelled: 0,
+    voices: [],
+    getVoices() {
+      return this.voices;
+    },
+    speak(u) {
+      spoken.push(u);
+      this.speaking = true;
+    },
+    // What Chromium does when the utterance has been garbage-collected: the
+    // speech ends, `speaking` goes false, and no event is ever delivered.
+    finishSilently() {
+      this.speaking = false;
+      this.pending = false;
+    },
+    pause() {},
+    resume() {},
+    cancel() {
+      this.cancelled += 1;
+      this.speaking = false;
+      this.pending = false;
+    },
+  };
+  const utterances = [];
+  const utterance = (text) => {
+    const u = { text, volume: null, voice: null, onend: null, onerror: null };
+    utterances.push(u);
+    return u;
+  };
+  return { synth, utterance, spoken, utterances };
+}
+
+// A clock the test winds by hand, so the watchdog can be driven without waiting.
+function clock() {
+  let at = 0;
+  const timers = new Map();
+  let next = 1;
+  return {
+    now: () => at,
+    setInterval: (fn, ms) => {
+      const id = next++;
+      timers.set(id, { fn, ms, last: at });
+      return id;
+    },
+    clearInterval: (id) => timers.delete(id),
+    // Advance time and fire every interval that came due.
+    tick(ms) {
+      at += ms;
+      for (const t of [...timers.values()]) {
+        while (at - t.last >= t.ms) {
+          t.last += t.ms;
+          t.fn();
+        }
+      }
+    },
+  };
+}
+
+test('a local turn whose onend never fires still moves the reading on', async () => {
+  // The bug exactly: Chromium collects the utterance, no event arrives, and the
+  // reading used to sit on the first bubble forever.
+  const l = wedgedSynth();
+  const c = clock();
+  const p = new AgentSpeech({
+    synthesize: null,
+    synth: l.synth,
+    utterance: l.utterance,
+    setInterval: c.setInterval,
+    clearInterval: c.clearInterval,
+    now: c.now,
+  });
+  p.sync([
+    { id: 'a', text: 'First turn.' },
+    { id: 'b', text: 'Second turn.' },
+  ]);
+  p.playFrom();
+  await settle();
+  assert.equal(p.speakingId, 'a');
+
+  // The speech really ends; the event simply never comes.
+  l.synth.finishSilently();
+  c.tick(SYNTH_GRACE_MS + SYNTH_POLL_MS * 2);
+  await settle();
+
+  assert.equal(p.speakingId, 'b', 'the watchdog must carry the reading on');
+});
+
+test('a turn that has not started yet is not mistaken for one that has ended', async () => {
+  const l = wedgedSynth();
+  const c = clock();
+  const p = new AgentSpeech({
+    synthesize: null,
+    synth: l.synth,
+    utterance: l.utterance,
+    setInterval: c.setInterval,
+    clearInterval: c.clearInterval,
+    now: c.now,
+  });
+  // `speaking` stays false, as it does in the moment between speak() and the
+  // voice actually starting.
+  l.synth.speak = function (u) {
+    l.spoken.push(u);
+  };
+  p.sync([
+    { id: 'a', text: 'First.' },
+    { id: 'b', text: 'Second.' },
+  ]);
+  p.playFrom();
+  await settle();
+
+  // Inside the grace period nothing may be concluded.
+  c.tick(SYNTH_GRACE_MS - 1);
+  await settle();
+  assert.equal(p.speakingId, 'a');
+});
+
+test('the utterance is held where the collector cannot reach it', async () => {
+  // The one-line fix for the one-line bug: an utterance referenced only by its
+  // own handlers can be collected before it speaks.
+  const l = wedgedSynth();
+  const p = new AgentSpeech({ synthesize: null, synth: l.synth, utterance: l.utterance });
+  p.sync([{ id: 'a', text: 'Held.' }]);
+  p.playFrom();
+  await settle();
+
+  assert.ok(p.utterance, 'the in-flight utterance must be reachable from the player');
+  assert.equal(p.utterance, l.utterances[0]);
+
+  p.clear();
+  assert.equal(p.utterance, null, 'and released when there is nothing being said');
+});
+
+test('a long turn is spoken in pieces, and only the last one ends it', async () => {
+  // Long text fails silently and wedges the whole API, so no single utterance is
+  // ever allowed to be long.
+  const l = wedgedSynth();
+  const long = 'This is a sentence of a perfectly ordinary length. '.repeat(12);
+  assert.ok(long.length > LOCAL_CHUNK_CHARS * 2);
+
+  const p = new AgentSpeech({ synthesize: null, synth: l.synth, utterance: l.utterance });
+  p.sync([
+    { id: 'a', text: long },
+    { id: 'b', text: 'After.' },
+  ]);
+  p.playFrom();
+  await settle();
+
+  assert.equal(l.spoken.length, 1, 'one piece at a time');
+  for (const u of l.utterances) assert.ok(u.text.length <= LOCAL_CHUNK_CHARS);
+
+  // Work through the pieces; the turn must not end until the last of them does.
+  let guard = 0;
+  while (p.speakingId === 'a' && guard < 50) {
+    guard += 1;
+    const u = l.utterances[l.utterances.length - 1];
+    u.onend();
+    await settle();
+  }
+  assert.ok(l.utterances.length > 2, 'a long turn really was split');
+  assert.equal(p.speakingId, 'b', 'and it moved on exactly once, at the end');
+});
+
+test('every piece of a turn is spoken in that turn s voice', async () => {
+  const l = wedgedSynth();
+  l.synth.voices = [
+    { name: 'Alice', lang: 'en' },
+    { name: 'Bob', lang: 'en' },
+  ];
+  const p = new AgentSpeech({ synthesize: null, synth: l.synth, utterance: l.utterance });
+  p.sync([{ id: 'a', text: 'One sentence. '.repeat(30), localVoice: 'Bob' }]);
+  p.playFrom();
+  await settle();
+
+  for (let i = 0; i < 3; i += 1) {
+    assert.equal(l.utterances[i].voice.name, 'Bob');
+    l.utterances[i].onend();
+    await settle();
+  }
+});
+
+test('the window s shared synth queue is emptied before anything new is said', async () => {
+  // One queue for the whole window: a stale utterance left in it is what bled
+  // across a session change.
+  const l = wedgedSynth();
+  const p = new AgentSpeech({ synthesize: null, synth: l.synth, utterance: l.utterance });
+  p.sync([{ id: 'a', text: 'One.' }]);
+  p.playFrom();
+  await settle();
+  assert.ok(l.synth.cancelled >= 1, 'cancel() before speak()');
+});
+
+test('chunkText breaks at sentence ends, and never mid-word', () => {
+  assert.deepEqual(chunkText(''), []);
+  assert.deepEqual(chunkText('Short.'), ['Short.']);
+
+  const pieces = chunkText('This is one. This is two. This is three. '.repeat(20));
+  for (const piece of pieces) {
+    assert.ok(piece.length <= LOCAL_CHUNK_CHARS, 'no piece may exceed the budget');
+    assert.ok(piece.trim() === piece);
+  }
+  // Nothing is lost or invented on the way through.
+  const source = 'This is one. This is two. This is three. '.repeat(20).trim();
+  assert.equal(pieces.join(' ').replace(/\s+/g, ' '), source.replace(/\s+/g, ' '));
+
+  // A single unbroken run still has to be cut somewhere.
+  const wall = 'x'.repeat(LOCAL_CHUNK_CHARS * 3);
+  for (const piece of chunkText(wall)) assert.ok(piece.length <= LOCAL_CHUNK_CHARS);
+});
+
+// -------------------------------------------------- switching session
+
+test('being handed a different session resets everything, with no clear() first', async () => {
+  // The refresh used to depend on two React effects firing in the right order.
+  // It is now a property of the player, so this deliberately never calls
+  // clear() — that is the whole point of the test.
+  const s = stage();
+  const l = wedgedSynth();
+  const p = player(s, { synth: l.synth, utterance: l.utterance });
+
+  p.sync(turns('one', 'two', 'three'), { sessionId: 'session:A' });
+  p.playFrom();
+  await settle();
+  assert.equal(p.count, 3);
+  assert.equal(p.status, PLAYING);
+
+  p.sync([{ id: 'b1', text: 'A different conversation.' }], { sessionId: 'session:B' });
+
+  assert.equal(p.count, 1, 'the new session, not the old one');
+  assert.equal(p.speakingId, null);
+  assert.equal(p.status, IDLE, 'and it is not still reading');
+  assert.equal(p.index, 0, 'the cursor starts again');
+  assert.equal(s.el.paused, true, 'whatever was playing has stopped');
+  assert.ok(l.synth.cancelled >= 1, 'including anything left in the shared queue');
+
+  // Play now reads the session you are looking at.
+  p.playFrom();
+  await settle();
+  assert.equal(p.speakingId, 'b1');
+});
+
+test('the same session is not a reset, so a reading survives new messages', async () => {
+  const s = stage();
+  const p = player(s);
+  p.sync(turns('one', 'two'), { sessionId: 'session:A' });
+  p.playFrom('2');
+  await settle();
+
+  p.sync([...turns('one', 'two'), { id: '3', text: 'three', voice: 'Kore' }], {
+    sessionId: 'session:A',
+  });
+  assert.equal(p.speakingId, '2', 'still reading');
+  assert.equal(p.count, 3);
+});
+
+test('sync without a session says nothing about the session', async () => {
+  // The argument is optional, so every existing caller keeps working.
+  const s = stage();
+  const p = player(s);
+  p.sync(turns('one', 'two'), { sessionId: 'session:A' });
+  p.playFrom();
+  await settle();
+  p.sync(turns('one', 'two', 'three'));
+  assert.equal(p.speakingId, '1', 'omitting it must not reset anything');
+  assert.equal(p.count, 3);
+});
+
+// ------------------------------------------------------- which voice spoke
+
+test('the engine reported is the one that actually spoke', async () => {
+  const s = stage();
+  const l = wedgedSynth();
+
+  // Audio came back: Gemini.
+  const online = player(s, { synth: l.synth, utterance: l.utterance });
+  online.sync(turns('one'));
+  online.playFrom();
+  await settle();
+  assert.equal(online.engine, GEMINI);
+
+  // Nothing came back — the engine is off, or the key failed, or the machine is
+  // offline. It is read locally, and it says local even though Gemini is what
+  // was asked for.
+  const fell = new AgentSpeech({
+    synthesize: async () => null,
+    context: s.context,
+    element: s.element,
+    synth: l.synth,
+    utterance: l.utterance,
+  });
+  fell.sync(turns('one'));
+  fell.playFrom();
+  await settle();
+  assert.equal(fell.engine, LOCAL, 'a silent fallback must not claim to be Gemini');
+});
+
+test('nothing has spoken yet is not a claim about either engine', () => {
+  const p = new AgentSpeech({ synthesize: null, synth: null });
+  assert.equal(p.engine, null);
 });
 
 // ------------------------------------------------------------------- the preview

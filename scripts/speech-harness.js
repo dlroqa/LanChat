@@ -192,48 +192,76 @@ const panelText = () => $('#settings').textContent;
 // React tracks a controlled input's value on the node itself and skips its
 // onChange when the value it sees has not moved. Assigning through the
 // prototype's setter is what makes a dispatched event look like a real edit.
-function setSelect(el, value) {
-  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+function setInput(el, value) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
   setter.call(el, value);
-  el.dispatchEvent(new Event('change', { bubbles: true }));
+  el.dispatchEvent(new Event('input', { bubbles: true }));
 }
+
+const row = (label) =>
+  [...document.querySelectorAll('.switch')].find((s) => s.textContent.includes(label));
+const toggleIn = (label) => row(label) && row(label).querySelector('.toggle');
+const state = () => $('.speech-engine-state').textContent;
 
 const out = {};
 (async () => {
   await drawSettings();
 
-  const row = (label) => [...document.querySelectorAll('.switch')]
-    .find((s) => s.textContent.includes(label));
-
   out.hasToggle = Boolean(row('Read discussions aloud'));
-  out.engineChoices = [...$('#speech-engine').options].map((o) => o.value);
   out.volumeRow = [...document.querySelectorAll('.volume-field label')]
     .some((l) => l.textContent.includes('Speech volume'));
 
-  // Local engine: no key box, and no warning about sending anything. The absent
-  // warning matters as much as the present one — a notice shown when nothing is
-  // being sent is a notice people learn to scroll past.
-  out.localKeyBox = Boolean($('#speech-key'));
-  out.localSaysNothingSent = panelText().includes('Nothing is sent anywhere');
-  out.localSaysSentToGoogle = panelText().includes('sent to Google');
+  // A switch, not a dropdown: one boolean cannot be in both states or neither,
+  // which is the whole reason for the change.
+  const engineToggle = toggleIn('Use Gemini voices');
+  out.engineIsToggle = Boolean(engineToggle);
+  out.engineSelectGone = document.querySelectorAll('#speech-engine').length;
+  out.engineOffAtRest = engineToggle.getAttribute('aria-pressed');
 
-  // Switching to the online voice is what brings both of them in.
-  setSelect($('#speech-engine'), 'gemini');
+  // Local: no key box, no warning about sending anything, and it says plainly
+  // what will speak. The absent warning matters as much as the present one — a
+  // notice shown when nothing is being sent is one people learn to scroll past.
+  out.localKeyBox = Boolean($('#speech-key'));
+  // The switch itself says what "off" means, so the choice is legible without
+  // having to turn it on to find out.
+  out.toggleSaysNothingSent = panelText().includes('send nothing anywhere');
+  out.localSaysSentToGoogle = panelText().includes('sent to Google');
+  out.localState = state();
+
+  // Turning it on brings in the key box and the notice.
+  engineToggle.click();
   await wait(250);
 
-  out.engineAfterSwitch = $('#speech-engine').value;
+  out.engineOnAfterClick = toggleIn('Use Gemini voices').getAttribute('aria-pressed');
   out.geminiKeyBox = Boolean($('#speech-key'));
   out.keyIsPassword = $('#speech-key') ? $('#speech-key').type : null;
   out.keyAutocomplete = $('#speech-key') ? $('#speech-key').getAttribute('autocomplete') : null;
   out.geminiSaysSentToGoogle = panelText().includes('sent to Google');
+  // On, but no key saved: the case a dropdown could not express. It must say it
+  // is still reading locally rather than implying Gemini.
+  out.geminiNoKeyState = state();
+  out.geminiNoKeyAccented = $('.speech-engine-state').classList.contains('on');
+
+  // With a key saved it says so, and takes the accent.
+  setInput($('#speech-key'), 'a-key');
+  await wait(120);
+  [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Save').click();
+  await wait(250);
+  out.geminiWithKeyState = state();
+  out.geminiWithKeyAccented = $('.speech-engine-state').classList.contains('on');
 
   // Switched off, the whole section is inert rather than gone — the same
   // treatment the music picker gets above it.
   sounds = { ...sounds, agentSpeechEnabled: false };
   await drawSettings();
   await wait(80);
-  out.engineDisabledWhenOff = $('#speech-engine').disabled;
+  out.engineDisabledWhenOff = toggleIn('Use Gemini voices').disabled;
   out.keyDisabledWhenOff = $('#speech-key') ? $('#speech-key').disabled : null;
+  out.offState = state();
+
+  sounds = { ...sounds, agentSpeechEnabled: true };
+  await drawSettings();
+  await wait(80);
 
   // ---- the bubble's play/pause ----
   await drawThread(() => {});
@@ -275,12 +303,17 @@ const out = {};
   // And the note that explains the session sits below both of them.
   out.transportAboveNote = barBox.bottom <= $('.conn-note').getBoundingClientRect().top;
 
-  await drawPanel({ ...TRANSPORT, playing: true, position: 3 });
+  await drawPanel({ ...TRANSPORT, playing: true, position: 3, engine: 'gemini' });
   out.playingLabel = $('.transport-play').getAttribute('aria-label');
   out.playingIsPause = $('.transport-play').querySelectorAll('rect').length === 2;
+  // The engine is named while reading, so what you are hearing is answerable
+  // without opening Settings.
   out.playingPos = $('.transport-pos').textContent;
 
-  await drawPanel({ ...TRANSPORT, paused: true, position: 3 });
+  await drawPanel({ ...TRANSPORT, playing: true, position: 3, engine: 'local' });
+  out.playingPosLocal = $('.transport-pos').textContent;
+
+  await drawPanel({ ...TRANSPORT, paused: true, position: 3, engine: 'gemini' });
   out.pausedPos = $('.transport-pos').textContent;
   out.pausedLabel = $('.transport-play').getAttribute('aria-label');
 
@@ -295,7 +328,8 @@ const out = {};
   await drawPanel(null);
   out.transportWhenOff = document.querySelectorAll('.conn-transport').length;
 
-  await drawPanel({ ...TRANSPORT, playing: true, position: 3 });
+  // Left in a reading state for the screenshot.
+  await drawPanel({ ...TRANSPORT, playing: true, position: 3, engine: 'gemini' });
 
   // The two ways it comes back are :hover and :focus-visible, and headless
   // chromium can drive neither honestly — there is no pointer, and a

@@ -2443,6 +2443,7 @@ export default function App() {
                         paused: speech.paused,
                         position: speech.position,
                         count: speech.count,
+                        engine: speech.engine,
                         onToggle: speech.toggle,
                         onNext: speech.next,
                         onPrev: speech.prev,

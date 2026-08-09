@@ -4392,6 +4392,21 @@ input[type='range']:disabled::-webkit-slider-thumb {
   gap: 8px;
 }
 
+/* Which voice is really going to speak, said in Settings beside the audition
+   button. Quiet by default and in the accent once Gemini is actually usable, so
+   "on and working" is distinguishable at a glance from "on and waiting for a
+   key" — the two states a dropdown could not tell apart. */
+.speech-engine-state {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--fg-faint);
+  align-self: center;
+}
+.speech-engine-state.on {
+  color: var(--primary);
+}
+
 /* ---- reading a session aloud ----------------------------------------------
    The transport under the stat tiles: back a turn, play or pause, on a turn.
    Built out of the same surface, border and radius as .stat above so it reads
