@@ -10,6 +10,7 @@ const path = require('node:path');
 const {
   createSpeech,
   DEFAULT_MODEL,
+  DEFAULT_VOICE,
   DEFAULT_RATE,
   MAX_TEXT_CHARS,
   boundText,
@@ -492,14 +493,31 @@ test('nothing to say is refused before anything else, and does not fall back', a
   assert.equal(server.hits, 0);
 });
 
-test('no voice is a fallback, not a request', async (t) => {
-  const server = await forbidden(t);
+// The regression that shipped in 0.8.8, stated as an assertion.
+//
+// This used to refuse an unnamed voice and answer `fallback: true` — the same
+// answer it gives when the engine is off. So a window fault that left an agent
+// without a voice was indistinguishable from having no key, and every affected
+// turn was quietly read by the local voice. A paid key looked like it had done
+// nothing, which is exactly what was reported.
+//
+// An unnamed voice must now still reach Gemini, on a default voice. That degrades
+// audibly — everyone sounding alike — instead of silently abandoning the engine.
+test('an unnamed voice still uses the engine the user asked for', async () => {
+  const server = await stub((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(audioResponse(tone(64)));
+  });
   const speech = online(server.endpoint, tempDir());
 
-  const res = await speech.speak({ text: 'Somebody say this.', voice: '' });
-  assert.equal(res.ok, false);
-  assert.equal(res.fallback, true);
-  assert.equal(server.hits, 0);
+  for (const voice of ['', null, undefined, '   ']) {
+    const res = await speech.speak({ text: 'Somebody say this.', voice });
+    assert.equal(res.ok, true, 'a missing voice is not a reason to go local');
+  }
+  assert.ok(server.hits > 0, 'the request must actually be made');
+
+  const sent = JSON.parse(server.bodies[0]);
+  assert.equal(sent.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName, DEFAULT_VOICE);
 });
 
 // ------------------------------------------------------------------- the bounds

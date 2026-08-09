@@ -81,10 +81,14 @@ export default function ChatPane({
   // threads as onFork, since both only mean anything where a question can be
   // asked.
   onResend,
-  // Reading an agent's turn aloud again. Given only by a discussion with the
-  // voice switched on; every other thread passes nothing and the button is not
-  // rendered at all.
+  // Reading the session aloud from a given turn. Given only by a session with
+  // the voice switched on; every other thread passes nothing and the button is
+  // not rendered at all.
   onSpeak,
+  // Which message is being read, and whether it is stopped on. Narrowed to one
+  // bubble below rather than handed to all of them, so exactly one can be lit.
+  speakingId,
+  speechPaused,
   approval,
   // Live output, per agent: `[{ agentId, name, text }]`. One string was enough
   // while one agent answered at a time; a counsel has several typing into the
@@ -540,6 +544,9 @@ export default function ChatPane({
                   onFork={onFork}
                   onResend={onResend}
                   onSpeak={onSpeak}
+                  speakState={
+                    speakingId && m.id === speakingId ? (speechPaused ? 'paused' : 'playing') : undefined
+                  }
                   find={searching ? { query, base: bases.get(m.id) || 0, current } : undefined}
                 />
               </React.Fragment>

@@ -19,7 +19,7 @@ const CUSTOM_PATCH = {
 
 // Ringtone, notification and agent-music pickers with instant preview, volume,
 // and an optional user-supplied audio file for each.
-export default function SoundSettings({ value, onChange, soundUrl, speechEngine = 'local' }) {
+export default function SoundSettings({ value, onChange, soundUrl }) {
   const [customNames, setCustomNames] = useState({});
   const [previewing, setPreviewing] = useState(false);
   // The running audition's stop function. A ref rather than state because the
@@ -69,7 +69,15 @@ export default function SoundSettings({ value, onChange, soundUrl, speechEngine 
   // Applied immediately rather than batched into Save, exactly as SettingsModal
   // does for acceptLan: a switch that decides where words go should not sit in a
   // draft state where the panel shows one thing and main is doing another.
-  const [engine, setEngineState] = useState(speechEngine === 'gemini' ? 'gemini' : 'local');
+  //
+  // Seeded from main rather than from the window's copy of the config, and that
+  // is a fix rather than a preference. Because this setting travels on its own
+  // channel, App's config is not refreshed when it changes — so a panel seeded
+  // from that copy showed "This computer's voices" again the next time it was
+  // opened, while main had been on Gemini all along. It read exactly like the
+  // setting not having taken. Asking main, which is the authority, leaves
+  // nothing to fall out of step.
+  const [engine, setEngineState] = useState('local');
   const [hasKey, setHasKey] = useState(false);
   const [keyDraft, setKeyDraft] = useState('');
   const [keyError, setKeyError] = useState(null);
@@ -77,11 +85,15 @@ export default function SoundSettings({ value, onChange, soundUrl, speechEngine 
   const [auditioning, setAuditioning] = useState(false);
   const stopVoice = useRef(null);
 
-  // Whether a key is stored — never the key itself, which main does not hand
-  // back to any window.
+  // Which engine is really on, and whether a key is stored — never the key
+  // itself, which main does not hand back to any window.
   useEffect(() => {
     let live = true;
-    api.speechStatus?.().then((s) => live && setHasKey(Boolean(s?.hasKey)));
+    api.speechStatus?.().then((s) => {
+      if (!live || !s) return;
+      setEngineState(s.engine === 'gemini' ? 'gemini' : 'local');
+      setHasKey(Boolean(s.hasKey));
+    });
     return () => {
       live = false;
     };

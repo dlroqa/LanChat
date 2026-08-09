@@ -1,7 +1,7 @@
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Avatar from './Avatar.jsx';
 import EmptyState from './EmptyState.jsx';
-import { Sessions } from '../lib/icons.jsx';
+import { Sessions, Play, Pause, SkipBack, SkipForward } from '../lib/icons.jsx';
 import { useCountdown } from '../lib/useCountdown.js';
 import { useAgentPhrase } from '../lib/agentPhrase.js';
 import { turnStanding, turnStandingLabel } from '../lib/turnStanding.js';
@@ -54,6 +54,10 @@ export default function ConnectionPanel({
   commits,
   approvalClaim,
   onClaimApprovals,
+  // The session read-aloud transport: its state and its three handles. Absent
+  // wherever reading aloud is switched off, and the bar is not rendered at all
+  // then — a session panel without it looks exactly as it always has.
+  speech,
 }) {
   if (!peer) {
     return (
@@ -76,7 +80,14 @@ export default function ConnectionPanel({
 
   if (peer.kind === 'session') {
     return (
-      <SessionPanel peer={peer} streaming={streaming} awaiting={awaiting} typing={typing} commits={commits} />
+      <SessionPanel
+        peer={peer}
+        streaming={streaming}
+        awaiting={awaiting}
+        typing={typing}
+        commits={commits}
+        speech={speech}
+      />
     );
   }
 
@@ -282,7 +293,7 @@ function ApprovalClaim({ peer, claim, onClaim }) {
   );
 }
 
-function SessionPanel({ peer, streaming, awaiting, typing, commits }) {
+function SessionPanel({ peer, streaming, awaiting, typing, commits, speech }) {
   // Three sources again, and none of them the peer card: a session has no
   // presence to read one off. `typing` is main's own bracket around a run — it
   // is raised on the session's id, not the agent's, the moment the question goes
@@ -343,10 +354,78 @@ function SessionPanel({ peer, streaming, awaiting, typing, commits }) {
         <Stat label="Via" value={who || '—'} />
       </div>
 
+      {/* Reading the session out loud, straight through. Directly under the
+          tiles because it is about this session as a whole rather than about any
+          one message — the bubbles carry the per-turn button, and both move the
+          same cursor, so the two can never disagree about what is speaking. */}
+      {speech && <Transport {...speech} />}
+
       <div className="conn-note">
         {who
           ? `A workspace on this machine. Nothing in it goes over the wire — questions go to ${who}, and the answers are filed here rather than in ${many ? 'those agents’ own threads' : "that agent's own thread"}.`
           : 'A workspace on this machine, with no agent to ask yet. Choose one beside the title above and this session can start asking.'}
+      </div>
+    </div>
+  );
+}
+
+// Reading the whole session aloud: back a turn, play or pause, on a turn.
+//
+// Three buttons rather than one, because a read-through of twenty turns is a
+// thing you need to steer — a turn you missed is one press back, and one you do
+// not care about is one press forward. Play and pause are the same button
+// because they are the same decision, and two buttons where one of them is
+// always wrong is how a transport gets misread.
+//
+// The position line is not decoration. Speaking has no progress bar and a long
+// turn is silent while it is being synthesised, so "3 of 12" is the only thing
+// that distinguishes a reading that is working from one that has stalled.
+function Transport({ playing, paused, position, count, onToggle, onNext, onPrev }) {
+  const empty = !count;
+  // Why it is off, said on the control rather than left to be guessed at.
+  const why = empty ? 'Nothing has been said in this session yet' : undefined;
+  const label = playing ? 'Pause' : paused ? 'Continue reading aloud' : 'Read this session aloud';
+
+  return (
+    <div className="conn-transport">
+      <div className="transport-row">
+        <button
+          className="transport-btn"
+          onClick={onPrev}
+          disabled={empty}
+          title={why || 'Previous turn'}
+          aria-label="Previous turn"
+        >
+          <SkipBack size={16} />
+        </button>
+        <button
+          className={`transport-btn transport-play ${playing ? 'on' : ''}`}
+          onClick={onToggle}
+          disabled={empty}
+          title={why || label}
+          aria-label={label}
+          aria-pressed={playing}
+        >
+          {playing ? <Pause size={18} /> : <Play size={18} />}
+        </button>
+        <button
+          className="transport-btn"
+          onClick={onNext}
+          disabled={empty}
+          title={why || 'Next turn'}
+          aria-label="Next turn"
+        >
+          <SkipForward size={16} />
+        </button>
+      </div>
+      {/* Polite rather than assertive: worth hearing when it changes, not worth
+          cutting into whatever a screen reader is already saying. */}
+      <div className="transport-pos" role="status" aria-live="polite">
+        {empty
+          ? 'Nothing to read yet'
+          : playing || paused
+            ? `${position} of ${count}${paused ? ' · paused' : ''}`
+            : `${count} turn${count === 1 ? '' : 's'}`}
       </div>
     </div>
   );

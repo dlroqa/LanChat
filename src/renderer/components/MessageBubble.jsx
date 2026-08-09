@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { formatTime, formatBytes } from '../lib/util.js';
-import { FileIcon, Fork, Restore, Speaker } from '../lib/icons.jsx';
+import { FileIcon, Fork, Restore, Speaker, Pause } from '../lib/icons.jsx';
 import { linkify, isImageUrl } from '../lib/linkify.js';
 import { fieldHits } from '../lib/findInThread.js';
 import { useCountdown } from '../lib/useCountdown.js';
@@ -46,9 +46,13 @@ export default function MessageBubble({
   // Putting a question that failed back into the composer, with whatever it was
   // asking about. Offered on the same threads as onFork.
   onResend,
-  // Reading an agent's turn aloud again. Passed only by a discussion that has a
+  // Reading the session aloud from this turn. Passed only by a session with a
   // voice switched on, so every other thread renders exactly as it always has.
   onSpeak,
+  // This bubble's share of the player's cursor: 'playing' while it is the turn
+  // being read, 'paused' while it is the one stopped on, and undefined for every
+  // other bubble.
+  speakState,
   // What the find bar is looking for: `{ query, base, current }`, where `base`
   // is the ordinal this bubble's first hit was given and `current` is the one
   // being pointed at. Undefined whenever nothing is being searched, which is
@@ -135,10 +139,17 @@ export default function MessageBubble({
   // already been answered, and a button offering to put it back in the composer
   // is offering to ask it a third time on the way out the door.
   const resendable = failed && !dissolving && Boolean(onResend) && Boolean(msg.text);
-  // An agent's turn, in a thread that has a voice. Not on a bubble that is
+  // Anything with words in it, in a thread that has a voice. Your own questions
+  // included: the read-through covers the whole conversation, so a button that
+  // appeared on one side of it and not the other would be a button that could
+  // not start the reading from where you were looking. Not on a bubble that is
   // leaving, and not on a notice: neither is anybody's words.
-  const speakable =
-    Boolean(onSpeak) && !out && Boolean(msg.agentId) && Boolean(msg.text) && !msg.notice && !going;
+  const speakable = Boolean(onSpeak) && Boolean(msg.text) && !msg.notice && !going && msg.kind !== 'file';
+  // Whether this bubble is the one talking. `speakState` is the player's cursor
+  // narrowed to this message by the pane, so exactly one bubble can be lit.
+  const speaking = speakState === 'playing';
+  const speakTitle =
+    speakState === 'playing' ? 'Pause' : speakState === 'paused' ? 'Continue from here' : 'Read from here';
 
   // Counted here rather than passed in, so the sentence and the bubble it sits
   // under read the same clock. Stops at the moment the bubble starts to go —
@@ -278,21 +289,28 @@ export default function MessageBubble({
           <Fork size={15} />
         </button>
       )}
-      {/* Hearing a turn again. Only where there is a voice to hear it in: the
-          button is absent unless the pane passes a handler, which it only does
-          in a discussion, and only on an agent's own words — reading your own
-          question back to you is not a thing anybody wants.
+      {/* Hearing a turn. One button doing both jobs, because starting and
+          stopping the same sentence is one decision — a separate stop button is
+          dead weight on every bubble that is not talking, and two buttons where
+          one is always wrong is how a control gets misread.
 
-          Cheap on the second press: main keeps what it synthesised, keyed on the
-          voice and the text, so a replay costs nothing and is not billed twice. */}
+          It is absent unless the pane passes a handler, which it only does in a
+          session with reading aloud switched on.
+
+          Pressing it reads *on* from here rather than stopping at the end of
+          this turn: it moves the same cursor the transport in the Activity Panel
+          moves, so the two controls always agree about what is speaking. Cheap
+          on a second press — main keeps what it synthesised, keyed on the voice
+          and the text, so a replay costs nothing and is not billed twice. */}
       {speakable && (
         <button
-          className="bubble-speak"
+          className={`bubble-speak ${speaking ? 'on' : ''}`}
           onClick={() => onSpeak(msg)}
-          title="Read this aloud"
-          aria-label="Read this aloud"
+          title={speakTitle}
+          aria-label={speakTitle}
+          aria-pressed={speaking}
         >
-          <Speaker size={15} />
+          {speaking ? <Pause size={15} /> : <Speaker size={15} />}
         </button>
       )}
       {/* Beside the question rather than beside the error, because the error is

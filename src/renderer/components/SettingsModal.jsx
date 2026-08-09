@@ -153,7 +153,6 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
       <SoundSettings
         value={sounds}
         soundUrl={soundUrl}
-        speechEngine={config.agentSpeechEngine}
         onChange={(patch) => setSounds((v) => ({ ...v, ...patch }))}
       />
 

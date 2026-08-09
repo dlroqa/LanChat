@@ -4391,6 +4391,69 @@ input[type='range']:disabled::-webkit-slider-thumb {
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
 }
+
+/* ---- reading a session aloud ----------------------------------------------
+   The transport under the stat tiles: back a turn, play or pause, on a turn.
+   Built out of the same surface, border and radius as .stat above so it reads
+   as one more row of the panel rather than a widget dropped into it. */
+.conn-transport {
+  margin-top: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+}
+.transport-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.transport-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: var(--fg-faint);
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    opacity 0.12s ease;
+}
+.transport-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--fg);
+}
+/* Play is the one you reach for, so it is larger than its neighbours and
+   carries the accent once it is running — the two skip buttons stay quiet. */
+.transport-play {
+  width: 38px;
+  height: 38px;
+  color: var(--fg);
+}
+.transport-play.on {
+  color: var(--primary);
+}
+.transport-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.transport-btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+/* Speaking has no progress bar and a long turn is silent while it is being
+   synthesised, so this line is the only thing that tells a reading that is
+   working from one that has stalled. */
+.transport-pos {
+  margin-top: 6px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
+}
 .stat {
   position: relative;
   overflow: hidden;
@@ -6268,9 +6331,15 @@ code.path {
 }
 
 .bubble-row:hover .bubble-speak,
-.bubble-speak:focus-visible {
+.bubble-speak:focus-visible,
+/* The bubble being read stays visible without being pointed at — it is the one
+   control on screen you need to be able to find in order to stop it. */
+.bubble-speak.on {
   opacity: 1;
   transform: none;
+}
+.bubble-speak.on {
+  color: var(--agent-color, var(--primary));
 }
 
 .bubble-speak:hover {

@@ -5,21 +5,24 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
-// Reading a discussion aloud, turn by turn.
+// Reading a session aloud, turn by turn.
 //
-// The queue is the feature. Two agents in one round answer whenever their
-// transports happen to finish, which is to say at the same moment — so the thing
-// worth testing is that they are lined up rather than talked over each other,
-// that leaving the session stops the talking, and that nothing said once is said
-// again. None of that needs a renderer: the player takes its context, its
-// element, its synthesiser and its utterance factory as arguments.
+// The list and its cursor are the feature. Two agents in one round answer
+// whenever their transports happen to finish, which is to say at the same
+// moment, so the reading has to line them up rather than let them talk over each
+// other — and a person listening has to be able to go back one, stop, and carry
+// on. All of that is one list and one index, which is what these tests drive.
+//
+// The rule that matters most is the one an earlier draft got wrong: there is
+// **one** list, not a live queue beside a play-it-all list. With two, a turn
+// read live left the transport with nothing to go forward into. So several tests
+// below check that a live reading and the transport are moving the same thing.
 //
 // ESM for the renderer, and it imports React for its hooks. Drop the imports and
 // the `export` keywords and evaluate it, exactly as agentMusic.test.js does;
 // nothing runs at module scope, so React and the AudioContext never have to
-// exist. The two names the class really uses from other modules are passed in —
-// clampVolume read out of the real agentMusic.js rather than reimplemented, so
-// the two cannot drift.
+// exist. clampVolume is read out of the real agentMusic.js rather than
+// reimplemented, so the two cannot drift.
 const LIB = path.join(__dirname, '..', 'src', 'renderer', 'lib');
 const strip = (src) => src.replace(/^import[^;]+;$/gm, '').replace(/^export\s+/gm, '');
 
@@ -28,12 +31,13 @@ const { clampVolume } = new Function(
    return { clampVolume };`
 )();
 
-const { AgentSpeech, MAX_QUEUE, MAX_UTTERANCE_MS, PREVIEW_LINE, previewVoice } = new Function(
-  'clampVolume',
-  'audioContext',
-  `${strip(fs.readFileSync(path.join(LIB, 'agentSpeech.js'), 'utf8'))}
-   return { AgentSpeech, MAX_QUEUE, MAX_UTTERANCE_MS, PREVIEW_LINE, previewVoice };`
-)(clampVolume, () => null);
+const { AgentSpeech, MAX_LIST, MAX_UTTERANCE_MS, PREVIEW_LINE, previewVoice, IDLE, PLAYING, PAUSED } =
+  new Function(
+    'clampVolume',
+    'audioContext',
+    `${strip(fs.readFileSync(path.join(LIB, 'agentSpeech.js'), 'utf8'))}
+   return { AgentSpeech, MAX_LIST, MAX_UTTERANCE_MS, PREVIEW_LINE, previewVoice, IDLE, PLAYING, PAUSED };`
+  )(clampVolume, () => null);
 
 // ------------------------------------------------------------------- the stage
 
@@ -62,7 +66,6 @@ function stage() {
   // every assertion below would pass for the wrong reason.
   const gain = { gain: { value: 0 }, connect: () => ({}), disconnect() {} };
   const source = { connect: () => gain, disconnect() {} };
-  // The same gain object every time, so the test can read the volume off it.
   const context = () => ({
     createMediaElementSource: () => source,
     createGain: () => gain,
@@ -77,14 +80,23 @@ function localStage() {
   const utterances = [];
   const synth = {
     voices: [],
+    paused: 0,
+    resumed: 0,
+    cancelled: 0,
     getVoices() {
       return this.voices;
     },
     speak(u) {
       spoken.push(u);
     },
+    pause() {
+      this.paused += 1;
+    },
+    resume() {
+      this.resumed += 1;
+    },
     cancel() {
-      this.cancelled = (this.cancelled || 0) + 1;
+      this.cancelled += 1;
     },
   };
   const utterance = (text) => {
@@ -109,182 +121,314 @@ function deferredSynth() {
 }
 
 const settle = () => new Promise((r) => setImmediate(r));
+const turns = (...texts) => texts.map((t, i) => ({ id: String(i + 1), text: t, voice: 'Kore' }));
 
-// ------------------------------------------------------------------ one at a time
-
-test('two agents answering at once are lined up, not talked over each other', async () => {
-  const s = stage();
-  const d = deferredSynth();
-  const player = new AgentSpeech({
-    synthesize: d.synthesize,
-    context: s.context,
-    element: s.element,
-    synth: null,
-  });
-
-  player.enqueue({ id: 'a', text: 'First agent.', voice: 'Zephyr' });
-  player.enqueue({ id: 'b', text: 'Second agent.', voice: 'Kore' });
-  await settle();
-
-  // Only the first has even been sent for synthesis.
-  assert.equal(d.calls.length, 1);
-  assert.equal(d.calls[0].text, 'First agent.');
-
-  d.calls[0].resolve('file:///a.wav');
-  await settle();
-  assert.deepEqual(s.played, ['file:///a.wav']);
-  assert.equal(d.calls.length, 1, 'the second must not start while the first is speaking');
-
-  // The first finishes; the second follows.
-  s.el.onended();
-  await settle();
-  assert.equal(d.calls.length, 2);
-  d.calls[1].resolve('file:///b.wav');
-  await settle();
-  assert.deepEqual(s.played, ['file:///a.wav', 'file:///b.wav']);
-});
-
-test('turns are spoken in the order they arrived', async () => {
-  const s = stage();
-  const player = new AgentSpeech({
+// A player wired to a stage, with a synthesiser that answers immediately.
+function player(s, extra = {}) {
+  return new AgentSpeech({
     synthesize: async (text) => `file:///${text}.wav`,
     context: s.context,
     element: s.element,
     synth: null,
+    ...extra,
   });
+}
 
-  for (const id of ['1', '2', '3']) player.enqueue({ id, text: id, voice: 'Kore' });
-  for (let i = 0; i < 3; i += 1) {
-    await settle();
-    s.el.onended?.();
-  }
-  await settle();
-  assert.deepEqual(s.played, ['file:///1.wav', 'file:///2.wav', 'file:///3.wav']);
-});
+// ------------------------------------------------------------------ the list
 
-// ---------------------------------------------------------------- saying it once
-
-test('the same turn arriving twice is only spoken once', () => {
-  const player = new AgentSpeech({ synthesize: null, synth: null });
-  assert.equal(player.enqueue({ id: 'x', text: 'Once.', voice: 'Kore' }), true);
-  assert.equal(player.enqueue({ id: 'x', text: 'Once.', voice: 'Kore' }), false);
-});
-
-test('an empty turn is not a turn', () => {
-  const player = new AgentSpeech({ synthesize: null, synth: null });
-  for (const text of ['', '   ', null, undefined]) {
-    assert.equal(player.enqueue({ id: `e-${text}`, text, voice: 'Kore' }), false);
-  }
-});
-
-test('replay says it again, but will not stack', async () => {
+test('the whole session reads in order, one turn at a time', async () => {
   const s = stage();
-  const d = deferredSynth();
-  const player = new AgentSpeech({
-    synthesize: d.synthesize,
-    context: s.context,
-    element: s.element,
-    synth: null,
-  });
+  const p = player(s);
+  p.sync(turns('one', 'two', 'three'));
+  p.playFrom();
 
-  player.enqueue({ id: 'x', text: 'Hear this.', voice: 'Kore' });
   await settle();
-  d.calls[0].resolve('file:///x.wav');
+  assert.deepEqual(s.played, ['file:///one.wav'], 'only the first has started');
+
+  s.el.onended();
   await settle();
   s.el.onended();
   await settle();
+  assert.deepEqual(s.played, ['file:///one.wav', 'file:///two.wav', 'file:///three.wav']);
 
-  // Said once; asking again is allowed.
-  assert.equal(player.enqueue({ id: 'x', text: 'Hear this.', voice: 'Kore' }), false);
-  assert.equal(player.replay({ id: 'x', text: 'Hear this.', voice: 'Kore' }), true);
-  // But pressing the button twice does not queue it twice.
-  assert.equal(player.replay({ id: 'x', text: 'Hear this.', voice: 'Kore' }), false);
+  // Off the end: finished, and the cursor is one past the last so prev() knows
+  // where the last thing said was.
+  s.el.onended();
+  await settle();
+  assert.equal(p.status, IDLE);
+  assert.equal(p.index, 3);
 });
 
-test('the queue has a ceiling', () => {
+test('a bubble starts the reading from itself and carries on', async () => {
   const s = stage();
-  // Held on the first turn: a synthesis that never resolves is what stops the
-  // queue draining as fast as it is filled, which is the only state in which a
-  // backlog can exist to be bounded.
+  const p = player(s);
+  p.sync(turns('one', 'two', 'three'));
+  p.playFrom('2');
+
+  await settle();
+  assert.deepEqual(s.played, ['file:///two.wav']);
+  s.el.onended();
+  await settle();
+  assert.deepEqual(s.played, ['file:///two.wav', 'file:///three.wav'], 'it reads on, not just the one');
+});
+
+test('an id that is not there starts at the top rather than nowhere', async () => {
+  const s = stage();
+  const p = player(s);
+  p.sync(turns('one', 'two'));
+  p.playFrom('gone');
+  await settle();
+  assert.deepEqual(s.played, ['file:///one.wav']);
+});
+
+test('the list has a ceiling', () => {
+  const p = new AgentSpeech({ synthesize: null, synth: null });
+  p.sync(Array.from({ length: MAX_LIST + 50 }, (_, i) => ({ id: `q-${i}`, text: `turn ${i}` })));
+  assert.equal(p.count, MAX_LIST);
+});
+
+test('turns with nothing to say are not turns', () => {
+  const p = new AgentSpeech({ synthesize: null, synth: null });
+  p.sync([{ id: 'a', text: 'real' }, { id: 'b', text: '   ' }, { id: 'c', text: null }, { id: 'd' }, null]);
+  assert.equal(p.count, 1);
+});
+
+// ------------------------------------------------------- the transport
+
+test('forward and back walk the list', async () => {
+  const s = stage();
+  const p = player(s);
+  p.sync(turns('one', 'two', 'three'));
+  p.playFrom();
+  await settle();
+
+  p.next();
+  await settle();
+  assert.equal(p.speakingId, '2');
+
+  p.next();
+  await settle();
+  assert.equal(p.speakingId, '3');
+
+  p.prev();
+  await settle();
+  assert.equal(p.speakingId, '2');
+
+  assert.deepEqual(s.played, ['file:///one.wav', 'file:///two.wav', 'file:///three.wav', 'file:///two.wav']);
+});
+
+test('walking off either end stops rather than wrapping', async () => {
+  const s = stage();
+  const p = player(s);
+  p.sync(turns('one', 'two'));
+  p.playFrom();
+  await settle();
+
+  p.prev();
+  await settle();
+  assert.equal(p.status, IDLE, 'back from the first is the start, not the last');
+  assert.equal(p.index, 0);
+
+  p.playFrom('2');
+  await settle();
+  p.next();
+  await settle();
+  assert.equal(p.status, IDLE);
+  assert.equal(p.index, 2, 'one past the end');
+
+  // And back from there is the last thing said.
+  p.prev();
+  await settle();
+  assert.equal(p.speakingId, '2');
+});
+
+test('play, pause and carry on are one button', async () => {
+  const s = stage();
+  const p = player(s);
+  p.sync(turns('one', 'two'));
+
+  assert.equal(p.status, IDLE);
+  p.toggle();
+  await settle();
+  assert.equal(p.status, PLAYING);
+  assert.equal(s.el.paused, false);
+
+  p.toggle();
+  assert.equal(p.status, PAUSED);
+  assert.equal(s.el.paused, true, 'the audio really stops');
+
+  p.toggle();
+  await settle();
+  assert.equal(p.status, PLAYING);
+  assert.equal(s.el.paused, false, 'and really starts again');
+  // Resuming continues the same turn rather than restarting the list.
+  assert.equal(p.speakingId, '1');
+  assert.deepEqual(s.played, ['file:///one.wav', 'file:///one.wav']);
+});
+
+test('a finished reading plays again from the top', async () => {
+  const s = stage();
+  const p = player(s);
+  p.sync(turns('one'));
+  p.playFrom();
+  await settle();
+  s.el.onended();
+  await settle();
+  assert.equal(p.status, IDLE);
+
+  p.toggle();
+  await settle();
+  assert.equal(p.speakingId, '1');
+});
+
+test('the platform voice pauses and resumes too', async () => {
+  const l = localStage();
+  const p = new AgentSpeech({ synthesize: null, synth: l.synth, utterance: l.utterance });
+  p.sync(turns('one'));
+  p.playFrom();
+  await settle();
+
+  p.toggle();
+  assert.equal(l.synth.paused, 1);
+  p.toggle();
+  assert.equal(l.synth.resumed, 1);
+});
+
+test('pausing an empty session does nothing rather than throwing', () => {
+  const p = new AgentSpeech({ synthesize: null, synth: null });
+  assert.equal(p.toggle(), false);
+  assert.equal(p.next(), false);
+  assert.equal(p.prev(), false);
+  assert.equal(p.status, IDLE);
+});
+
+// -------------------------------------------------------------- live and the
+// transport are the same list
+
+test('a turn arriving live is read, and is then reachable with back', async () => {
+  const s = stage();
+  const p = player(s);
+
+  // Two turns already in the transcript, then a third arrives.
+  p.sync(turns('one', 'two'));
+  p.sync([...turns('one', 'two'), { id: '3', text: 'three', voice: 'Kore' }]);
+  p.speakNow('3');
+  await settle();
+  assert.deepEqual(s.played, ['file:///three.wav'], 'the new turn is what gets read');
+
+  // The whole conversation is still behind it — this is what the old two-list
+  // design got wrong, where Back after a live turn found nothing.
+  p.prev();
+  await settle();
+  assert.equal(p.speakingId, '2');
+});
+
+test('a turn arriving mid-reading waits its place instead of interrupting', async () => {
+  const s = stage();
   const d = deferredSynth();
-  const player = new AgentSpeech({
-    synthesize: d.synthesize,
-    context: s.context,
-    element: s.element,
-    synth: null,
-  });
+  const p = player(s, { synthesize: d.synthesize });
+  p.sync(turns('one', 'two'));
+  p.playFrom();
+  await settle();
+  d.calls[0].resolve('file:///one.wav');
+  await settle();
 
-  let taken = 0;
-  for (let i = 0; i < MAX_QUEUE + 10; i += 1) {
-    if (player.enqueue({ id: `q-${i}`, text: `turn ${i}`, voice: 'Kore' })) taken += 1;
-  }
+  p.sync([...turns('one', 'two'), { id: '3', text: 'three', voice: 'Kore' }]);
+  assert.equal(p.speakNow('3'), false, 'something is already being read');
+  assert.equal(p.speakingId, '1', 'and it is not disturbed');
+  assert.equal(p.count, 3);
+});
 
-  assert.equal(player.queue.length, MAX_QUEUE, 'the backlog stops at the ceiling');
-  // One is being worked on; the rest of what was accepted is the queue itself.
-  assert.equal(taken, MAX_QUEUE + 1);
+test('the cursor follows the turn it is on, not the index', async () => {
+  const s = stage();
+  const p = player(s);
+  p.sync(turns('one', 'two', 'three'));
+  p.playFrom('2');
+  await settle();
+  assert.equal(p.index, 1);
+
+  // A message arrives above it — an import, or an error swept out further up.
+  p.sync([{ id: '0', text: 'earlier', voice: 'Kore' }, ...turns('one', 'two', 'three')]);
+  assert.equal(p.speakingId, '2', 'still reading the same sentence');
+  assert.equal(p.index, 2, 'at its new position');
+});
+
+test('a turn that leaves the transcript stops the reading', async () => {
+  const s = stage();
+  const p = player(s);
+  p.sync(turns('one', 'two', 'three'));
+  p.playFrom('2');
+  await settle();
+
+  // The error being read is swept out from under it.
+  p.sync([turns('one', 'two', 'three')[0], turns('one', 'two', 'three')[2]]);
+  assert.equal(p.status, IDLE, 'it stops rather than reading whatever slid into place');
 });
 
 // -------------------------------------------------------------------- stopping
 
-test('leaving the session stops the talking and forgets the queue', async () => {
+test('leaving the session stops the talking and forgets the list', async () => {
   const s = stage();
   const d = deferredSynth();
-  const player = new AgentSpeech({
-    synthesize: d.synthesize,
-    context: s.context,
-    element: s.element,
-    synth: null,
-  });
-
-  player.enqueue({ id: 'a', text: 'One.', voice: 'Kore' });
-  player.enqueue({ id: 'b', text: 'Two.', voice: 'Puck' });
+  const p = player(s, { synthesize: d.synthesize });
+  p.sync(turns('one', 'two'));
+  p.playFrom();
   await settle();
-  d.calls[0].resolve('file:///a.wav');
+  d.calls[0].resolve('file:///one.wav');
   await settle();
   assert.equal(s.el.paused, false);
 
-  player.clear();
+  p.clear();
   assert.equal(s.el.paused, true, 'the voice stops at once');
-  assert.equal(player.queue.length, 0);
-  assert.equal(player.current, null);
-
-  // And the one that was waiting never starts.
-  await settle();
-  assert.equal(d.calls.length, 1);
-  assert.deepEqual(s.played, ['file:///a.wav']);
+  assert.equal(p.count, 0);
+  assert.equal(p.status, IDLE);
+  assert.equal(p.speakingId, null);
 });
 
 test('audio that arrives after the session moved on is thrown away', async () => {
   const s = stage();
   const d = deferredSynth();
-  const player = new AgentSpeech({
-    synthesize: d.synthesize,
-    context: s.context,
-    element: s.element,
-    synth: null,
-  });
-
-  player.enqueue({ id: 'a', text: 'Late.', voice: 'Kore' });
+  const p = player(s, { synthesize: d.synthesize });
+  p.sync(turns('late'));
+  p.playFrom();
   await settle();
 
-  // The person switches session while Gemini is still thinking.
-  player.clear();
+  p.clear();
   d.calls[0].resolve('file:///late.wav');
   await settle();
-
   assert.deepEqual(s.played, [], 'a sentence from the session you left must never play');
+});
+
+test('audio that arrives after the cursor moved is thrown away', async () => {
+  const s = stage();
+  const d = deferredSynth();
+  const p = player(s, { synthesize: d.synthesize });
+  p.sync(turns('one', 'two'));
+  p.playFrom();
+  await settle();
+
+  // Pressing Forward before the first turn's audio came back.
+  p.next();
+  await settle();
+  d.calls[0].resolve('file:///one.wav');
+  await settle();
+  assert.deepEqual(s.played, [], 'the skipped turn must not speak');
+
+  d.calls[1].resolve('file:///two.wav');
+  await settle();
+  assert.deepEqual(s.played, ['file:///two.wav']);
 });
 
 test('the platform voice is cancelled too', async () => {
   const l = localStage();
-  const player = new AgentSpeech({ synthesize: null, synth: l.synth, utterance: l.utterance });
-
-  player.enqueue({ id: 'a', text: 'Local.', voice: null });
+  const p = new AgentSpeech({ synthesize: null, synth: l.synth, utterance: l.utterance });
+  p.sync(turns('one'));
+  p.playFrom();
   await settle();
   assert.equal(l.spoken.length, 1);
 
-  player.clear();
-  assert.equal(l.synth.cancelled, 1);
+  p.clear();
+  assert.equal(l.synth.cancelled >= 1, true);
 });
 
 // -------------------------------------------------------------------- the duck
@@ -292,78 +436,62 @@ test('the platform voice is cancelled too', async () => {
 test('the music is ducked once and lifted once, not per turn', async () => {
   const s = stage();
   const changes = [];
-  const player = new AgentSpeech({
-    synthesize: async (text) => `file:///${text}.wav`,
-    context: s.context,
-    element: s.element,
-    synth: null,
-    onSpeaking: (on) => changes.push(on),
-  });
+  const p = player(s, { onSpeaking: (on) => changes.push(on) });
+  p.sync(turns('one', 'two', 'three'));
+  p.playFrom();
 
-  player.enqueue({ id: '1', text: '1', voice: 'Kore' });
-  player.enqueue({ id: '2', text: '2', voice: 'Puck' });
-  player.enqueue({ id: '3', text: '3', voice: 'Leda' });
   for (let i = 0; i < 3; i += 1) {
     await settle();
     s.el.onended?.();
   }
   await settle();
-
-  // Down at the start of the run, up at the end of it — a discussion of three
-  // turns must not flap the bed three times.
   assert.deepEqual(changes, [true, false]);
 });
 
-test('clearing lifts the duck', async () => {
+test('pausing lifts the duck, and carrying on puts it back', async () => {
   const s = stage();
   const changes = [];
-  const d = deferredSynth();
-  const player = new AgentSpeech({
-    synthesize: d.synthesize,
-    context: s.context,
-    element: s.element,
-    synth: null,
-    onSpeaking: (on) => changes.push(on),
-  });
-
-  player.enqueue({ id: 'a', text: 'One.', voice: 'Kore' });
+  const p = player(s, { onSpeaking: (on) => changes.push(on) });
+  p.sync(turns('one'));
+  p.playFrom();
   await settle();
-  assert.deepEqual(changes, [true]);
 
-  player.clear();
-  assert.deepEqual(changes, [true, false], 'the bed must not stay ducked forever');
+  p.toggle();
+  p.toggle();
+  await settle();
+  assert.deepEqual(changes, [true, false, true], 'a pause is a request for quiet');
 });
 
 // ------------------------------------------------------------------- fallbacks
 
 test('no online voice means the window speaks it instead', async () => {
   const l = localStage();
-  const player = new AgentSpeech({
+  const p = new AgentSpeech({
     // What speech.js returns when the engine is left alone: not an error, a
     // signal to use the local voice.
     synthesize: async () => null,
     synth: l.synth,
     utterance: l.utterance,
   });
-
-  player.enqueue({ id: 'a', text: 'Spoken locally.', voice: 'Kore', localVoice: null });
+  p.sync([{ id: 'a', text: 'Spoken locally.', voice: 'Kore' }]);
+  p.playFrom();
   await settle();
 
   assert.equal(l.spoken.length, 1);
   assert.equal(l.utterances[0].text, 'Spoken locally.');
 });
 
-test('a synthesiser that throws is a fallback, not a stuck queue', async () => {
+test('a synthesiser that throws is a fallback, not a stuck reading', async () => {
   const l = localStage();
-  const player = new AgentSpeech({
+  const p = new AgentSpeech({
     synthesize: async () => {
       throw new Error('network on fire');
     },
     synth: l.synth,
     utterance: l.utterance,
   });
-
-  player.enqueue({ id: 'a', text: 'Still said.', voice: 'Kore' });
+  p.sync([{ id: 'a', text: 'Still said.', voice: 'Kore' }]);
+  p.playFrom();
   await settle();
   assert.equal(l.spoken.length, 1);
 });
@@ -374,55 +502,45 @@ test('the local voice is matched by name, and a missing one is not fatal', async
     { name: 'Alice', lang: 'en-GB' },
     { name: 'Bob', lang: 'en-GB' },
   ];
-  const player = new AgentSpeech({ synthesize: null, synth: l.synth, utterance: l.utterance });
-
-  player.enqueue({ id: 'a', text: 'One.', voice: null, localVoice: 'Bob' });
+  const p = new AgentSpeech({ synthesize: null, synth: l.synth, utterance: l.utterance });
+  p.sync([
+    { id: 'a', text: 'One.', localVoice: 'Bob' },
+    { id: 'b', text: 'Two.', localVoice: 'Nobody' },
+  ]);
+  p.playFrom();
   await settle();
   assert.equal(l.utterances[0].voice.name, 'Bob');
 
   l.utterances[0].onend();
-  player.enqueue({ id: 'b', text: 'Two.', voice: null, localVoice: 'Nobody' });
   await settle();
   // A voice that has gone is the default voice, not a failure.
   assert.equal(l.utterances[1].voice, null);
   assert.equal(l.spoken.length, 2);
 });
 
-test('a file that will not decode skips the turn rather than stopping the queue', async () => {
+test('a file that will not decode skips the turn rather than stopping the reading', async () => {
   const s = stage();
-  const player = new AgentSpeech({
-    synthesize: async (text) => `file:///${text}.wav`,
-    context: s.context,
-    element: s.element,
-    synth: null,
-  });
-
-  player.enqueue({ id: '1', text: '1', voice: 'Kore' });
-  player.enqueue({ id: '2', text: '2', voice: 'Puck' });
+  const p = player(s);
+  p.sync(turns('one', 'two'));
+  p.playFrom();
   await settle();
-  // The first one is broken.
   s.el.onerror();
   await settle();
-  s.el.onended?.();
-  await settle();
-
-  assert.deepEqual(s.played, ['file:///1.wav', 'file:///2.wav']);
+  assert.deepEqual(s.played, ['file:///one.wav', 'file:///two.wav']);
 });
 
-test('a window with no audio at all does not wedge the queue', async () => {
-  const player = new AgentSpeech({
+test('a window with no audio at all does not wedge the reading', async () => {
+  const p = new AgentSpeech({
     synthesize: async () => 'file:///a.wav',
     // No AudioContext to be had — a headless window, or audio in use elsewhere.
     context: () => null,
     synth: null,
   });
-
-  player.enqueue({ id: 'a', text: 'One.', voice: 'Kore' });
-  player.enqueue({ id: 'b', text: 'Two.', voice: 'Puck' });
+  p.sync(turns('one', 'two'));
+  p.playFrom();
   await settle();
   await settle();
-
-  assert.equal(player.current, null, 'the queue must drain rather than jam');
+  assert.equal(p.status, IDLE, 'the list must drain rather than jam');
 });
 
 // -------------------------------------------------------------------- the clock
@@ -430,57 +548,78 @@ test('a window with no audio at all does not wedge the queue', async () => {
 test('a turn that never reports finishing does not gag the rest', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const s = stage();
-  const player = new AgentSpeech({
-    synthesize: async (text) => `file:///${text}.wav`,
-    context: s.context,
-    element: s.element,
-    synth: null,
-  });
-
-  player.enqueue({ id: '1', text: '1', voice: 'Kore' });
-  player.enqueue({ id: '2', text: '2', voice: 'Puck' });
+  const p = player(s);
+  p.sync(turns('one', 'two'));
+  p.playFrom();
   await settle();
-  assert.deepEqual(s.played, ['file:///1.wav']);
+  assert.deepEqual(s.played, ['file:///one.wav']);
 
-  // Nothing ever fires onended.
   t.mock.timers.tick(MAX_UTTERANCE_MS + 1);
   await settle();
+  assert.deepEqual(s.played, ['file:///one.wav', 'file:///two.wav']);
+});
 
-  assert.deepEqual(s.played, ['file:///1.wav', 'file:///2.wav']);
+test('a paused turn is not skipped by the clock', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const s = stage();
+  const p = player(s);
+  p.sync(turns('one', 'two'));
+  p.playFrom();
+  await settle();
+
+  p.toggle(); // paused — nothing is being said for the cap to be a cap on
+  t.mock.timers.tick(MAX_UTTERANCE_MS * 2);
+  await settle();
+  assert.equal(p.status, PAUSED);
+  assert.equal(p.speakingId, '1', 'still where it was left');
+  assert.deepEqual(s.played, ['file:///one.wav']);
 });
 
 // -------------------------------------------------------------------- the volume
 
 test('the volume is clamped and reaches the gain', async () => {
   const s = stage();
-  const player = new AgentSpeech({
-    synthesize: async () => 'file:///a.wav',
-    context: s.context,
-    element: s.element,
-    synth: null,
-  });
-
-  player.enqueue({ id: 'a', text: 'One.', voice: 'Kore' });
+  const p = player(s);
+  p.sync(turns('one'));
+  p.playFrom();
   await settle();
-  player.setVolume(0.5);
-  assert.equal(s.gain.gain.value, 0.5);
 
-  player.setVolume(9);
+  p.setVolume(0.5);
+  assert.equal(s.gain.gain.value, 0.5);
+  p.setVolume(9);
   assert.equal(s.gain.gain.value, 1);
-  player.setVolume(-3);
+  p.setVolume(-3);
   assert.equal(s.gain.gain.value, 0);
-  player.setVolume('nonsense');
+  p.setVolume('nonsense');
   assert.equal(s.gain.gain.value, 0);
 });
 
 test('the local voice takes the volume too', async () => {
   const l = localStage();
-  const player = new AgentSpeech({ synthesize: null, synth: l.synth, utterance: l.utterance });
-  player.setVolume(0.4);
-
-  player.enqueue({ id: 'a', text: 'One.', voice: null });
+  const p = new AgentSpeech({ synthesize: null, synth: l.synth, utterance: l.utterance });
+  p.setVolume(0.4);
+  p.sync(turns('one'));
+  p.playFrom();
   await settle();
   assert.equal(l.utterances[0].volume, 0.4);
+});
+
+// ------------------------------------------------------------------ the window
+
+test('the window is told whenever the position moves, not only the status', async () => {
+  const s = stage();
+  let draws = 0;
+  const p = player(s, { onChange: () => (draws += 1) });
+  p.sync(turns('one', 'two'));
+  p.playFrom();
+  await settle();
+  const atFirst = draws;
+
+  s.el.onended();
+  await settle();
+  // The status is still 'playing' — only the turn changed. Announcing only on a
+  // status change would freeze the position line and the lit bubble on turn one.
+  assert.ok(draws > atFirst, 'moving to the next turn must redraw');
 });
 
 // ------------------------------------------------------------------- the preview

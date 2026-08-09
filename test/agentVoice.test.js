@@ -36,11 +36,24 @@ function load() {
   const body = `${color}\n${voice.replace(/^import[^;]+;$/gm, '')}`.replace(/^export\s+/gm, '');
   return new Function(
     `${body}
-     return { AGENT_HUES, VOICES, colorOf, paletteFor, ringFor, slotFor, voiceOf, voicesFor, localVoicesFor };`
+     return { AGENT_HUES, VOICES, USER_VOICE, colorOf, paletteFor, ringFor, slotFor, voiceOf,
+              voicesFor, voiceForTurn, localVoicesFor, localUserVoice };`
   )();
 }
 
-const { AGENT_HUES, VOICES, paletteFor, ringFor, slotFor, voiceOf, voicesFor, localVoicesFor } = load();
+const {
+  AGENT_HUES,
+  VOICES,
+  USER_VOICE,
+  paletteFor,
+  ringFor,
+  slotFor,
+  voiceOf,
+  voicesFor,
+  voiceForTurn,
+  localVoicesFor,
+  localUserVoice,
+} = load();
 
 // A pool of stable, realistic ids.
 const ids = (n, prefix = 'agent') => Array.from({ length: n }, (_, i) => `${prefix}-${i}`);
@@ -136,6 +149,110 @@ test('nothing, or nonsense, is an empty result rather than a crash', () => {
   assert.equal(voicesFor(null).size, 0);
   assert.equal(voicesFor([]).size, 0);
   assert.equal(voicesFor([null, '', undefined]).size, 0);
+});
+
+// ------------------------------------------- everybody always gets a voice
+//
+// The bug that shipped in 0.8.8, pinned so it cannot come back.
+//
+// A session set to "all agents" keeps a single head id in `agentIds` and
+// resolves its real cast at ask time, so agents answering from outside that
+// stored list resolved to `undefined`. main took an unnamed voice as a reason to
+// fall back, and every one of those turns was read by the local voice however
+// good the API key was — which is exactly what "the key did nothing" looked like.
+
+test('an agent nobody told us about still gets a voice', () => {
+  const known = ids(2, 'known');
+  const voices = voicesFor(known);
+
+  // The case that broke: answering from outside the resolved cast.
+  const stranger = voiceForTurn({ agentId: 'agent-from-a-peer' }, voices);
+  assert.ok(VOICES.includes(stranger), 'a stranger must still speak');
+  assert.equal(stranger, voiceOf('agent-from-a-peer'), 'and always in the same voice');
+
+  // And the degenerate case: no cast resolved at all, which is what an
+  // all-agents session with nothing ready looks like.
+  const noCast = voicesFor([]);
+  for (const id of ids(5, 'orphan')) {
+    assert.ok(VOICES.includes(voiceForTurn({ agentId: id }, noCast)));
+  }
+});
+
+test('voiceForTurn never answers with nothing', () => {
+  const voices = voicesFor(ids(3, 'cast'));
+  for (const agentId of [...ids(3, 'cast'), 'unknown', '', null, undefined, 0]) {
+    const voice = voiceForTurn({ agentId }, voices);
+    assert.equal(typeof voice, 'string');
+    assert.ok(voice.length > 0);
+  }
+  // Even with no map at all — a render before the cast has resolved.
+  assert.ok(VOICES.includes(voiceForTurn({ agentId: 'x' }, null)));
+  assert.ok(VOICES.includes(voiceForTurn({ agentId: 'x' }, undefined)));
+});
+
+test('the resolved cast still decides distinctness', () => {
+  // The fallback is a floor, not a replacement: agents that *are* in the cast
+  // keep the distinct voices the ring gave them.
+  const cast = ids(4, 'distinct');
+  const voices = voicesFor(cast);
+  const spoken = cast.map((id) => voiceForTurn({ agentId: id }, voices));
+  assert.equal(new Set(spoken).size, 4);
+  for (const id of cast) assert.equal(voiceForTurn({ agentId: id }, voices), voices.get(id));
+});
+
+// ------------------------------------------------------------- your own voice
+
+test('your voice is not one an agent can be given', () => {
+  assert.equal(typeof USER_VOICE, 'string');
+  assert.ok(!VOICES.includes(USER_VOICE), 'held outside the ring on purpose');
+  // Which is what keeps the colour/voice invariant below true.
+  assert.equal(VOICES.length, AGENT_HUES.length);
+
+  // No cast of any size can be dealt it.
+  for (const name of voicesFor(ids(40, 'crowd')).values()) assert.notEqual(name, USER_VOICE);
+  for (const id of ids(40, 'crowd')) assert.notEqual(voiceOf(id), USER_VOICE);
+});
+
+test('your turns are read in your voice, whoever else is in the room', () => {
+  const voices = voicesFor(ids(4, 'room'));
+  assert.equal(voiceForTurn({ mine: true }, voices), USER_VOICE);
+  // `mine` wins even if an agentId came along for the ride.
+  assert.equal(voiceForTurn({ mine: true, agentId: 'room-0' }, voices), USER_VOICE);
+});
+
+test('the platform lends you its own default voice', () => {
+  const available = [
+    { name: 'Alice', lang: 'en-GB' },
+    { name: 'Bob', lang: 'en-GB', default: true },
+    { name: 'Carol', lang: 'en-GB' },
+  ];
+  assert.equal(localUserVoice(available, 'en'), 'Bob');
+  // No default declared: the first is the machine's ordinary voice.
+  assert.equal(localUserVoice([{ name: 'Solo', lang: 'en' }], 'en'), 'Solo');
+  assert.equal(localUserVoice([], 'en'), null);
+  assert.equal(localUserVoice(null, 'en'), null);
+});
+
+test('an agent is not given the voice reading your words', () => {
+  const available = [
+    { name: 'Alice', lang: 'en-GB' },
+    { name: 'Bob', lang: 'en-GB', default: true },
+    { name: 'Carol', lang: 'en-GB' },
+  ];
+  const mine = localUserVoice(available, 'en');
+  const dealt = localVoicesFor(ids(2, 'local'), available, 'en', { exclude: mine });
+  assert.equal(dealt.size, 2);
+  for (const name of dealt.values()) assert.notEqual(name, mine);
+});
+
+test('a machine with one voice shares it rather than leaving agents mute', () => {
+  const available = [{ name: 'Only', lang: 'en', default: true }];
+  const mine = localUserVoice(available, 'en');
+  const dealt = localVoicesFor(ids(2, 'one'), available, 'en', { exclude: mine });
+  // Holding the only voice back would leave the agents unable to speak at all,
+  // which is worse than sounding like you.
+  assert.equal(dealt.size, 2);
+  for (const name of dealt.values()) assert.equal(name, 'Only');
 });
 
 // ------------------------------------------------- the colour/voice invariant

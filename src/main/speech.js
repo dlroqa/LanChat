@@ -41,6 +41,21 @@ const path = require('node:path');
 const DEFAULT_MODEL = 'gemini-3.1-flash-tts-preview';
 const DEFAULT_ENDPOINT = 'https://generativelanguage.googleapis.com';
 
+// The voice used when the window names none.
+//
+// It exists because of a bug worth not repeating. This used to refuse an
+// unnamed voice and report `fallback: true`, which is the same answer it gives
+// when the online engine is switched off — so a renderer fault that left an
+// agent without a voice was indistinguishable from having no API key, and every
+// affected turn was quietly spoken by the local voice instead. A paid key
+// looked like it had done nothing.
+//
+// Falling back to a voice rather than to the local engine makes that failure
+// audible instead of silent: everybody would sound the same, which is obviously
+// wrong and obviously *online*. The renderer names a voice for every agent (see
+// agentVoice.js voiceOf), so nothing should reach this.
+const DEFAULT_VOICE = 'Zephyr';
+
 // What the model returns: mono signed 16-bit little-endian PCM at 24 kHz. Google
 // states all four. It is used only as the fallback for a response that arrives
 // without a mimeType to read the rate out of — see rateOf().
@@ -315,8 +330,9 @@ function createSpeech({ config, userDataDir, safeStorage, endpoint = DEFAULT_END
     const bounded = boundText(text);
     if (!bounded) return { ok: false, error: 'There was nothing to say.', fallback: false };
 
-    const name = typeof voice === 'string' && voice.trim() ? voice.trim() : null;
-    if (!name) return { ok: false, error: 'No voice was chosen.', fallback: true };
+    // An unnamed voice is a bug in the window, not a reason to abandon the
+    // engine the user paid for and asked for. See DEFAULT_VOICE.
+    const name = typeof voice === 'string' && voice.trim() ? voice.trim() : DEFAULT_VOICE;
 
     // The gate. Checked before anything else so the offline default costs
     // nothing at all — no key read, no directory made, no socket.
@@ -425,6 +441,7 @@ function createSpeech({ config, userDataDir, safeStorage, endpoint = DEFAULT_END
 module.exports = {
   createSpeech,
   DEFAULT_MODEL,
+  DEFAULT_VOICE,
   DEFAULT_RATE,
   MAX_TEXT_CHARS,
   MAX_CACHE_BYTES,

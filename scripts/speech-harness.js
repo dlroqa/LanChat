@@ -24,7 +24,11 @@ const { chromiumPath, render, withScratchDir } = require('./lib/chromium.js');
 const ROOT = path.join(__dirname, '..');
 const SRC = path.join(ROOT, 'src', 'renderer');
 
-const RUN = { width: 760, height: 1000, budget: 8000, args: ['--hide-scrollbars'] };
+// Wide enough for the right column to exist: below the 980px break the whole
+// side panel is `display: none`, and a transport measured inside a hidden column
+// reports zero-sized rectangles that make geometry assertions pass for the wrong
+// reason.
+const RUN = { width: 1280, height: 1040, budget: 8000, args: ['--hide-scrollbars'] };
 
 function entry() {
   return `
@@ -32,7 +36,8 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import SoundSettings from ${JSON.stringify(path.join(SRC, 'components', 'SoundSettings.jsx'))};
 import MessageBubble from ${JSON.stringify(path.join(SRC, 'components', 'MessageBubble.jsx'))};
-window.__lanchat = { React, createRoot, SoundSettings, MessageBubble };
+import ConnectionPanel from ${JSON.stringify(path.join(SRC, 'components', 'ConnectionPanel.jsx'))};
+window.__lanchat = { React, createRoot, SoundSettings, MessageBubble, ConnectionPanel };
 `;
 }
 
@@ -84,11 +89,19 @@ async function buildBundle(dir) {
 function buildPage(bundle) {
   const css = fs.readFileSync(path.join(SRC, 'styles.css'), 'utf8');
 
+  // Transitions are settled rather than animated. Under --virtual-time-budget a
+  // CSS transition never advances, so a transitioned property reads back at its
+  // starting value forever — measuring opacity through one would report every
+  // revealed button as invisible. The rules that decide the value are still the
+  // real ones; only the travel to it is removed.
+  const settle = `* { transition: none !important; animation: none !important; }`;
+
   return `<!doctype html>
-<html><head><meta charset="utf-8"><style>${css}</style></head>
+<html><head><meta charset="utf-8"><style>${css}</style><style>${settle}</style></head>
 <body><div id="root" class="app">
   <div class="modal" id="settings"></div>
   <div class="messages-wrap" id="thread"></div>
+  <aside class="side-panel" id="panel"></aside>
 </div>
 <pre id="result"></pre>
 <script>
@@ -110,7 +123,7 @@ window.lanchat = {
 </script>
 <script>${bundle}</script>
 <script>
-const { React, createRoot, SoundSettings, MessageBubble } = window.__lanchat;
+const { React, createRoot, SoundSettings, MessageBubble, ConnectionPanel } = window.__lanchat;
 const h = React.createElement;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const $ = (s) => document.querySelector(s);
@@ -122,12 +135,10 @@ let sounds = {
   muteNotifications: false, agentMusicEnabled: true, agentMusic: null, agentMusicVolume: 0.5,
   agentSpeechEnabled: true, agentSpeechVolume: 0.9,
 };
-let speechEngine = 'local';
 const settings = createRoot($('#settings'));
 const drawSettings = () => new Promise((r) => {
   settings.render(h(SoundSettings, {
     value: sounds,
-    speechEngine,
     soundUrl: () => null,
     onChange: (patch) => { sounds = { ...sounds, ...patch }; drawSettings(); },
   }));
@@ -145,13 +156,33 @@ const MY_QUESTION = {
   text: 'Which one first?', ts: Date.now(),
 };
 const thread = createRoot($('#thread'));
-const drawThread = (onSpeak) => new Promise((r) => {
+const drawThread = (onSpeak, speakingId, speechPaused) => new Promise((r) => {
+  const state = (m) => (speakingId && m.id === speakingId ? (speechPaused ? 'paused' : 'playing') : undefined);
   thread.render(h('div', { className: 'messages' }, [
-    h(MessageBubble, { key: 'a', msg: AGENT_TURN, color: '#88ddb3', onSpeak }),
-    h(MessageBubble, { key: 'b', msg: MY_QUESTION, onSpeak }),
+    h(MessageBubble, { key: 'a', msg: AGENT_TURN, color: '#88ddb3', onSpeak, speakState: state(AGENT_TURN) }),
+    h(MessageBubble, { key: 'b', msg: MY_QUESTION, onSpeak, speakState: state(MY_QUESTION) }),
   ]));
   setTimeout(r, 80);
 });
+
+// ---- the Activity Panel's transport ----
+const SESSION = {
+  id: 'session:1', kind: 'session', name: 'New Session', online: true,
+  mode: 'dialogue', agentNames: ['Mac', 'Zima', 'Tessie'], agentId: 'agent-7', agentName: 'Mac',
+};
+const panel = createRoot($('#panel'));
+const drawPanel = (speech) => new Promise((r) => {
+  panel.render(h(ConnectionPanel, {
+    peer: SESSION, stats: null, agentStatus: null,
+    awaiting: false, typing: false, streaming: false, commits: 1,
+    speech,
+  }));
+  setTimeout(r, 80);
+});
+const TRANSPORT = {
+  playing: false, paused: false, position: 0, count: 12,
+  onToggle: () => {}, onNext: () => {}, onPrev: () => {},
+};
 
 // Only what is on the panel. document.body.textContent would also pick up the
 // inline bundle, which contains every one of these strings as source — a check
@@ -204,15 +235,67 @@ const out = {};
   out.engineDisabledWhenOff = $('#speech-engine').disabled;
   out.keyDisabledWhenOff = $('#speech-key') ? $('#speech-key').disabled : null;
 
-  // ---- the replay button ----
+  // ---- the bubble's play/pause ----
   await drawThread(() => {});
   const speak = $('.bubble-speak');
   out.speakOnAgentTurn = Boolean(speak);
-  // One button, on the agent's bubble only: reading your own question back to
-  // you is not a thing anybody wants.
+  // Both sides now: the read-through covers the whole conversation, so your own
+  // questions carry the button too.
   out.speakButtons = document.querySelectorAll('.bubble-speak').length;
   out.speakLabel = speak ? speak.getAttribute('aria-label') : null;
   out.hiddenAtRest = seen(speak);
+
+  // One button doing both jobs. The bubble being read swaps its icon, says so,
+  // and stays visible without being pointed at — it is the control you need to
+  // find in order to stop it.
+  await drawThread(() => {}, 'm1', false);
+  const playingBtn = $('.bubble-speak');
+  out.bubblePlayingLabel = playingBtn.getAttribute('aria-label');
+  out.bubblePlayingPressed = playingBtn.getAttribute('aria-pressed');
+  out.bubblePlayingVisible = seen(playingBtn);
+  out.bubblePlayingIsPause = playingBtn.querySelectorAll('rect').length === 2;
+  out.litBubbles = document.querySelectorAll('.bubble-speak.on').length;
+
+  await drawThread(() => {}, 'm1', true);
+  out.bubblePausedLabel = $('.bubble-speak').getAttribute('aria-label');
+
+  // ---- the transport ----
+  await drawPanel(TRANSPORT);
+  out.transportButtons = document.querySelectorAll('.conn-transport .transport-btn').length;
+  out.transportLabels = [...document.querySelectorAll('.conn-transport .transport-btn')]
+    .map((b) => b.getAttribute('aria-label'));
+  out.transportPos = $('.transport-pos').textContent;
+  // Below the stat tiles, which is where it belongs: it is about the session as
+  // a whole, not about any one message. Measured only once the bar is really on
+  // screen — a hidden column reports zeroes, and 0 <= 0 would pass.
+  const statsBox = $('.conn-stats').getBoundingClientRect();
+  const barBox = $('.conn-transport').getBoundingClientRect();
+  out.transportRendered = barBox.height > 0 && barBox.width > 0;
+  out.transportBelowStats = out.transportRendered && statsBox.bottom <= barBox.top;
+  // And the note that explains the session sits below both of them.
+  out.transportAboveNote = barBox.bottom <= $('.conn-note').getBoundingClientRect().top;
+
+  await drawPanel({ ...TRANSPORT, playing: true, position: 3 });
+  out.playingLabel = $('.transport-play').getAttribute('aria-label');
+  out.playingIsPause = $('.transport-play').querySelectorAll('rect').length === 2;
+  out.playingPos = $('.transport-pos').textContent;
+
+  await drawPanel({ ...TRANSPORT, paused: true, position: 3 });
+  out.pausedPos = $('.transport-pos').textContent;
+  out.pausedLabel = $('.transport-play').getAttribute('aria-label');
+
+  // An empty session says why it is off rather than leaving it to be guessed.
+  await drawPanel({ ...TRANSPORT, count: 0 });
+  out.emptyDisabled = [...document.querySelectorAll('.transport-btn')].every((b) => b.disabled);
+  out.emptyWhy = $('.transport-play').getAttribute('title');
+  out.emptyPos = $('.transport-pos').textContent;
+
+  // No transport at all where reading aloud is off, so the panel is untouched
+  // everywhere else.
+  await drawPanel(null);
+  out.transportWhenOff = document.querySelectorAll('.conn-transport').length;
+
+  await drawPanel({ ...TRANSPORT, playing: true, position: 3 });
 
   // The two ways it comes back are :hover and :focus-visible, and headless
   // chromium can drive neither honestly — there is no pointer, and a

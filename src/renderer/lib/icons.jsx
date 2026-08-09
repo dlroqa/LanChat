@@ -68,6 +68,22 @@ export const Mic = (p) => (
     <line x1="12" y1="19" x2="12" y2="22" />
   </S>
 );
+// The transport either side of play/pause: back to the turn before, on to the
+// turn after. A bar against a triangle, which is the one shape everything with a
+// track list has used for forty years — no explanation needed, and distinct from
+// the plain triangle that means play.
+export const SkipBack = (p) => (
+  <S {...p}>
+    <path d="M18 6 9 12l9 6V6Z" />
+    <line x1="6" y1="6" x2="6" y2="18" />
+  </S>
+);
+export const SkipForward = (p) => (
+  <S {...p}>
+    <path d="m6 6 9 6-9 6V6Z" />
+    <line x1="18" y1="6" x2="18" y2="18" />
+  </S>
+);
 // Reading a turn aloud. A speaker with two waves rather than one: one wave is
 // the volume glyph used all over this app's sliders, and a button that borrows
 // it would read as "set the volume of this message".

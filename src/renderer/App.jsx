@@ -84,6 +84,9 @@ const EMPTY_DOCS = [];
 // The same trick for live agent output: one shared empty array, so a thread with
 // nothing streaming into it hands the pane the same reference every render.
 const EMPTY_STREAMS = [];
+// A stable empty list, so a session with nothing to read aloud does not hand the
+// player a new array on every render and restart it.
+const EMPTY_TURNS = [];
 
 // Ids for bubbles that only ever exist in this window. Counted rather than
 // randomised because nothing outside this process will ever see one, and a
@@ -1370,6 +1373,11 @@ export default function App() {
         // The counsel, and the one-agent view of it that everything written
         // before counsels existed still reads.
         agentIds: record.agentIds || [],
+        // Who it actually asks, as resolved above. `agentIds` is the stored
+        // list, which for a session set to "all agents" is a single head id
+        // rather than the cast — reading that where the resolved list was meant
+        // is what left most agents without a voice in 0.8.8.
+        counselIds: counsel.map((a) => a.id),
         allAgents: Boolean(record.allAgents),
         mode: record.mode || 'parallel',
         // How many turns a discussion in this session gets. Carried even when
@@ -2011,17 +2019,19 @@ export default function App() {
     return false;
   }, [typing, awaiting]);
 
-  // ---- reading a discussion aloud ----
+  // ---- reading a session aloud ----
   //
-  // Sessions only, and dialogues only. A dialogue is the one thread in the app
-  // that is a conversation between several agents rather than a series of
-  // answers to you, which is the only thing worth following by ear: parallel and
-  // relay produce answers to one question, and a session with a single agent is
-  // that agent talking to you, in a thread you are already reading.
+  // Sessions only. A thread with a person has an ear at the far end already, and
+  // an agent answering a direct question is one answer rather than a
+  // conversation.
+  //
+  // Any session mode, though — pressing play is a deliberate act, and a Counsel
+  // worth listening back to is no less worth it than a Discussion. Only the
+  // *live* reading below is narrowed to a dialogue, which is the one mode where
+  // turns arrive as a conversation rather than as answers to one question.
   const spokenSession = useMemo(() => {
     if (!isSessionThread(selectedId)) return null;
-    const record = sessions.find((s) => s.id === selectedId);
-    return record && record.mode === 'dialogue' ? record : null;
+    return sessions.find((s) => s.id === selectedId) || null;
   }, [selectedId, sessions]);
 
   // A call owns the speakers, exactly as it does for the music below.
@@ -2033,20 +2043,37 @@ export default function App() {
     !incoming &&
     !groupInvited;
 
-  const {
-    speak: speakTurn,
-    replay: replayTurn,
-    clear: clearSpeech,
-    speaking,
-  } = useAgentSpeech({
+  // Who this session actually asks.
+  //
+  // Not `record.agentIds`, which is the bug that shipped in 0.8.8: a session set
+  // to "all agents" keeps a single head id there and resolves its real cast at
+  // ask time (see resolveCounsel in main/sessions/counsel.js). Reading the
+  // stored list left most agents with no voice, and an unnamed voice used to
+  // send the turn to the local engine however good the API key was. The card
+  // above already resolves this exact list for the panel, so it is taken from
+  // there rather than worked out a second way that could disagree.
+  const spokenAgentIds = selectedPeer?.kind === 'session' ? selectedPeer.counselIds : null;
+
+  // Every turn in this session that has words, in the order they were said —
+  // your own questions included, so a read-through is the conversation rather
+  // than one side of it. The player and the transport are handed the same list,
+  // so they cannot disagree about what "the whole session" means.
+  const spokenTurns = useMemo(() => {
+    if (!speechOn) return EMPTY_TURNS;
+    const list = messages[selectedId] || [];
+    return list.filter((m) => m.text && !m.notice && m.kind !== 'file' && !m.dissolving);
+  }, [speechOn, messages, selectedId]);
+
+  const speech = useAgentSpeech({
     enabled: speechOn,
     volume: config.agentSpeechVolume ?? 0.9,
     sessionId: spokenSession?.id || null,
-    agentIds: spokenSession?.agentIds,
+    agentIds: spokenAgentIds,
+    turns: spokenTurns,
     // The online voice, when it is switched on and reachable. Anything else —
     // the engine left on 'local', no key, no network, a refused key — comes back
-    // null, which the queue reads as "use the window's own voice" rather than as
-    // an error. The file is served by the same local endpoint that already
+    // null, which the player reads as "use the window's own voice" rather than
+    // as an error. The file is served by the same local endpoint that already
     // serves thumbnails and custom sounds.
     synthesize: async (text, voice) => {
       const result = await api.speak(text, voice);
@@ -2054,18 +2081,32 @@ export default function App() {
     },
   });
 
+  // Reading a turn as it lands is the one part still narrowed to a discussion:
+  // it is the mode where an answer is a turn in a conversation rather than a
+  // reply to you, and having the app start talking the moment a Counsel answers
+  // would be a surprise rather than a feature.
+  const liveSpeech = speechOn && spokenSession?.mode === 'dialogue';
+
   // What the event listener reaches for. Reassigned every render so it always
-  // holds the current session's queue, and read through the ref so attaching the
-  // listener once is safe.
+  // holds the current session's player, and read through the ref so attaching
+  // the listener once is safe.
   speechRef.current = {
-    onTurn: (msg) => speakTurn({ id: msg.id, text: msg.text, agentId: msg.agentId }),
-    clear: clearSpeech,
+    onTurn: (msg) => liveSpeech && speech.speak(msg),
+    clear: speech.clear,
+  };
+
+  // The bubble button. Pressing it on the turn already being read is a pause —
+  // that is what makes it one button rather than a play button beside a stop
+  // button — and pressing it anywhere else starts the read-through from there.
+  const onSpeakFrom = (msg) => {
+    if (speech.speakingId === msg.id) return speech.toggle();
+    return speech.play(msg.id);
   };
 
   // A call owns the speakers. The bed comes back, from where it left off, when
   // the call ends.
   useAgentMusic(agentWorking && !inCall && !groupActive && !incoming && !groupInvited, {
-    ducked: speaking,
+    ducked: speech.speaking,
     enabled: config.agentMusicEnabled === true,
     volume: config.agentMusicVolume ?? 0.5,
     // A bundled track by name, or the user's own file served by the same local
@@ -2279,9 +2320,14 @@ export default function App() {
             // that can answer a question is there any point putting one back.
             onResend={isThinkingThread(selectedId) ? resendFrom : undefined}
             // Only where there is a voice to hear it in. `speechOn` is already
-            // the whole answer — the setting, the mode, and no call in progress —
-            // so a thread without one never grows the affordance.
-            onSpeak={speechOn ? replayTurn : undefined}
+            // the whole answer — the setting, the session, and no call in
+            // progress — so a thread without one never grows the affordance.
+            //
+            // Pressing it on the bubble that is already talking pauses; anywhere
+            // else it reads the session on from there. One cursor, two controls.
+            onSpeak={speechOn ? onSpeakFrom : undefined}
+            speakingId={speech.speakingId}
+            speechPaused={speech.paused}
             onSend={sendText}
             onAttach={attach}
             onVoice={sendVoice}
@@ -2387,6 +2433,22 @@ export default function App() {
                 commits={selectedCommits}
                 approvalClaim={approvalClaims[selectedId]}
                 onClaimApprovals={(threadId, passcode) => api.claimAgentApprovals(threadId, passcode)}
+                // The read-aloud transport. Absent unless this session has a
+                // voice, so the panel is unchanged everywhere else. Play starts
+                // at the top; the bubbles' buttons start wherever you are.
+                speech={
+                  speechOn
+                    ? {
+                        playing: speech.playing,
+                        paused: speech.paused,
+                        position: speech.position,
+                        count: speech.count,
+                        onToggle: speech.toggle,
+                        onNext: speech.next,
+                        onPrev: speech.prev,
+                      }
+                    : null
+                }
               />
             }
           />
