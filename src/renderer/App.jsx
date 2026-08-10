@@ -1449,6 +1449,18 @@ export default function App() {
         // sessions/index.js. Carried on the card so the pane can say so without
         // having to know what a session record is.
         needsContext: Boolean(record.needsContext),
+        // Who is in the room, how loud its observers may be, and whose room it
+        // is.
+        //
+        // Named here like everything else on this card. It is built field by
+        // field on purpose — a new field on a record is not a field on the card
+        // until it is written down — which is exactly how these three went
+        // missing: the picker was handed `peer.members` and there was no such
+        // thing, so the roster was always empty, nothing could ever tick, and
+        // the interruptions checkbox could not show what it was set to.
+        members: record.members || [],
+        observer: record.observer || null,
+        hostPeerId: record.hostPeerId || null,
       };
     }
     const live = peers.find((p) => p.id === selectedId);
