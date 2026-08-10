@@ -129,6 +129,14 @@ function echoTransports(log) {
 // concurrently and a just-closed listener can linger in TIME_WAIT, so fixed
 // numbers collide with EADDRINUSE — which looks like a product failure and is
 // not one.
+//
+// **This is a hint, not a guarantee, and it was once read as one.** The probe
+// closes before the real server binds, so between the two another worker can
+// take the number — and `node --test` runs files in separate *processes*, so no
+// amount of bookkeeping in here can see them coming. It flaked macOS during the
+// v0.9.1 release with `EADDRINUSE 0.0.0.0:49365` while the other two platforms
+// passed the same commit. The answer is not a better probe; it is surviving the
+// loss, in startServer below.
 function freePort() {
   return new Promise((resolve, reject) => {
     const probe = net.createServer();
@@ -138,6 +146,33 @@ function freePort() {
       probe.close(() => resolve(port));
     });
   });
+}
+
+// How many times to lose the race before calling it a real failure. A collision
+// needs another worker to bind the exact port in the gap between the probe
+// closing and the server listening; losing six of those in a row is not luck
+// running out, it is something else wrong, and it should be reported as itself.
+const BIND_ATTEMPTS = 6;
+
+// Start a node's server, taking a fresh port if something got there first.
+//
+// `createServer().start()` reads `servicePort` from the config each time it is
+// called and rejects with the listen error (src/main/server.js:366-404), so a
+// retry is: write a new port, call it again. The port has to go back into the
+// config rather than being held here, because `getIdentity()` builds the address
+// peers dial from the same key — which is why it is a lazy closure.
+async function startServer(server, config) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await server.start();
+    } catch (err) {
+      // Anything that is not the race is the caller's problem, and so is the
+      // last attempt: rethrown as itself, so a genuine bind failure still reads
+      // as one rather than as a timeout somewhere further along.
+      if (err?.code !== 'EADDRINUSE' || attempt >= BIND_ATTEMPTS) throw err;
+      config.set({ servicePort: await freePort() });
+    }
+  }
 }
 
 function makeNode(name, port) {
@@ -212,13 +247,20 @@ function makeNode(name, port) {
     bus,
     getIdentity,
     hub,
-    server,
+    // The real server, with a start() that survives losing the port. Wrapped
+    // here rather than at the sixty-odd call sites, so no test has to remember
+    // to use the safe one and none of them had to change.
+    server: { ...server, start: () => startServer(server, config) },
     store,
     agentHub,
     log,
     events,
     call,
-    port,
+    // Read, not remembered. A bind that lost the race takes a different port,
+    // and connect() builds the address it dials out of this.
+    get port() {
+      return config.get('servicePort');
+    },
     deviceKey,
     pins,
   };
@@ -253,6 +295,46 @@ async function connect(from, to) {
 
 const remoteIdOn = (peer, ownerId, agentId) =>
   [...peer.hub.identities.keys()].find((k) => k.startsWith(`remote-agent:${ownerId}:${agentId}`));
+
+// The race, staged. Everything below this binds two real servers on ports a
+// probe said were free a moment earlier; this is the one that proves what
+// happens when that turns out not to be true.
+test('a server that loses its port to somebody else takes another one', async (t) => {
+  const wanted = await freePort();
+  // Standing in for the parallel worker that got there first. On 0.0.0.0,
+  // because that is what the server binds and a 127.0.0.1 squatter would not
+  // actually collide with it.
+  const squatter = net.createServer();
+  await new Promise((resolve, reject) => {
+    squatter.on('error', reject);
+    squatter.listen(wanted, '0.0.0.0', resolve);
+  });
+  t.after(() => squatter.close());
+
+  const A = makeNode('port-race', wanted);
+  t.after(() => {
+    A.hub.close();
+    A.server.stop();
+  });
+
+  const bound = await A.server.start();
+  assert.notEqual(bound, wanted, 'it did not fail on a port somebody else was holding');
+  assert.equal(A.port, bound, 'and the address it gives peers to dial is the one it is actually on');
+  assert.equal(A.config.get('servicePort'), bound, 'written where getIdentity will read it');
+});
+
+test('a bind that fails for any other reason is still a failure', async (t) => {
+  // The retry is for one error and one only. A port that cannot be bound at all
+  // must be reported as itself rather than retried into a timeout somewhere
+  // further along — which is the whole reason the branch tests `err.code`.
+  const A = makeNode('port-refused', 1);
+  t.after(() => {
+    A.hub.close();
+    A.server.stop();
+  });
+  A.config.set({ servicePort: -1 });
+  await assert.rejects(() => A.server.start(), 'an impossible port is not a race to be waited out');
+});
 
 test('a shared agent reaches a peer over the wire and its chat stays out of the human thread', async (t) => {
   const A = makeNode('owner', await freePort());
