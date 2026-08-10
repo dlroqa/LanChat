@@ -1735,11 +1735,15 @@ export default function App() {
     if (record) setSessions((list) => list.map((s) => (s.id === record.id ? record : s)));
   }
 
-  // Who could be invited into a room. Real people only — an agent is already in
+  // Who could be invited into a room.
+  //
+  // Real people, and only the ones who are actually here. An agent is already in
   // the counsel and a session is not a person, so neither belongs on a roster of
-  // who else could be here.
+  // who else could be in the room — and somebody whose machine is off cannot
+  // receive an invitation, so offering to send them one would be offering
+  // something that does nothing. The list is who you can really ask, right now.
   const invitablePeers = useMemo(
-    () => peers.filter((p) => p.kind !== 'agent' && p.kind !== 'session'),
+    () => peers.filter((p) => p.kind !== 'agent' && p.kind !== 'session' && p.online),
     [peers]
   );
 

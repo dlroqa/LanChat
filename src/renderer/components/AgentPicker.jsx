@@ -259,9 +259,7 @@ export default function AgentPicker({
         </span>
         <span className="agent-pick-text">
           <span className="agent-pick-name">Allow interruptions</span>
-          <span className="agent-pick-note">
-            they may cut in about something already agreed — off unless you say so
-          </span>
+          <span className="agent-pick-note">they may cut in about something already agreed</span>
         </span>
       </button>
     </li>
@@ -274,11 +272,18 @@ export default function AgentPicker({
   // rather than flattened into a tick — somebody who was asked and has not
   // answered is a different thing from somebody who declined, and a session that
   // showed both as "not ticked" would have nothing to say about why nobody came.
-  const stateNote = (member, peer) => {
-    if (!member) return peer && peer.online === false ? 'offline — cannot be invited' : 'not invited';
+  // What the row says under a name.
+  //
+  // For somebody not in the room it is what pressing it does rather than what is
+  // currently true: "Invite" is an offer, and "not invited" is a fact nobody
+  // needed stating about a person standing in a list of people you can invite.
+  // Every other case is a state, because there the useful thing is what happened
+  // rather than what you can do about it.
+  const stateNote = (member) => {
+    if (!member) return 'Invite';
     switch (member.state) {
       case 'joined':
-        return peer && peer.online === false ? 'in the room · offline right now' : 'in the room';
+        return 'in the room';
       case 'invited':
         return 'invited — waiting for an answer';
       case 'declined':
@@ -288,9 +293,24 @@ export default function AgentPicker({
       case 'revoked':
         return 'removed';
       default:
-        return 'not invited';
+        return 'Invite';
     }
   };
+
+  // Who is on the roster, and it is deliberately two things joined.
+  //
+  // Everybody online, because those are the people an invitation could actually
+  // reach — offering to invite somebody whose machine is off is offering
+  // something that does nothing. Plus anybody already in the room, whether or
+  // not they are online this second: they are in it, they stay in it while their
+  // machine is off, and a roster that hid them would be telling you the room is
+  // emptier than it is.
+  const roster = [
+    ...peers,
+    ...members
+      .filter((m) => m.state === 'joined' && !peers.some((p) => p.id === m.peerId))
+      .map((m) => ({ id: m.peerId, name: m.name, online: false })),
+  ];
 
   const peopleSection = (
     <>
@@ -298,28 +318,25 @@ export default function AgentPicker({
       <li role="none" className="agent-menu-head" aria-hidden="true">
         People
       </li>
-      {peers.length === 0 && <li className="agent-menu-empty">Nobody else is online.</li>}
-      {peers.map((peer) => {
+      {roster.length === 0 && <li className="agent-menu-empty">Nobody else is online.</li>}
+      {roster.map((peer) => {
         const member = members.find((m) => m.peerId === peer.id) || null;
         const here = Boolean(member && member.state === 'joined');
-        const waiting = Boolean(member && member.state === 'invited');
-        // Somebody offline cannot be invited — an invitation is a live offer and
-        // there is nobody to receive it. Already being in the room is different:
-        // they stay in it while their machine is off, exactly as an agent stays
-        // in a counsel.
-        const blocked = !here && !waiting && peer.online === false;
         return (
           <li key={peer.id} role="none">
             <button
               type="button"
               role="menuitemcheckbox"
               aria-checked={here}
-              className={['agent-pick', here ? 'on' : '', blocked ? 'off' : '', waiting ? 'gone' : '']
+              className={['agent-pick', here ? 'on' : '', peer.online === false ? 'off' : '']
                 .filter(Boolean)
                 .join(' ')}
-              disabled={guest || blocked}
-              onClick={() => onChange({ invite: peer.id, inviting: !member || !here })}
-              onKeyDown={(e) => keys(e, () => onChange({ invite: peer.id, inviting: !member || !here }))}
+              // Only a guest is stopped. Everybody on this list is either online
+              // and invitable, or already in the room and removable — there is no
+              // row here that does nothing when pressed.
+              disabled={guest}
+              onClick={() => onChange({ invite: peer.id, inviting: !here })}
+              onKeyDown={(e) => keys(e, () => onChange({ invite: peer.id, inviting: !here }))}
               title={guest ? 'Only the person who started this session can invite people.' : ''}
             >
               <span className="agent-tick" aria-hidden="true">
@@ -327,7 +344,9 @@ export default function AgentPicker({
               </span>
               <span className="agent-pick-text">
                 <span className="agent-pick-name">{peer.name || peer.hostname}</span>
-                <span className="agent-pick-note">{stateNote(member, peer)}</span>
+                <span className="agent-pick-note">
+                  {here && peer.online === false ? 'in the room · offline' : stateNote(member)}
+                </span>
               </span>
             </button>
           </li>
@@ -424,7 +443,7 @@ export default function AgentPicker({
               else entirely" rather than as five equivalent options. */}
           {modeRow('observer', 'Observer Agent', 'they watch, and speak when it matters')}
           {mode === 'observer' ? observerRow : null}
-          {modeRow('human', 'Human Like', 'in turn, between themselves and watching — shuffled')}
+          {modeRow('human', 'Human Like', 'in turn, between themselves and watching, shuffled')}
           {/* Only the two modes that have a room. A session in the other three is
               one person asking some agents a question, and a roster on it would
               be an invitation to a conversation that does not have a shape for

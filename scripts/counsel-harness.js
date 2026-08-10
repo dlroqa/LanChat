@@ -95,6 +95,8 @@ const card = () => {
     id: 'session:1', kind: 'session', name: 'why the turn moved', online: true,
     agentIds: record.agentIds, allAgents: record.allAgents, mode: record.mode, turns: record.turns,
     agentNames: counsel.map((a) => a.name),
+    members: record.members || [],
+    observer: record.observer || null,
     agentId: counsel[0] ? counsel[0].id : null,
     agentName: counsel[0] ? counsel[0].name : null,
   };
@@ -110,6 +112,13 @@ const props = () => ({
     { id: 'm3', peerId: 'session:1', direction: 'in', kind: 'text', text: 'I would call it a round table.', ts: Date.now() - 49000, speaker: 'Hermes' },
   ],
   progress: {}, agents, mentionables: [], docs: [],
+  // Online people, in the shape App publishes them. Only online ones reach the
+  // picker — see invitablePeers in App.jsx.
+  roomPeers: [
+    { id: 'p-zima', name: 'Zima', online: true },
+    { id: 'p-macpro', name: 'MacPro', online: true },
+    { id: 'p-macmini', name: 'Macmini', online: true },
+  ],
   onSetCounsel: (id, patch) => { patches.push(patch); record = { ...record, ...patch }; draw(); },
   onRenameSession: () => {}, onImportText: () => {}, onSend: () => {}, onAttach: () => {},
   // Where sessions are filed, so the header's folder picker has something to
@@ -127,6 +136,43 @@ const props = () => ({
 const root = createRoot(document.getElementById('mount'));
 const draw = () => root.render(h(ChatPane, props()));
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Whether anything inside the menu is painted outside it.
+//
+// The bug this guards: a note long enough to matter sized its column past the
+// menu's own width and drew across the conversation. Measured rather than eyed,
+// because "looks fine on my screen" is exactly how it shipped the first time.
+const overflowing = () => {
+  const m = menu();
+  if (!m) return null;
+  const box = m.getBoundingClientRect();
+  const out = [];
+  for (const el of m.querySelectorAll('.agent-pick-name, .agent-pick-note')) {
+    const r = el.getBoundingClientRect();
+    if (r.right > box.right + 1 || r.left < box.left - 1) {
+      out.push({ text: el.textContent.trim().slice(0, 40), right: Math.round(r.right), edge: Math.round(box.right) });
+    }
+  }
+  return out;
+};
+
+// Whether a row can actually be pressed, as opposed to merely being drawn.
+//
+// The other half of the same bug: the menu grew taller than the window and its
+// last rows were painted under the composer — present, correct, unclickable.
+// elementFromPoint is what the mouse would hit.
+const reachable = (name) => {
+  const m = menu();
+  if (!m) return null;
+  const row = [...m.querySelectorAll('.agent-pick')].find(
+    (b) => (b.querySelector('.agent-pick-name') || {}).textContent === name
+  );
+  if (!row) return { found: false };
+  row.scrollIntoView({ block: 'nearest' });
+  const r = row.getBoundingClientRect();
+  const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+  return { found: true, disabled: row.disabled, hit: Boolean(hit && row.contains(hit)) };
+};
 
 const chip = () => document.querySelector('.agent-chip');
 const menu = () => document.querySelector('.agent-menu');
@@ -332,6 +378,47 @@ function state() {
     placed: JSON.parse(JSON.stringify(placed)),
     closed: !document.querySelector('.folder-menu'),
   };
+
+  // ---- observing, and the roster it brings with it ----
+  //
+  // The menu grew two modes, a checkbox under one of them and a list of people.
+  // These are the two things that broke when it did, and neither is visible to a
+  // test that only reads the DOM.
+  chip().click();
+  await wait(120);
+  record = { ...record, mode: 'observer' };
+  draw();
+  await wait(160);
+  steps.observing = {
+    ...state(),
+    // Nothing painted outside the card. The list is the offenders, so a failure
+    // names the sentence that escaped rather than merely saying one did.
+    overflow: overflowing(),
+    // The rows the composer was drawn over. Every one of them must be something
+    // the mouse can actually hit.
+    people: ['Zima', 'MacPro', 'Macmini'].map((n) => ({ name: n, ...reachable(n) })),
+    interrupts: reachable('Allow interruptions'),
+    // The menu keeps itself inside the window now rather than running past the
+    // bottom of it.
+    insideWindow: (() => {
+      const r = menu().getBoundingClientRect();
+      return r.bottom <= window.innerHeight + 1;
+    })(),
+    scrolls: menu().scrollHeight > menu().clientHeight,
+  };
+
+  // Pressing a person emits an invitation rather than a counsel change.
+  const before = patches.length;
+  const macpro = [...menu().querySelectorAll('.agent-pick')].find(
+    (b) => (b.querySelector('.agent-pick-name') || {}).textContent === 'MacPro'
+  );
+  macpro.scrollIntoView({ block: 'nearest' });
+  macpro.click();
+  await wait(120);
+  // Spread over state() like every other step: the test loops the whole set
+  // asserting the half-written question survived each interaction, and inviting
+  // somebody is an interaction the composer must live through too.
+  steps.invited = { ...state(), patch: patches[before] || null };
 
   const pre = document.createElement('pre');
   pre.id = 'result';

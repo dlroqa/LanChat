@@ -442,3 +442,58 @@ test('the sidebar row and the search result say the same thing about a session',
   }
   assert.doesNotMatch(results, /\?\s*'Session'\s*:/, 'the results panel should not have its own word for it');
 });
+
+// ---------------------------------------------------------------------------
+// What the menu does once it is long.
+//
+// These four shipped broken in v0.9.3 and were found by looking at the running
+// app, which is exactly the gap headless mounting leaves: the DOM was correct in
+// every one of these cases. What was wrong was where it was painted.
+
+// One run, shared between the two checks below — a browser launch costs a few
+// seconds and neither of them changes anything the other reads.
+let longMenuRun = null;
+function longMenu() {
+  const { runCounselHarness } = require('../scripts/counsel-harness.js');
+  longMenuRun ||= runCounselHarness();
+  return longMenuRun;
+}
+
+test('mounted in a browser: a long menu still fits, scrolls, and can be clicked', async () => {
+  const result = await longMenu();
+  if (result.skipped) {
+    console.log(`# skipped browser checks: ${result.skipped}`);
+    return;
+  }
+  const o = result.steps.observing;
+
+  // Nothing painted outside the card. The failure names the sentence that
+  // escaped, because "something overflowed" is not a bug report.
+  assert.deepEqual(o.overflow, [], 'no row may paint outside the menu');
+
+  // The menu grew from three mode rows to five, plus a checkbox and a roster.
+  // Without a ceiling it ran off the bottom of the window and its last rows were
+  // drawn under the composer — visible, and impossible to press.
+  assert.equal(o.insideWindow, true, 'the menu keeps itself inside the window');
+  assert.equal(o.scrolls, true, 'and scrolls rather than growing past it');
+
+  // The rows that were unreachable. `hit` is elementFromPoint at the centre of
+  // the row: what the mouse would actually land on.
+  for (const p of o.people) {
+    assert.equal(p.found, true, `${p.name} should be on the roster`);
+    assert.equal(p.disabled, false, `${p.name} should be pressable`);
+    assert.equal(p.hit, true, `${p.name} must not be covered by anything`);
+  }
+  assert.equal(o.interrupts.hit, true, 'the interruptions checkbox is reachable too');
+});
+
+test('mounted in a browser: pressing a person invites them rather than changing the counsel', async () => {
+  const result = await longMenu();
+  if (result.skipped) {
+    console.log(`# skipped browser checks: ${result.skipped}`);
+    return;
+  }
+  // Who is in a room and who a session asks are two different decisions, and the
+  // patch says which one was made — App routes on exactly this.
+  assert.deepEqual(result.steps.invited.patch, { invite: 'p-macpro', inviting: true });
+});

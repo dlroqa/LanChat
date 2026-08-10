@@ -2083,6 +2083,13 @@ input:focus-visible {
   z-index: 20;
   min-width: 240px;
   max-width: 300px;
+  /* A menu taller than the window is a menu whose last rows are painted under
+     the composer: present, correct, and impossible to click. It grew past that
+     point when it gained two modes and a list of people, so it scrolls inside
+     itself rather than running off the end of the window. */
+  max-height: min(70vh, 460px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   margin: 0;
   padding: 4px;
   list-style: none;
@@ -2147,6 +2154,11 @@ input:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 1px;
+  /* Both halves are load-bearing: `min-width: 0` lets a flex item shrink below
+     its content, and `flex: 1` is what makes it take the remaining width rather
+     than its content's. Without the second, a long note sizes the column past
+     the menu and paints outside the card. */
+  flex: 1 1 auto;
   min-width: 0;
 }
 .agent-pick-name {
@@ -2156,6 +2168,9 @@ input:focus-visible {
 .agent-pick-note {
   font-size: 11px;
   color: var(--fg-faint);
+  /* Wraps within the row. A note is a sentence, and a sentence that cannot wrap
+     can only overflow. */
+  overflow-wrap: anywhere;
 }
 /* Switched off, or gone. Still tickable — a counsel is a standing choice about
    who to ask, and it should survive somebody turning their machine off — so the
@@ -7483,6 +7498,64 @@ code.path {
 .floor-act:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 1px;
+}
+
+/* ---- the picker's later rows ------------------------------------------------
+   Three classes the menu grew when it gained observing, a shuffle and a roster.
+   Written here beside the rows they belong to rather than at the end of the
+   sheet, so the whole control reads in one place. */
+
+/* A heading inside the menu. Not a row: it is not focusable, it announces
+   nothing, and it exists so a list of people does not read as more agents.
+   Sticky, because the roster is the thing somebody scrolls this menu to find
+   and a heading that scrolls away takes the answer to "where am I" with it. */
+.agent-menu-head {
+  position: sticky;
+  top: -4px;
+  z-index: 1;
+  padding: 6px 9px 3px;
+  background: var(--bg-2);
+  color: var(--fg-faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* A row that belongs to the mode above it rather than standing beside it.
+   Indented, so the relationship is visible rather than merely true — an
+   unindented checkbox under a radio reads as a sixth mode. */
+.agent-sub {
+  list-style: none;
+}
+.agent-sub-pick {
+  padding-left: 26px;
+}
+.agent-sub-pick .agent-pick-name {
+  font-weight: 400;
+}
+
+/* The scrollbar. Shown rather than hidden: this menu can now be taller than it
+   is, and a scroll region with no visible bar is one people do not know they
+   can scroll. Narrow and dim, because it is a hint and not furniture. */
+.agent-menu {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.agent-menu::-webkit-scrollbar {
+  width: 8px;
+}
+.agent-menu::-webkit-scrollbar-track {
+  background: transparent;
+}
+.agent-menu::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+  background-color: var(--border);
+}
+.agent-menu:hover::-webkit-scrollbar-thumb {
+  background-color: var(--surface-hover);
 }
 
 /* Below this there is no room for three panels. The side panel goes — and the
