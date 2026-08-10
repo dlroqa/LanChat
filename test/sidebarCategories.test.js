@@ -35,9 +35,17 @@ test('the app only raises its file sheet for files', () => {
   }
 });
 
+// One browser launch, shared. A run is about a minute; the folder checks below
+// ask about the same walk, so they read the same result rather than paying for
+// it twice. Same memo scripts/layout-harness.js's test uses.
+let running = null;
+const sidebarRun = () => {
+  if (!running) running = require('../scripts/sidebar-harness.js').runSidebarHarness();
+  return running;
+};
+
 test('mounted in a browser: pointing, pinning, dragging, and a title that keeps flashing until it is read', async () => {
-  const { runSidebarHarness } = require('../scripts/sidebar-harness.js');
-  const result = await runSidebarHarness();
+  const result = await sidebarRun();
   if (result.skipped) {
     // Chromium is not always present. Say so rather than reporting a pass that
     // never happened.
@@ -223,4 +231,114 @@ test('mounted in a browser: pointing, pinning, dragging, and a title that keeps 
   assert.equal(result.reduced.titleImage, 'gradient', 'but the title stays lit');
   assert.equal(result.reduced.badge, '3', 'and the count is still there to be read');
   assert.ok(result.reduced.contrast.worst >= 4.5, `held still it measures ${result.reduced.contrast.worst}`);
+});
+
+// Folders of sessions, driven the way somebody would drive them: a session
+// dragged into one, moved inside it, dragged back out, and a folder carried past
+// its neighbour. Every one of these is a question about a mounted component with
+// real drag events and a real layout, and none of them can be answered by
+// reading the markup.
+test('mounted in a browser: filing sessions into folders, and arranging them', async () => {
+  const result = await sidebarRun();
+  if (result.skipped) {
+    console.log(`# skipped browser checks: ${result.skipped}`);
+    return;
+  }
+  const s = result.steps;
+  const ids = (step) => step.folders.map((f) => f.id);
+  const rows = (step, id) => step.folders.find((f) => f.id === id).rowIds;
+
+  // ---- at rest -----------------------------------------------------------
+  // Folders first, then whatever is in none of them.
+  assert.match(s.foldersAtRest.sessionsFirstChild, /sb-folder/, 'a folder leads the list');
+  assert.deepEqual(ids(s.foldersAtRest), ['folder:1', 'folder:2']);
+  assert.deepEqual(rows(s.foldersAtRest, 'folder:1'), ['s2'], 'holding what it was given');
+  assert.deepEqual(s.foldersAtRest.loose.ids, ['s1', 's3'], 'and the rest below, in the order they came');
+  assert.equal(s.foldersAtRest.folders[0].count, '1', 'the count is what is in it');
+
+  // The "+" is in the heading, and out of the way until the heading is dealt
+  // with — the same bargain the grip and the lock make.
+  assert.equal(s.foldersAtRest.sections.sessions.actions, 1, 'one action on the Sessions heading');
+  assert.equal(s.foldersAtRest.sections.sessions.actionsOpacity, 0, 'invisible at rest');
+
+  // ---- the fold ----------------------------------------------------------
+  // Reused, not reimplemented: a shut folder measures zero and is `hidden`, so
+  // its rows genuinely leave the tab order.
+  const shut = s.folderShut.folders.find((f) => f.id === 'folder:1');
+  assert.equal(shut.open, false);
+  assert.equal(shut.rowsPx, 0, 'the grid track collapses, as a category does');
+  assert.equal(shut.visibility, 'hidden', 'and what is inside is not merely invisible');
+  assert.ok(
+    s.folderShut.folders.find((f) => f.id === 'folder:2').open,
+    'shutting one folder is not shutting them all'
+  );
+
+  // ---- carrying a session ------------------------------------------------
+  // The single most important assertion here. `isExpanded` begins `!drag.id`, so
+  // a session drag that reused the category drag's state would shut all four
+  // categories the instant a row was lifted — including the one holding every
+  // drop target it was aimed at.
+  assert.equal(s.draggingSession.sections.sessions.open, true, 'the list stays open under the drag');
+
+  // A drop onto a folder appends, so it is shown as a region and not an edge.
+  const target = s.overFolder.folders.find((f) => f.id === 'folder:1');
+  assert.match(target.classes, /drop-into/);
+  assert.doesNotMatch(target.classes, /drop-before|drop-after/, 'no caret where the drop appends');
+
+  assert.deepEqual(rows(s.droppedIntoFolder, 'folder:1'), ['s2', 's1'], 'filed at the end');
+  assert.ok(!s.droppedIntoFolder.loose.ids.includes('s1'), 'and out of the loose list');
+
+  // Onto the top half of the first row: in front of it. This is the arithmetic
+  // that lands one slot short if the moving id is located before it is removed.
+  assert.deepEqual(rows(s.reorderedInFolder, 'folder:1'), ['s1', 's2'], 'moved to where it was aimed');
+
+  // Out again. The loose region takes the drop as a region — its order is not
+  // the user's to set, so it is never given an insertion point.
+  assert.match(s.overLoose.loose.classes, /drop-out/);
+  assert.equal(s.overLoose.loose.strip, true, 'and says where the drop would put it');
+  assert.deepEqual(rows(s.draggedOut, 'folder:1'), ['s2']);
+  assert.ok(s.draggedOut.loose.ids.includes('s1'), 'loose again');
+
+  // ---- carrying a folder -------------------------------------------------
+  // Every folder shuts while one is in the air, mirroring the rule the
+  // categories already follow: a list of drop targets that grew and shrank under
+  // the pointer would be a moving target.
+  assert.deepEqual(
+    s.draggingFolder.folders.map((f) => f.open),
+    [false, false],
+    'the targets hold still while one is carried'
+  );
+  const edge = s.overFolderEdge.folders.find((f) => f.id === 'folder:1');
+  assert.match(edge.classes, /drop-before/, 'between two folders is an edge, not a region');
+  assert.doesNotMatch(edge.classes, /drop-into/, 'a folder does not go inside a folder');
+  assert.deepEqual(ids(s.folderReordered), ['folder:2', 'folder:1'], 'and it lands where it was dropped');
+
+  // ---- renaming ----------------------------------------------------------
+  assert.ok(
+    s.renaming.folders.some((f) => f.editing),
+    'a double click on the name opens it for editing'
+  );
+  for (const f of s.renaming.folders) {
+    assert.equal(f.headHeight, s.renaming.readHeight, 'the row is the same height being typed into');
+  }
+  assert.ok(
+    s.renamed.folders.some((f) => f.name === 'Renamed'),
+    'and Enter commits it'
+  );
+
+  // ---- searching ---------------------------------------------------------
+  // A search is a question about sessions, not about where they were filed — so
+  // it flattens, exactly as the list behaved before folders existed.
+  assert.equal(s.flattenedBySearch.folders.length, 0, 'no folder chrome while searching');
+  assert.deepEqual(s.flattenedBySearch.sessionRowsShown, ['s2'], 'just the matches, flat');
+
+  // ---- nothing leaked to the window --------------------------------------
+  // Every accepted drag stops where it was accepted. A session drag reaching the
+  // app would raise the "drop to send" sheet over the conversation.
+  for (const step of ['droppedIntoFolder', 'draggedOut', 'folderReordered']) {
+    assert.equal(s[step].reachedApp, 0, `${step} must not reach the window`);
+  }
+  // And the control the counter never had: a zero above could just as easily
+  // mean the listener stopped working.
+  assert.ok(s.appStillListens > 0, 'a real file drag still reaches the app');
 });

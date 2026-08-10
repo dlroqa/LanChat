@@ -65,6 +65,18 @@ contextBridge.exposeInMainWorld('lanchat', {
   deleteSession: (id) => invoke('lanchat:deleteSession', { id }),
   importSessionText: (id) => invoke('lanchat:importSessionText', { id }),
 
+  // Folders: where sessions are filed. The folder list is the order they are
+  // drawn in and the ids inside one are the order its sessions are drawn in,
+  // both arranged by hand — so every one of these is about an order as much as
+  // about membership. `placeSession(id, null)` takes a session out of whatever
+  // folder it was in.
+  listFolders: () => invoke('lanchat:listFolders'),
+  createFolder: (name) => invoke('lanchat:createFolder', { name }),
+  renameFolder: (id, name) => invoke('lanchat:renameFolder', { id, name }),
+  deleteFolder: (id) => invoke('lanchat:deleteFolder', { id }),
+  moveFolder: (id, toIndex) => invoke('lanchat:moveFolder', { id, toIndex }),
+  placeSession: (id, folderId, index) => invoke('lanchat:placeSession', { id, folderId, index }),
+
   // The Trash: where a deleted session waits. `deleteSession` above is what puts
   // one there; this is the list of what is in it, and the four ways back out —
   // two that put a session back where it was, two that finish the job.

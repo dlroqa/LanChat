@@ -141,6 +141,9 @@ window.lanchat = {
   // question does after it is re-sent, and the Trash has nothing to say about
   // that — but the call has to be answerable, or App throws before it mounts.
   listTrash: () => Promise.resolve([]),
+  // Where sessions are filed, read on boot for the same reason and empty for the
+  // same one.
+  listFolders: () => Promise.resolve([]),
   // The Task Bar's notes, read on boot for the same reason and empty for the
   // same one: this harness has nothing to say about them, and an unanswerable
   // call throws before App mounts.

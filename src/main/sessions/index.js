@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const { SessionRegistry, isSessionId, DEFAULT_TITLE } = require('./registry.js');
+const { FolderRegistry } = require('./folders.js');
 const { parseTranscript } = require('./transcript.js');
 const { composeContext, contextRecord } = require('./prompt.js');
 const { resolveCounsel, missedNotice, unreachableNotice, soloNotice, relayPrompt } = require('./counsel.js');
@@ -37,8 +38,21 @@ const { PEER_MIN_INTERVAL_MS } = require('../agents/index.js');
 // matters. A transport that hangs must not be able to lock a workspace shut.
 const ROUND_IDLE_MS = 10 * 60 * 1000;
 
-function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, hub = null, bus = null }) {
+function createSessions({
+  userDataDir,
+  store,
+  agentHub,
+  remoteAgents,
+  registry,
+  folderRegistry,
+  hub = null,
+  bus = null,
+}) {
   const sessions = registry || new SessionRegistry(userDataDir);
+  // Where sessions are filed. Its own registry and its own file, so that no
+  // folder operation ever writes sessions.json — see src/main/sessions/folders.js
+  // for why that is the whole design rather than an implementation detail.
+  const folders = folderRegistry || new FolderRegistry(userDataDir);
 
   // The question each session currently has out with its agents.
   //
@@ -73,6 +87,37 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
 
   function rename(id, title) {
     return sessions.update(id, { title });
+  }
+
+  // ------------------------------------------------------------------ folders
+
+  function listFolders() {
+    return folders.list();
+  }
+
+  function createFolder(draft = {}) {
+    return folders.create(draft);
+  }
+
+  function renameFolder(id, name) {
+    return folders.rename(id, name);
+  }
+
+  function deleteFolder(id) {
+    return folders.remove(id);
+  }
+
+  function moveFolder(id, toIndex) {
+    return folders.move(id, toIndex);
+  }
+
+  // Filing a session. Guarded through get() above, which is the "not while it is
+  // deleted" door — a session in the Trash is not a workspace this machine has,
+  // and it must not be filed into a folder where its row would not draw anyway.
+  // Taking one *out* of a folder is always allowed: that is what a purge does.
+  function placeSession(id, { folderId = null, index = null } = {}) {
+    if (folderId && !get(id)) return false;
+    return folders.place(id, { folderId, index });
   }
 
   function setAgent(id, agentId) {
@@ -344,6 +389,11 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
     const record = sessions.get(id);
     if (!record || !record.deletedAt) return false;
     store.clear(id);
+    // The one place a folder has to be swept. Everywhere else a session simply
+    // stops being drawn — trashing it takes it out of the live list and its id
+    // waits in the folder for a restore — but a purge means it is never coming
+    // back, and an id waiting for it would wait for ever.
+    folders.forget(id);
     return sessions.remove(id);
   }
 
@@ -1088,6 +1138,12 @@ function createSessions({ userDataDir, store, agentHub, remoteAgents, registry, 
     get,
     create,
     rename,
+    listFolders,
+    createFolder,
+    renameFolder,
+    deleteFolder,
+    moveFolder,
+    placeSession,
     setAgent,
     setCounsel,
     listTrash,

@@ -249,6 +249,22 @@ test('mounted in a browser: ticking a counsel together, and nothing lost on the 
   }
 
   const s = result.steps;
+
+  // The move-to-folder menu, in the header beside the rest of the session's own
+  // actions. Only a real layout can answer the question that matters about it:
+  // `.chat-header .sub` clips to one line, and a menu opening downwards out of a
+  // clipped box is present, correct, and invisible.
+  const fm = s.folderMenu;
+  assert.ok(fm.folderOpen, 'the button opens a menu');
+  assert.deepEqual(fm.items, ['New folder…', 'Reading', 'Later', 'Remove from folder']);
+  assert.deepEqual(fm.ticked, ['Reading'], 'the folder it is already in is the one ticked');
+  assert.ok(fm.belowHeader, 'it escapes the header rather than being clipped by it');
+  assert.ok(fm.visible, 'and it has a size — present is not the same as drawn');
+  assert.ok(fm.insideWindow, 'anchored right, so it does not run off the edge it opens from');
+  assert.ok(fm.beforeUpload, 'first of the session actions, before the upload arrow');
+  assert.deepEqual(s.folderPicked.placed, [['new', 'session:1']], 'a pick reaches the handler');
+  assert.ok(s.folderPicked.closed, 'and puts the menu away — one choice, one menu');
+
   const named = (step, name) => step.rows.find((r) => r.name === name);
 
   // ---- shut, over a conversation two agents have already answered ----------

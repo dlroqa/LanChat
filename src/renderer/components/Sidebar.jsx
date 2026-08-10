@@ -3,6 +3,7 @@ import Avatar from './Avatar.jsx';
 import QueueBadge from './QueueBadge.jsx';
 import SidebarSection from './SidebarSection.jsx';
 import SearchScope from './SearchScope.jsx';
+import SessionFolder from './SessionFolder.jsx';
 import { Settings, Plus, Refresh, Users, GroupCall, Code, Sessions, Trash } from '../lib/icons.jsx';
 import { formatShortDate, platformLabel } from '../lib/util.js';
 import { sessionCounsel, sessionSubLine } from '../lib/counselCopy.js';
@@ -16,13 +17,24 @@ import {
   sectionSignal,
   sectionTitle,
 } from '../lib/sidebarSections.js';
+import { folderOf, folderSessions, looseSessions, dropIndex, isNoopPlace } from '../lib/sessionFolders.js';
 
 // A drag carrying a category, told apart from a drag carrying files. The window
 // puts a "drop to send" sheet over the conversation for anything dragged into
 // it, and re-ordering the panel is not that — so the type is checked rather than
 // assumed, on the way in here and again in App.jsx on the way out.
 const DND_TYPE = 'application/x-lanchat-section';
-const carriesSection = (e) => Array.from(e.dataTransfer?.types || []).includes(DND_TYPE);
+
+// And the two the Sessions list carries. Separate types rather than one with a
+// payload, because `getData()` returns '' during `dragover` in Chromium — the
+// list of *types* is the only thing readable while the pointer is moving, so
+// every "may I take this?" decision has to be expressible as a type check. A
+// folder may not go inside a folder; a session may.
+const DND_SESSION = 'application/x-lanchat-session';
+const DND_FOLDER = 'application/x-lanchat-folder';
+
+const carries = (e, type) => Array.from(e.dataTransfer?.types || []).includes(type);
+const carriesSection = (e) => carries(e, DND_TYPE);
 
 // Why a peer could not connect, in words rather than a code.
 //
@@ -69,6 +81,15 @@ export default function Sidebar({
   authFailures = {},
   showAddresses,
   sessions = [],
+  // Where sessions are filed: `[{ id, name, sessionIds }]`, in the order they
+  // are drawn. Membership lives on the folder rather than on the session, so a
+  // session's own record never changes when it is filed — see lib/sessionFolders.
+  folders = [],
+  onNewFolder = () => {},
+  onRenameFolder = () => {},
+  onDeleteFolder = () => {},
+  onMoveFolder = () => {},
+  onPlaceSession = () => {},
   // The order the categories are stacked in and which of them are pinned open,
   // both saved settings. They arrive as whatever was in the config file, so
   // neither is trusted further than normalizeOrder makes it safe.
@@ -134,6 +155,23 @@ export default function Sidebar({
   // before.
   const [hovered, setHovered] = useState(null);
   const [drag, setDrag] = useState({ id: null, overId: null, before: false });
+  // A session or a folder being carried inside the Sessions list.
+  //
+  // **Its own state, never `drag` above.** `isExpanded` begins `!drag.id`, so
+  // reusing it would shut all four categories the instant a row was picked up —
+  // including the one holding every drop target the drag was aimed at.
+  //
+  //   kind:   'session' | 'folder' | null
+  //   over:   { type: 'folder' | 'row' | 'loose', id }  — what is under the pointer
+  //   before: which half of it, for the two that insert
+  const [sdrag, setSdrag] = useState({ kind: null, id: null, over: null, before: false });
+  // Folders are open unless shut, so a folder just made is open and a fresh
+  // window shows what is in them. Held here rather than on the record: it is
+  // view state, and the registry file is user data.
+  const [shutFolders, setShutFolders] = useState(() => new Set());
+  // Which folder is being renamed, if any. Lifted out of the row so that a
+  // folder created by the "+" can open straight into its own name.
+  const [renaming, setRenaming] = useState(null);
 
   const order = useMemo(() => normalizeOrder(sectionOrder), [sectionOrder]);
   const locked = useMemo(
@@ -190,9 +228,16 @@ export default function Sidebar({
   // one being searched. They come back the moment the scope is cleared — nothing
   // was unlocked, it was only overruled. Pointing at any heading still opens it:
   // the scope narrows what the box is asking, not what you may look at.
+  //
+  // Sessions is held open for the whole of a drag inside it, and while a folder
+  // is being named. Both are cases where the category shutting would take the
+  // thing being worked on with it: the hover timer is 220ms, which is easily
+  // reached by a pointer on its way to a drop target or a hand on its way to the
+  // keyboard, and there is nothing to drop onto in a category that has shut.
   const isExpanded = (id) =>
     !drag.id &&
-    (hovered === id ||
+    ((id === 'sessions' && (Boolean(sdrag.kind) || Boolean(renaming))) ||
+      hovered === id ||
       (scoped
         ? id === scope
         : locked.includes(id) || id === activeSection || (searching && shownCount[id] > 0)));
@@ -242,22 +287,188 @@ export default function Sidebar({
 
   const dragEnd = () => setDrag({ id: null, overId: null, before: false });
 
+  // ---------------------------------------------- carrying sessions and folders
+  //
+  // Every handler below follows one rule about the event, and it is the rule the
+  // category drag above already follows: on the branch that **accepts** a drag,
+  // call `preventDefault()` and `stopPropagation()`; on the branch that refuses
+  // it, touch the event not at all. Accepting stops the drag reaching App, which
+  // puts a "drop to send" sheet over the conversation for anything dropped into
+  // the window. Refusing without touching it is what leaves a genuine file drop
+  // free to reach that sheet — `preventDefault()` there would swallow it.
+
+  const foldersById = useMemo(() => new Map(folders.map((f) => [f.id, f])), [folders]);
+  const sessionsById = useMemo(() => new Map(sessions.map((s) => [s.id, s])), [sessions]);
+
+  const clearSdrag = () => setSdrag({ kind: null, id: null, over: null, before: false });
+
+  const startCarry = (kind, type) => (id) => (e) => {
+    e.dataTransfer.setData(type, id);
+    e.dataTransfer.effectAllowed = 'move';
+    setHovered(null);
+    setSdrag({ kind, id, over: null, before: false });
+  };
+  const sessionDragStart = startCarry('session', DND_SESSION);
+  const folderDragStart = startCarry('folder', DND_FOLDER);
+
+  // Somewhere under the pointer, remembered only when it changes — a setState per
+  // dragover event would re-render the panel a hundred times a second.
+  const markOver = (over, before) =>
+    setSdrag((d) =>
+      d.over && d.over.type === over.type && d.over.id === over.id && d.before === before
+        ? d
+        : { ...d, over, before }
+    );
+
+  const halves = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    return e.clientY < r.top + r.height / 2;
+  };
+
+  const take = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  // A folder head answers to both drags and tells them apart by type alone: a
+  // session dropped on it goes *into* it, a folder dropped on it goes before or
+  // after it. A drag carries exactly one of the two, so there is nothing to
+  // disambiguate at the point of the drop.
+  const folderOver = (id) => (e) => {
+    if (carries(e, DND_SESSION)) {
+      take(e);
+      markOver({ type: 'folder', id }, false);
+      return;
+    }
+    if (carries(e, DND_FOLDER)) {
+      take(e);
+      markOver({ type: 'folder', id }, halves(e));
+    }
+  };
+
+  const folderDrop = (id) => (e) => {
+    if (carries(e, DND_SESSION)) {
+      take(e);
+      const moving = e.dataTransfer.getData(DND_SESSION) || sdrag.id;
+      // Onto the head means into the folder, at the end. There is no row under
+      // the pointer to measure against, and the end is where a thing you have
+      // just filed belongs.
+      if (moving && !isNoopPlace(folders, moving, id, null)) onPlaceSession(moving, id, null);
+      clearSdrag();
+      return;
+    }
+    if (carries(e, DND_FOLDER)) {
+      take(e);
+      const moving = e.dataTransfer.getData(DND_FOLDER) || sdrag.id;
+      if (moving && moving !== id) {
+        const rest = folders.filter((f) => f.id !== moving);
+        const at = rest.findIndex((f) => f.id === id) + (sdrag.before ? 0 : 1);
+        onMoveFolder(moving, at);
+      }
+      clearSdrag();
+    }
+  };
+
+  // A row inside a folder: insert before or after it, in that folder.
+  const rowOver = (folderId, sessionId) => (e) => {
+    if (!carries(e, DND_SESSION)) return;
+    take(e);
+    markOver({ type: 'row', id: sessionId, folderId }, halves(e));
+  };
+
+  const rowDrop = (folderId, sessionId) => (e) => {
+    if (!carries(e, DND_SESSION)) return;
+    take(e);
+    const moving = e.dataTransfer.getData(DND_SESSION) || sdrag.id;
+    const folder = foldersById.get(folderId);
+    if (moving && folder) {
+      const at = dropIndex(folder.sessionIds, moving, sessionId, sdrag.before);
+      if (!isNoopPlace(folders, moving, folderId, at)) onPlaceSession(moving, folderId, at);
+    }
+    clearSdrag();
+  };
+
+  // Out of every folder. The loose list orders itself by when each session was
+  // last used, so this shows a region rather than an insertion point — drawing a
+  // caret would promise a position that is not the user's to set.
+  const looseOver = (e) => {
+    if (!carries(e, DND_SESSION)) return;
+    take(e);
+    markOver({ type: 'loose', id: null }, false);
+  };
+
+  const looseDrop = (e) => {
+    if (!carries(e, DND_SESSION)) return;
+    take(e);
+    const moving = e.dataTransfer.getData(DND_SESSION) || sdrag.id;
+    if (moving && !isNoopPlace(folders, moving, null, null)) onPlaceSession(moving, null, null);
+    clearSdrag();
+  };
+
+  const toggleFolder = (id) =>
+    setShutFolders((shut) => {
+      const next = new Set(shut);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  // Shut while a folder is being carried, mirroring the rule the categories
+  // already follow: a list of drop targets that grew and shrank under the
+  // pointer as it passed each one would be a moving target.
+  const folderOpen = (id) => !shutFolders.has(id) && sdrag.kind !== 'folder';
+
+  const addFolder = async () => {
+    const record = await onNewFolder();
+    // Straight into its own name. A folder called "New Folder" is worth exactly
+    // as much as a session called "New Session", and this is the one moment
+    // somebody is certain to know what it is for.
+    if (record?.id) setRenaming(record.id);
+  };
+
+  const moveFolderBy = (id, delta) => {
+    const at = folders.findIndex((f) => f.id === id);
+    if (at >= 0) onMoveFolder(id, at + delta);
+  };
+
   // What a session is for, in the line under its name: the agents it asks, or
   // that it has not been given any yet. The names come from the roster rather
   // than from the record, so a renamed agent is renamed here too — and an agent
   // that has gone drops out of the line rather than being counted in it.
-  const sessionRow = (s) => {
+  // `folderId` is the folder this row is being drawn inside, or null for a loose
+  // one. It decides two things and nothing else: whether the row is a drop
+  // target for another session, and where a drop lands.
+  const sessionRow = (s, folderId = null) => {
     const names = sessionCounsel(s, askableAgents).map((a) => a.name);
     // The day the session was started, beside its name. Sessions are ordered by
     // when they were last used, so the list itself says nothing about age — and
     // every session begins life called "New Session", which makes the date the
     // only thing telling two untitled ones apart until somebody names them.
     const created = formatShortDate(s.createdAt);
+    const over = sdrag.over;
+    const edge =
+      over && over.type === 'row' && over.id === s.id && sdrag.id !== s.id
+        ? sdrag.before
+          ? 'drop-before'
+          : 'drop-after'
+        : '';
     return (
       <div
         key={s.id}
-        className={`peer session ${s.id === selectedId ? 'active' : ''}`}
+        // Named in the DOM the way a category and a folder are, so the browser
+        // harness can point at one row rather than counting its way to it.
+        data-row={s.id}
+        className={`peer session ${s.id === selectedId ? 'active' : ''} ${edge}`}
         onClick={() => onSelect(s.id)}
+        draggable
+        onDragStart={sessionDragStart(s.id)}
+        onDragEnd={clearSdrag}
+        // Only a row inside a folder is a place to insert. A loose row has no
+        // order to insert into — the loose list sorts itself — so the region
+        // around it takes the drop instead.
+        onDragOver={folderId ? rowOver(folderId, s.id) : undefined}
+        onDrop={folderId ? rowDrop(folderId, s.id) : undefined}
       >
         <span className="session-mark" aria-hidden="true">
           <Sessions size={17} />
@@ -346,6 +557,16 @@ export default function Sidebar({
   // the People heading, which is where they have always been — a heading that
   // can now be shut, so they fade in with the grip and the lock on hover rather
   // than sitting on top of a title that is meant to read as a title.
+  // The one thing done to the Sessions list rather than to one session. It sits
+  // in the heading, left of the lock, in the slot the People heading's three
+  // already use — so it fades in with the grip and the lock on hover rather than
+  // sitting on top of a title meant to read as a title.
+  const sessionsActions = (
+    <button className="icon-btn sb-action" onClick={addFolder} title="New folder">
+      <Plus size={16} />
+    </button>
+  );
+
   const peopleActions = (
     <>
       <button className="icon-btn sb-action" onClick={onNewGroupCall} title="Start a group call">
@@ -365,6 +586,95 @@ export default function Sidebar({
   // order they have been put in, is the thing being dragged and locked — one
   // that came and went with its contents would move the others under the
   // pointer, and could not be given a place to sit at all.
+  // The Sessions list: folders first, then whatever is in none of them.
+  //
+  // The two halves are ordered by different things on purpose. Inside a folder
+  // the order is the one you dragged them into; outside, it is still the most
+  // recently used first, which is what the list has always done and what makes
+  // the session you were just in the one at the top. Filing something is how you
+  // opt out of that, per folder.
+  //
+  // **A search flattens all of it.** A search is a question about sessions, not
+  // about where they were filed, and a folder with no matches would be a shut
+  // box the searcher has to open to disprove. It also removes a whole class of
+  // bug: a drop index measured against a *filtered* list writes the wrong
+  // position into the record.
+  const sessionsBody = (rows) => {
+    if (searching) {
+      return rows.length ? (
+        rows.map((h) => sessionRow(h.item))
+      ) : (
+        <div className="empty-hint">No sessions yet. The button above starts one.</div>
+      );
+    }
+
+    const loose = looseSessions(
+      rows.map((h) => h.item),
+      folders
+    );
+    if (!folders.length && !loose.length) {
+      return <div className="empty-hint">No sessions yet. The button above starts one.</div>;
+    }
+
+    const carrying = sdrag.kind === 'session';
+    const over = sdrag.over;
+
+    return (
+      <>
+        {folders.map((f) => {
+          const inside = folderSessions(f, sessionsById);
+          return (
+            <SessionFolder
+              key={f.id}
+              id={f.id}
+              name={f.name}
+              count={inside.length}
+              open={folderOpen(f.id)}
+              editing={renaming === f.id}
+              onToggle={() => toggleFolder(f.id)}
+              onEditing={(on) => setRenaming(on ? f.id : null)}
+              onRename={(name) => onRenameFolder(f.id, name)}
+              onDelete={() => onDeleteFolder(f.id)}
+              onMove={(delta) => moveFolderBy(f.id, delta)}
+              dropInto={carrying && over?.type === 'folder' && over.id === f.id}
+              dropEdge={
+                sdrag.kind === 'folder' && over?.type === 'folder' && over.id === f.id && sdrag.id !== f.id
+                  ? sdrag.before
+                    ? 'before'
+                    : 'after'
+                  : null
+              }
+              onDragStart={folderDragStart(f.id)}
+              onDragEnd={clearSdrag}
+              onDragOver={folderOver(f.id)}
+              onDrop={folderDrop(f.id)}
+            >
+              {inside.length ? (
+                inside.map((s) => sessionRow(s, f.id))
+              ) : (
+                <div className="empty-hint folder-empty">Drag a session here.</div>
+              )}
+            </SessionFolder>
+          );
+        })}
+        {/* Everything in no folder. A region rather than a list of drop targets:
+            its order is not the user's to set, so there is no insertion point to
+            draw and dropping anywhere in it means the same thing. */}
+        <div
+          className={`loose-sessions ${carrying && over?.type === 'loose' ? 'drop-out' : ''}`}
+          onDragOver={looseOver}
+          onDrop={looseDrop}
+        >
+          {loose.map((s) => sessionRow(s))}
+          {/* Only while something is being carried, and only when it came out of
+              a folder — an empty region has no height to aim at, and a strip
+              inviting a drop that would change nothing is noise. */}
+          {carrying && folderOf(folders, sdrag.id) && <div className="loose-drop">Not in a folder</div>}
+        </div>
+      </>
+    );
+  };
+
   const sectionBody = (id) => {
     const rows = hits[id];
     // A category that is being searched and found nothing says so about the
@@ -375,11 +685,7 @@ export default function Sidebar({
     }
     switch (id) {
       case 'sessions':
-        return rows.length ? (
-          rows.map((h) => sessionRow(h.item))
-        ) : (
-          <div className="empty-hint">No sessions yet. The button above starts one.</div>
-        );
+        return sessionsBody(rows);
       case 'agents':
         return rows.length ? (
           rows.map((h) => peerRow(h.item))
@@ -524,7 +830,7 @@ export default function Sidebar({
             dropEdge={
               drag.id && drag.overId === id && drag.id !== id ? (drag.before ? 'before' : 'after') : null
             }
-            actions={id === 'people' ? peopleActions : null}
+            actions={id === 'people' ? peopleActions : id === 'sessions' ? sessionsActions : null}
             onHover={onHover}
             onToggleLock={toggleLock}
             onMove={move}

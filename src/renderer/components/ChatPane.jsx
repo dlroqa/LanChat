@@ -8,6 +8,7 @@ import AgentFlash from './AgentFlash.jsx';
 import SessionTitle from './SessionTitle.jsx';
 import FindBar from './FindBar.jsx';
 import AgentPicker from './AgentPicker.jsx';
+import FolderPicker from './FolderPicker.jsx';
 import {
   Phone,
   Video,
@@ -22,6 +23,7 @@ import {
   Play,
 } from '../lib/icons.jsx';
 import { useQueueLabel } from './QueueBadge.jsx';
+import { folderOf } from '../lib/sessionFolders.js';
 import { useAgentPhrase } from '../lib/agentPhrase.js';
 import { threadHits } from '../lib/findInThread.js';
 import { askPlaceholder, thinkingLine, roundSummary } from '../lib/counselCopy.js';
@@ -76,6 +78,12 @@ export default function ChatPane({
   onRenameSession,
   onSetCounsel,
   onImportText,
+  // Where sessions are filed, and the two ways this one moves between folders.
+  // Which folder it is in is derived from the list rather than carried on the
+  // session card, so there is one answer to that question rather than two.
+  folders = [],
+  onPlaceSession = () => {},
+  onNewFolderFor = () => {},
   onFork,
   // Putting a question that failed back into the composer. Given on the same
   // threads as onFork, since both only mean anything where a question can be
@@ -466,6 +474,18 @@ export default function ChatPane({
                 <Video size={19} />
               </button>
             </>
+          )}
+          {/* Where this session is filed. First of the session's own actions,
+              because it is the one that is about the session rather than about
+              its contents — the three after it write the conversation out, bring
+              one in, or take it away. */}
+          {isSession && (
+            <FolderPicker
+              folders={folders}
+              current={folderOf(folders, peer.id)}
+              onPlace={(folderId) => onPlaceSession(peer.id, folderId, null)}
+              onNewFolder={() => onNewFolderFor(peer.id)}
+            />
           )}
           {/* The way back in. Everything else here writes a conversation out or
               takes it away; this is the one thing that brings one in, so it sits

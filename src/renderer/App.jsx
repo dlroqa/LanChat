@@ -210,6 +210,11 @@ export default function App() {
   // The list comes from main and is republished whenever it changes there, so
   // this window never has to guess at it.
   const [sessions, setSessions] = useState([]);
+  // Where those sessions are filed. A folder holds an ordered list of session
+  // ids — the session records know nothing about folders — so this arrives with
+  // the two lists below and for the same reason: filing a session changes what
+  // two folders draw without changing the session at all.
+  const [folders, setFolders] = useState([]);
   // The Trash: sessions that have been deleted and can still be put back. It
   // arrives from main alongside the list above and for the same reason — the two
   // are one set of records seen from either side, and a window that worked out
@@ -742,6 +747,7 @@ export default function App() {
       // and kept current by the `sessions` event rather than polled.
       api.listSessions().then((list) => setSessions(list || []));
       api.listTrash().then((list) => setTrash(list || []));
+      api.listFolders().then((list) => setFolders(list || []));
       // Notes, the same way and for the same reason. Metadata only — the
       // writing itself is read one note at a time, when one is opened.
       api.listNotes().then((list) => setNotes(list || []));
@@ -1016,6 +1022,13 @@ export default function App() {
         // other agents, or deleted.
         case 'sessions':
           setSessions(payload || []);
+          break;
+        // Where sessions are filed changed — a folder was made, named, deleted,
+        // moved, or something was put in one. Published with the list above
+        // every time, because a folder holds session ids and so the two are one
+        // picture seen from either side.
+        case 'folders':
+          setFolders(payload || []);
           break;
         // What is in the Trash changed. Published with the list above every
         // time, because a session leaving one of them is a session arriving in
@@ -1648,6 +1661,40 @@ export default function App() {
   async function renameSession(id, title) {
     const record = await api.renameSession(id, title);
     if (record) setSessions((list) => list.map((s) => (s.id === record.id ? record : s)));
+  }
+
+  // Folders. None of these patch state locally the way renameSession does above:
+  // a place() touches two folders at once and a delete changes what every loose
+  // row is, neither of which a single-record reply can express. Main owns the
+  // list and pushes it back, which is one source of truth rather than two that
+  // can disagree.
+  async function newFolder(name) {
+    return api.createFolder(name);
+  }
+
+  async function renameFolder(id, name) {
+    await api.renameFolder(id, name);
+  }
+
+  async function deleteFolder(id) {
+    await api.deleteFolder(id);
+  }
+
+  async function moveFolder(id, toIndex) {
+    await api.moveFolder(id, toIndex);
+  }
+
+  async function placeSession(id, folderId, index) {
+    await api.placeSession(id, folderId ?? null, index ?? null);
+  }
+
+  // Make one and put this session straight in it. A composite because the moment
+  // you realise you need a folder is while you are looking at the session that
+  // wants one, and no renderer should have to sequence two IPC calls to say so.
+  async function newFolderFor(sessionId, name) {
+    const record = await api.createFolder(name);
+    if (record) await api.placeSession(sessionId, record.id, null);
+    return record;
   }
 
   // Who a session asks: a list of agents, or whoever is available, and whether
@@ -2299,6 +2346,12 @@ export default function App() {
         authFailures={authFailures}
         showAddresses={config.showAddresses}
         sessions={sessions}
+        folders={folders}
+        onNewFolder={newFolder}
+        onRenameFolder={renameFolder}
+        onDeleteFolder={deleteFolder}
+        onMoveFolder={moveFolder}
+        onPlaceSession={placeSession}
         askableAgents={askableAgents}
         sectionOrder={config.sidebarOrder}
         lockedSections={config.sidebarLocked}
@@ -2381,6 +2434,9 @@ export default function App() {
             onPauseRound={pauseSessionRound}
             onResumeRound={resumeSessionRound}
             onImportText={() => importSessionText(selectedId)}
+            folders={folders}
+            onPlaceSession={placeSession}
+            onNewFolderFor={newFolderFor}
             // Branching is offered where a question can be asked from: inside a
             // session, and in the agent threads a session can be started from.
             onFork={isThinkingThread(selectedId) ? forkFrom : undefined}

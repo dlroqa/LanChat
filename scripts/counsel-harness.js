@@ -100,6 +100,8 @@ const card = () => {
   };
 };
 
+const placed = [];
+
 const props = () => ({
   peer: card(),
   messages: [
@@ -110,6 +112,14 @@ const props = () => ({
   progress: {}, agents, mentionables: [], docs: [],
   onSetCounsel: (id, patch) => { patches.push(patch); record = { ...record, ...patch }; draw(); },
   onRenameSession: () => {}, onImportText: () => {}, onSend: () => {}, onAttach: () => {},
+  // Where sessions are filed, so the header's folder picker has something to
+  // offer and something to tick.
+  folders: [
+    { id: 'folder:1', name: 'Reading', sessionIds: ['session:1'] },
+    { id: 'folder:2', name: 'Later', sessionIds: [] },
+  ],
+  onPlaceSession: (id, folderId) => { placed.push([id, folderId]); },
+  onNewFolderFor: (id) => { placed.push(['new', id]); },
   onTyping: () => {}, onOpenFile: () => {}, onRevealFile: () => {},
   onClearHistory: () => {}, onExportHistory: () => {}, onVoiceCall: () => {}, onVideoCall: () => {},
 });
@@ -284,6 +294,44 @@ function state() {
   click(document.querySelector('.messages'));
   await wait(60);
   steps.clickedAway = state();
+
+  // The move-to-folder menu. The one thing about it that cannot be read off the
+  // stylesheet is whether it actually escapes the header: the session subtitle
+  // clips to one line, and a menu opening out of a clipped box is invisible
+  // while being present, correct and in the DOM.
+  // (No backticks in here: this whole page is a template literal.)
+  const fbtn = document.querySelector('.folder-picker .icon-btn');
+  fbtn.click();
+  await wait(120);
+  const fmenu = document.querySelector('.folder-menu');
+  const header = document.querySelector('.chat-header');
+  const mr = fmenu.getBoundingClientRect();
+  const hr = header.getBoundingClientRect();
+  // Spread over state() so the draft-survives-everything loop in the test covers
+  // this popup too: opening a menu over the composer must not eat what is typed.
+  steps.folderMenu = {
+    ...state(),
+    folderOpen: Boolean(fmenu),
+    items: [...fmenu.querySelectorAll('.folder-item')].map((b) => b.textContent.trim()),
+    ticked: [...fmenu.querySelectorAll('[aria-selected="true"] .folder-item-text')].map((n) => n.textContent),
+    // Escaped the header rather than being clipped by it, and still on screen.
+    belowHeader: mr.bottom > hr.bottom,
+    visible: mr.height > 0 && mr.width > 0,
+    insideWindow: mr.right <= window.innerWidth + 1 && mr.left >= -1,
+    // Before the Upload button, which is where the row's other session action is.
+    beforeUpload: (() => {
+      const btns = [...document.querySelectorAll('.chat-actions > *')];
+      const picker = btns.findIndex((b) => b.classList.contains('folder-picker'));
+      return picker === 0 && btns.length > 1;
+    })(),
+  };
+  document.querySelector('.folder-item').click();
+  await wait(120);
+  steps.folderPicked = {
+    ...state(),
+    placed: JSON.parse(JSON.stringify(placed)),
+    closed: !document.querySelector('.folder-menu'),
+  };
 
   const pre = document.createElement('pre');
   pre.id = 'result';

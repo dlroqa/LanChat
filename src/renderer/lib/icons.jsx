@@ -250,6 +250,16 @@ export const Sessions = (p) => (
     <path d="M7 4h12a1 1 0 0 1 1 1v12" />
   </S>
 );
+// Where sessions are filed. The tab is on the left and the body is one path, so
+// it stays legible at the 15px the sidebar row draws it at — a two-piece folder
+// with a separate lid closes up into a grey blob at that size. Deliberately not
+// built from the Sessions glyph above: a folder is a container for those, and
+// two shapes that read alike would be two things that look like the same thing.
+export const Folder = (p) => (
+  <S {...p}>
+    <path d="M3 7.5a2 2 0 0 1 2-2h3.6a2 2 0 0 1 1.5.7l1.1 1.3H19a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+  </S>
+);
 // Two lines from one — the shape of taking one thing that was said and carrying
 // on from there. The standard fork glyph, the way every version-control tool
 // draws it: the trunk rises out of the node below and splits to the two above.

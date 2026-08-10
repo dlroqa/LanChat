@@ -136,6 +136,9 @@ window.lanchat = {
     peerAgents: {},
   }),
   listSessions: () => Promise.resolve(live()),
+  // Read on boot beside listSessions. Empty: none of these harnesses is about
+  // where sessions are filed, and App asks for the list unconditionally.
+  listFolders: () => Promise.resolve([]),
   listTrash: () => Promise.resolve(dead()),
   // Notes have a Trash of their own, and it is not the one under test here.
   // Answered so App can mount; empty so nothing of it is in the way.

@@ -119,6 +119,9 @@ window.lanchat = {
     peerAgents: {},
   }),
   listSessions: () => Promise.resolve(SESSIONS),
+  // Read on boot beside listSessions. Empty: none of these harnesses is about
+  // where sessions are filed, and App asks for the list unconditionally.
+  listFolders: () => Promise.resolve([]),
   listTrash: () => Promise.resolve([]),
   listNotes: () => Promise.resolve([]),
   listNoteTrash: () => Promise.resolve([]),

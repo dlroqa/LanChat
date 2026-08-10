@@ -4428,6 +4428,229 @@ input[type='range']:disabled::-webkit-slider-thumb {
   color: var(--primary);
 }
 
+/* ---- folders of sessions --------------------------------------------------
+   The Sessions list sorts itself by when each session was last used, which is
+   the right answer until there are thirty of them. A folder is the way out, and
+   it borrows the category fold above rather than inventing one: `.sb-body` and
+   `.sb-body-inner` are unscoped, so a folder inherits the same 0fr grid track
+   and the same `visibility: hidden`, which is what makes a shut folder's rows
+   genuinely leave the tab order instead of merely being invisible. */
+.sb-folder {
+  margin: 2px 0;
+}
+/* The open state, as its own rule rather than by widening `.sb-section.open`.
+   That selector is looked up by its exact text in test/layout.test.js, and a
+   folder is not a category — three duplicated declarations are cheaper than a
+   shared rule that means two things. */
+.sb-folder.open > .sb-body {
+  grid-template-rows: 1fr;
+  visibility: visible;
+}
+/* Deliberately not sticky. `.sb-head` above it is, and a second sticky row
+   inside the first would sit on top of the rows it is meant to be heading. */
+.folder-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px 5px 4px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  user-select: none;
+}
+.folder-head:hover {
+  background: var(--surface-hover);
+}
+.folder-grip {
+  flex: none;
+}
+.folder-twist {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--fg-faint);
+}
+/* One icon doing the work of two: there is no ChevronRight in the set, and a
+   rotation animates where a swapped glyph would jump. */
+.folder-twist svg {
+  transform: rotate(-90deg);
+  transition: transform 0.12s ease;
+}
+.sb-folder.open .folder-twist svg {
+  transform: none;
+}
+.folder-mark {
+  flex: none;
+  display: inline-flex;
+  color: var(--fg-faint);
+}
+.folder-name {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Same height and the same left edge as the button it replaces, so renaming a
+   folder does not make the row jump — the rule SessionTitle already follows. */
+.folder-name,
+.folder-name-input {
+  height: 20px;
+  line-height: 20px;
+  padding: 0;
+}
+.folder-name-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--primary);
+  outline: none;
+}
+.folder-count {
+  flex: none;
+  font-size: 11px;
+  color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
+}
+/* With the grip and the lock: present at rest only for the folder being pointed
+   at, so a column of folders reads as names rather than as a row of controls. */
+.folder-remove {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.folder-head:hover .folder-remove,
+.folder-head:focus-within .folder-remove {
+  opacity: 1;
+}
+/* Into this folder. A ring around the whole head rather than an edge, because
+   the drop appends to what is inside rather than landing between two things —
+   an insertion caret would be promising a position. */
+.sb-folder.drop-into > .folder-head {
+  background: var(--primary-soft);
+  box-shadow: inset 0 0 0 1px var(--primary-hover);
+}
+.sb-folder.drop-before > .folder-head {
+  box-shadow: inset 0 2px 0 var(--primary-hover);
+}
+.sb-folder.drop-after > .folder-head {
+  box-shadow: inset 0 -2px 0 var(--primary-hover);
+}
+/* The rows inside a folder do land between two things, so they get the edge. */
+.peer.session.drop-before {
+  box-shadow: inset 0 2px 0 var(--primary-hover);
+}
+.peer.session.drop-after {
+  box-shadow: inset 0 -2px 0 var(--primary-hover);
+}
+/* Dragging a row would otherwise start by selecting its text. */
+.peer.session {
+  user-select: none;
+}
+/* Everything in no folder. Tinted as a region and never given a caret: this list
+   orders itself by when each session was last used, so there is no position here
+   that is the user's to set and none should be drawn. */
+.loose-sessions.drop-out {
+  background: var(--primary-soft);
+  border-radius: var(--radius-sm);
+}
+/* Somewhere to aim at when the region is empty, and only while something that
+   came out of a folder is being carried. */
+.loose-drop {
+  margin: 4px 8px;
+  padding: 6px 8px;
+  border: 1px dashed var(--border-soft);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--fg-faint);
+  text-align: center;
+}
+.folder-empty {
+  font-size: 11px;
+}
+
+/* ---- move to folder, from the header --------------------------------------
+   Its own rules rather than extra selectors on `.scope-menu`, which the layout
+   test looks up by its exact text — and the two menus differ where it matters:
+   this one hangs off the right edge of the window, because the button that opens
+   it is the last of a row of icons pinned there and a left-anchored menu would
+   run off the screen.
+
+   Nothing in `.chat-header`, `.chat-actions` or `.chat-wrap` sets `overflow`, so
+   this escapes the header and paints over the conversation. That is checked in
+   test/speechMeter.test.js's neighbour rather than assumed — `.chat-header .sub`
+   *does* clip, and the session subtitle has to undo it for the agent picker. */
+.folder-picker {
+  position: relative;
+  display: inline-flex;
+}
+.folder-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  min-width: 220px;
+  max-width: 300px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  list-style: none;
+  margin: 0;
+}
+.folder-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--fg);
+  text-align: left;
+}
+.folder-item:hover {
+  background: var(--surface-hover);
+}
+.folder-item.active {
+  color: var(--primary);
+}
+/* Held even when there is no tick, so the names line up whether or not one of
+   them is the current folder. */
+.folder-item-tick {
+  flex: none;
+  display: inline-flex;
+  width: 14px;
+  color: var(--primary);
+}
+.folder-item-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-menu-rule {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border-soft);
+}
+.folder-menu-empty {
+  padding: 7px 9px;
+  font-size: 12px;
+  color: var(--fg-faint);
+}
+
 /* ---- reading a session aloud ----------------------------------------------
    The transport under the stat tiles: back a turn, play or pause, on a turn.
    Built out of the same surface, border and radius as .stat above so it reads

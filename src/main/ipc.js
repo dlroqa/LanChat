@@ -903,16 +903,64 @@ function createIpc({
   // store under its own id, so history, export and delete need nothing here —
   // only the list itself, and the one way text gets into one from outside.
 
-  // Both lists, always together. Every change that matters here moves a record
-  // from one of them to the other, so publishing one without the other is the
-  // one way the window could end up showing a session in two places or in
+  // All three lists, always together. Every change that matters here moves a
+  // record from one of them to another, so publishing one without the rest is
+  // the one way the window could end up showing a session in two places or in
   // neither.
+  //
+  // Folders belong in that set rather than in a publisher of their own,
+  // literally: a folder holds session ids, so trashing a session changes what a
+  // folder draws without changing the folder, and filing one changes two folders
+  // at once. Three emits, one call site to get right.
   function publishSessions() {
     emit('sessions', sessions.list());
     emit('trash', sessions.listTrash());
+    emit('folders', sessions.listFolders());
   }
 
   ipcMain.handle('lanchat:listSessions', () => sessions.list());
+
+  // ---- folders ----
+  //
+  // Where sessions are filed. The list is the order they are drawn in, and the
+  // ids inside a folder are the order its sessions are drawn in — both of them
+  // arranged by hand, which is the whole point of a folder next to a list that
+  // sorts itself by when each session was last used.
+  ipcMain.handle('lanchat:listFolders', () => sessions.listFolders());
+
+  ipcMain.handle('lanchat:createFolder', (_e, { name } = {}) => {
+    const record = sessions.createFolder({ name });
+    publishSessions();
+    return record;
+  });
+
+  ipcMain.handle('lanchat:renameFolder', (_e, { id, name }) => {
+    const record = sessions.renameFolder(id, name);
+    if (record) publishSessions();
+    return record;
+  });
+
+  // The folder goes; the sessions in it become loose again, because nothing
+  // points at them any more. Nothing is deleted but the folder itself, which is
+  // why this needs no confirmation and has no Trash.
+  ipcMain.handle('lanchat:deleteFolder', (_e, { id }) => {
+    const ok = sessions.deleteFolder(id);
+    if (ok) publishSessions();
+    return { ok };
+  });
+
+  ipcMain.handle('lanchat:moveFolder', (_e, { id, toIndex }) => {
+    const ok = sessions.moveFolder(id, toIndex);
+    if (ok) publishSessions();
+    return { ok };
+  });
+
+  // Filing a session, or taking it out: `folderId: null` is "not in a folder".
+  ipcMain.handle('lanchat:placeSession', (_e, { id, folderId = null, index = null }) => {
+    const ok = sessions.placeSession(id, { folderId, index });
+    if (ok) publishSessions();
+    return { ok };
+  });
 
   ipcMain.handle('lanchat:createSession', (_e, draft) => {
     const record = sessions.create(draft || {});

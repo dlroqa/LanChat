@@ -90,6 +90,13 @@ const FRAMES = ${JSON.stringify(FRAMES)};
 const sessions = [
   { id: 's1', title: 'why the turn moved', agentId: 'a1' },
   { id: 's2', title: 'kangkong', agentId: 'a1' },
+  { id: 's3', title: 'the third one', agentId: 'a1' },
+];
+// Where those sessions are filed. Two folders, one with something in it, so the
+// walk below has both a populated folder and an empty one to drag between.
+let folders = [
+  { id: 'folder:1', name: 'Reading', sessionIds: ['s2'] },
+  { id: 'folder:2', name: 'Later', sessionIds: [] },
 ];
 const peers = [
   { id: 'a1', kind: 'agent', agentKind: 'acp', name: 'Tessie', online: true, viaName: 'Server' },
@@ -127,6 +134,47 @@ const props = () => ({
   onSelect: (id) => { selectedId = id; unread = { ...unread, [id]: 0 }; draw(); },
   onOpenProfile: () => {}, onOpenDev: () => {}, onOpenSettings: () => {},
   onNewSession: () => {}, onAddPeer: () => {}, onRefresh: () => {}, onNewGroupCall: () => {},
+  // Main owns the folder list and pushes it back, so the fixture mutates its own
+  // copy and redraws — the same shape onSectionPrefs above uses for the config.
+  folders,
+  onNewFolder: () => {
+    const record = { id: 'folder:' + (folders.length + 1), name: 'New Folder', sessionIds: [] };
+    folders = [record, ...folders];
+    saves.push({ newFolder: record.id });
+    draw();
+    return Promise.resolve(record);
+  },
+  onRenameFolder: (id, name) => {
+    folders = folders.map((f) => (f.id === id ? { ...f, name } : f));
+    saves.push({ renameFolder: [id, name] });
+    draw();
+  },
+  onDeleteFolder: (id) => {
+    folders = folders.filter((f) => f.id !== id);
+    saves.push({ deleteFolder: id });
+    draw();
+  },
+  onMoveFolder: (id, toIndex) => {
+    const rest = folders.filter((f) => f.id !== id);
+    const moving = folders.find((f) => f.id === id);
+    rest.splice(Math.max(0, Math.min(toIndex, rest.length)), 0, moving);
+    folders = rest;
+    saves.push({ moveFolder: [id, toIndex] });
+    draw();
+  },
+  onPlaceSession: (id, folderId, index) => {
+    folders = folders.map((f) => ({ ...f, sessionIds: f.sessionIds.filter((x) => x !== id) }));
+    if (folderId) {
+      folders = folders.map((f) => {
+        if (f.id !== folderId) return f;
+        const ids = [...f.sessionIds];
+        ids.splice(index == null ? ids.length : index, 0, id);
+        return { ...f, sessionIds: ids };
+      });
+    }
+    saves.push({ placeSession: [id, folderId, index] });
+    draw();
+  },
 });
 
 const root = createRoot(document.getElementById('side'));
@@ -208,6 +256,40 @@ function state() {
       actions: el.querySelectorAll('.sb-actions .icon-btn').length,
     };
   }
+  // The Sessions list, as folders and what is left over. rowsShown above now
+  // counts filed rows too, which widens it rather than breaking it.
+  out.folders = [...document.querySelectorAll('.sb-folder')].map((el) => {
+    const body = el.querySelector('.sb-body');
+    const cs = getComputedStyle(body);
+    return {
+      id: el.dataset.folder,
+      name: (el.querySelector('.folder-name .name-text') || {}).textContent || null,
+      editing: Boolean(el.querySelector('.folder-name-input')),
+      count: (el.querySelector('.folder-count') || {}).textContent || null,
+      open: el.classList.contains('open'),
+      classes: el.className,
+      rowsPx: Math.round(parseFloat(cs.gridTemplateRows) || 0),
+      visibility: cs.visibility,
+      headHeight: Math.round(el.querySelector('.folder-head').getBoundingClientRect().height),
+      rowIds: [...el.querySelectorAll('.sb-body-inner .peer.session')].map((r) => r.dataset.row),
+    };
+  });
+  // Folders come first inside the Sessions category, then everything in none of
+  // them. Read from the DOM rather than from the fixture, so the order asserted
+  // is the order drawn.
+  const inner = document.querySelector('.sb-section[data-section="sessions"] .sb-body-inner');
+  out.sessionsFirstChild = inner && inner.firstElementChild ? inner.firstElementChild.className : null;
+  const hint = document.querySelector('.sb-section[data-section="sessions"] .empty-hint');
+  out.sessionsHint = hint ? hint.textContent : null;
+  out.sessionRowsShown = [...document.querySelectorAll('.sb-section[data-section="sessions"] .peer.session')].map((r) => r.dataset.row);
+  const loose = document.querySelector('.loose-sessions');
+  out.loose = loose
+    ? {
+        ids: [...loose.querySelectorAll('.peer.session')].map((r) => r.dataset.row),
+        classes: loose.className,
+        strip: Boolean(loose.querySelector('.loose-drop')),
+      }
+    : null;
   return out;
 }
 
@@ -257,6 +339,132 @@ async function walk() {
   steps.dropped = state();
   steps.dropped.saved = JSON.parse(JSON.stringify(saves));
   steps.dropped.reachedApp = reachedApp;
+
+  // ---- folders ----------------------------------------------------------
+  //
+  // Sessions is pinned open first: a folder drag has to survive the pointer
+  // wandering, and the walk below dispatches events at elements rather than
+  // moving a pointer at all.
+  sec('sessions').querySelector('.sb-lock').click();
+  await wait(REST);
+  steps.foldersAtRest = state();
+
+  const folderHead = (id) => document.querySelector('[data-folder="' + id + '"] .folder-head');
+  const row = (id) => document.querySelector('[data-row="' + id + '"]');
+  const drag = (el, type, id) => {
+    const carried = new DataTransfer();
+    carried.setData(type, id);
+    el.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: carried }));
+    return carried;
+  };
+  const over = (el, dt, atTop) => {
+    const r = el.getBoundingClientRect();
+    el.dispatchEvent(new DragEvent('dragover', {
+      bubbles: true, dataTransfer: dt,
+      clientX: r.x + 20, clientY: atTop ? r.y + 2 : r.y + r.height - 2 }));
+  };
+  const drop = (el, dt, atTop) => {
+    const r = el.getBoundingClientRect();
+    el.dispatchEvent(new DragEvent('drop', {
+      bubbles: true, dataTransfer: dt,
+      clientX: r.x + 20, clientY: atTop ? r.y + 2 : r.y + r.height - 2 }));
+  };
+
+  // Shutting one. The rows have to genuinely leave, not merely stop being seen.
+  folderHead('folder:1').querySelector('.folder-twist').click();
+  await wait(REST);
+  steps.folderShut = state();
+  folderHead('folder:1').querySelector('.folder-twist').click();
+  await wait(REST);
+
+  // Carrying a session. The single most important assertion in this file: the
+  // category must stay open, or there is nothing left to drop onto.
+  let fdt = drag(row('s1'), 'application/x-lanchat-session', 's1');
+  await wait(60);
+  steps.draggingSession = state();
+
+  over(folderHead('folder:1'), fdt, false);
+  await wait(60);
+  steps.overFolder = state();
+
+  drop(folderHead('folder:1'), fdt, false);
+  row('s1').dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: fdt }));
+  await wait(REST);
+  steps.droppedIntoFolder = state();
+  steps.droppedIntoFolder.reachedApp = reachedApp;
+
+  // Reordering inside the folder: onto the top half of the first row.
+  fdt = drag(row('s1'), 'application/x-lanchat-session', 's1');
+  await wait(60);
+  over(row('s2'), fdt, true);
+  await wait(60);
+  steps.overRow = state();
+  drop(row('s2'), fdt, true);
+  row('s1').dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: fdt }));
+  await wait(REST);
+  steps.reorderedInFolder = state();
+
+  // And back out again, onto the loose region.
+  fdt = drag(row('s1'), 'application/x-lanchat-session', 's1');
+  await wait(60);
+  const looseEl = document.querySelector('.loose-sessions');
+  over(looseEl, fdt, false);
+  await wait(60);
+  steps.overLoose = state();
+  drop(looseEl, fdt, false);
+  row('s1').dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: fdt }));
+  await wait(REST);
+  steps.draggedOut = state();
+  steps.draggedOut.reachedApp = reachedApp;
+
+  // Carrying a folder: every folder renders shut while one is in the air, so the
+  // list of drop targets is a stationary list of heads.
+  fdt = drag(folderHead('folder:2'), 'application/x-lanchat-folder', 'folder:2');
+  await wait(60);
+  steps.draggingFolder = state();
+  over(folderHead('folder:1'), fdt, true);
+  await wait(60);
+  steps.overFolderEdge = state();
+  drop(folderHead('folder:1'), fdt, true);
+  folderHead('folder:2').dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: fdt }));
+  await wait(REST);
+  steps.folderReordered = state();
+  steps.folderReordered.reachedApp = reachedApp;
+
+  // Renaming, in place. The row must be the same height being typed into as it
+  // is being read, or the list jumps every time somebody names a folder.
+  const readHeight = state().folders[0].headHeight;
+  document.querySelector('.sb-folder .folder-name').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+  await wait(REST);
+  steps.renaming = state();
+  steps.renaming.readHeight = readHeight;
+  const input = document.querySelector('.folder-name-input');
+  const setText = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+  setText.call(input, 'Renamed');
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+  await wait(REST);
+  steps.renamed = state();
+  steps.renamed.saved = JSON.parse(JSON.stringify(saves));
+
+  // Searching flattens the lot: a search is a question about sessions, not about
+  // where they were filed.
+  search = { q: 'kangkong', scope: 'all' };
+  await settle();
+  steps.flattenedBySearch = state();
+  search = { q: '', scope: 'all' };
+  await settle();
+
+  // The positive control the reachedApp counter never had. Without it, a zero
+  // could mean the listener regressed rather than that nothing leaked.
+  const fileDt = new DataTransfer();
+  fileDt.items.add(new File(['x'], 'x.txt', { type: 'text/plain' }));
+  document.getElementById('app').dispatchEvent(new DragEvent('dragover', { bubbles: true, dataTransfer: fileDt }));
+  await wait(60);
+  steps.appStillListens = reachedApp;
+
+  sec('sessions').querySelector('.sb-lock').click();
+  await wait(REST);
 
   // A message arrives for somebody behind a shut heading. People is unpinned
   // first, so the category it lands in is one that is actually put away.
@@ -354,11 +562,17 @@ async function scene(name) {
 }
 
 const MODE = (location.hash || '#walk').slice(1);
-(MODE === 'walk' ? walk() : scene(MODE)).then((result) => {
+const report = (result) => {
   const pre = document.createElement('pre');
   pre.id = 'result';
   pre.textContent = JSON.stringify(result);
   document.body.appendChild(pre);
+};
+// A harness that dies silently reports nothing at all, and the caller sees only
+// "cannot read properties of null" from a hundred lines away. Whatever went
+// wrong comes back through the same channel the findings do.
+(MODE === 'walk' ? walk() : scene(MODE)).then(report, (err) => {
+  report({ error: String(err && err.stack ? err.stack : err) });
 });
 </script>
 </body></html>`;
@@ -408,7 +622,20 @@ async function runSidebarHarness(outDir) {
 
   return withScratchDir(outDir, 'lanchat-sidebar-', async (dir, keep) => {
     const page = path.join(dir, 'sidebar.html');
-    fs.writeFileSync(page, buildPage(dir));
+    const html = buildPage(dir);
+    fs.writeFileSync(page, html);
+    // The page is one long template literal, so a stray backtick or a name used
+    // twice is a parse error that chromium reports by rendering nothing at all —
+    // which arrives here as `null` from a hundred lines away. Checked before the
+    // browser is launched, so a typo says it is a typo.
+    const script = html.slice(html.lastIndexOf('<script>') + 8, html.lastIndexOf('</script>'));
+    const probe = path.join(dir, 'walk-check.js');
+    fs.writeFileSync(probe, script);
+    try {
+      require('node:child_process').execFileSync(process.execPath, ['--check', probe], { stdio: 'pipe' });
+    } catch (err) {
+      throw new Error('the harness page does not parse:\n' + String(err.stderr || err.message));
+    }
 
     // The walk waits out a dozen folds, one after another. Virtual time makes
     // that cost almost nothing in wall time, but the budget still has to cover
