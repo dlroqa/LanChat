@@ -2,8 +2,8 @@
 //
 // While a turn is being synthesised the transport shows a loading bar, because
 // there is a wait and nothing to hear. The moment sound arrives the bar has
-// nothing left to say and this takes the row instead — spikes rising from a
-// centre axis, coloured across the spectrum, over a band of the waveform itself.
+// nothing left to say and this takes the card instead — spikes rising from a
+// centre axis behind the buttons, coloured across the spectrum.
 // It is a measurement, not an animation: every height here comes from the audio
 // actually leaving the speakers, through the analyser tapped into the player's
 // graph (see agentSpeech.js `_build`), so it moves with the tone and the
@@ -43,15 +43,6 @@ export const GAMMA = 0.7;
 // in about ten frames — a fall you can see, without a bar that hangs.
 export const RELEASE = 0.8;
 
-// The waveform lane is drawn from what is left after the gain, and a voice
-// rarely peaks anywhere near full scale there. Without this the band would be a
-// thin line down the middle of its own lane.
-export const WAVE_GAIN = 1.6;
-
-// How the height is split between the two lanes. The spectrum is the one being
-// read, so it gets the larger share.
-export const LANE_SPLIT = 0.62;
-
 // How much of a bar's slot is the bar. The rest is the gap beside it, and the
 // gap is what makes a row of spikes read as a graph rather than as a smear.
 export const BAR_FILL = 0.55;
@@ -61,8 +52,7 @@ export const BAR_FILL = 0.55;
 // row of quiet bars from disappearing into the card altogether.
 export const INK_FLOOR = 0.36;
 export const INK_RANGE = 0.55;
-export const WAVE_INK = 0.8;
-// The two centre lines are furniture, not data, and are drawn like it.
+// The centre line is furniture, not data, and is drawn like it.
 export const AXIS_INK = 0.3;
 
 // The colours, when the stylesheet has not answered. Every one of these is
@@ -74,7 +64,6 @@ export const TOKENS = {
   hueTo: 285,
   sat: 82,
   light: 60,
-  wave: 'hsl(188 92% 58%)',
   axis: 'rgba(255, 255, 255, 0.35)',
 };
 
@@ -210,7 +199,6 @@ export function readTokens(styles) {
     hueTo: num('--meter-hue-to', TOKENS.hueTo),
     sat: num('--meter-sat', TOKENS.sat),
     light: num('--meter-light', TOKENS.light),
-    wave: text('--meter-wave', TOKENS.wave),
     axis: text('--meter-axis', TOKENS.axis),
   };
 }
@@ -254,42 +242,39 @@ export function stillLevels(level, bars) {
   }
 }
 
-function clamp1(v) {
-  return v < -1 ? -1 : v > 1 ? 1 : v;
-}
-
 // One frame, in device pixels.
 //
 // Takes a context and numbers and nothing else — no element, no window, no
 // measurement of its own — so a test can hand it a recording object and assert
 // what was drawn. The canvas is transparent and the panel's own surface is the
 // ground, which is how the meter stays on-theme without knowing the theme.
+//
+// One graph, filling the card. It began as two — a spectrum over a band of the
+// waveform — and the second lane earned its space in a picture and not in a
+// panel: the two moved together, said the same thing about how loud the voice
+// was, and cost the transport thirty pixels of height that sat empty whenever
+// nothing was being read.
 export function paint(ctx, W, H, dpr, opts) {
-  const { level, colors, dips, tokens, time, t = 0, still = false, amp = 0.5 } = opts;
+  const { level, colors, dips, tokens } = opts;
   const bars = level.length;
   const pad = Math.max(1, Math.round(dpr));
 
   ctx.clearRect(0, 0, W, H);
 
-  // The lanes. The spectrum takes the larger share and keeps its axis in the
-  // middle of it, so the spikes have somewhere to fall to as well as rise from.
-  const sh = (H - 3 * pad) * LANE_SPLIT;
-  const sy0 = pad;
-  const sMid = sy0 + sh / 2;
-  const wy0 = sy0 + sh + pad;
-  const wh = H - 3 * pad - sh;
-  const wMid = wy0 + wh / 2;
+  // The axis sits in the middle of the whole canvas, so the spikes have as much
+  // room to fall to as to rise from.
+  const sh = H - 2 * pad;
+  const sMid = pad + sh / 2;
 
   const pitch = W / bars;
   const bw = Math.max(1, Math.round(pitch * BAR_FILL));
 
-  // The two centre lines, one per lane. The spine of the graph, and the whole of
-  // its furniture — no rules, no frame, no ticks. Nothing else in this app draws
-  // a grid, and a backdrop behind a control is the last place to start.
+  // The centre line. The spine of the graph, and the whole of its furniture — no
+  // rules, no frame, no ticks. Nothing else in this app draws a grid, and a
+  // backdrop behind a control is the last place to start.
   ctx.fillStyle = tokens.axis;
   ctx.globalAlpha = AXIS_INK;
   ctx.fillRect(0, Math.round(sMid), W, 1);
-  ctx.fillRect(0, Math.round(wMid), W, 1);
 
   // The spikes. Positions are rounded so every gap is the same width — a bar
   // landing on a half pixel is drawn across two of them, which reads as a row of
@@ -303,44 +288,6 @@ export function paint(ctx, W, H, dpr, opts) {
     ctx.fillStyle = colors[i];
     ctx.globalAlpha = INK_FLOOR + INK_RANGE * v;
     ctx.fillRect(Math.round(i * pitch), Math.round(sMid) - up, bw, up + down);
-  }
-
-  // The waveform underneath: one column per device pixel, each filled from the
-  // centre line out to the loudest sample it covers in either direction.
-  //
-  // Anchored to the axis rather than drawn between the two extremes, which is
-  // what makes it the dense band in the reference instead of a thin trace
-  // wandering across the lane. The thickness of the band at any point is the
-  // loudness of the voice there, which is the thing worth seeing.
-  ctx.fillStyle = tokens.wave;
-  ctx.globalAlpha = WAVE_INK;
-  const half = wh / 2;
-  for (let k = 0; k < W; k += 1) {
-    let hi;
-    let lo;
-    if (time && time.length) {
-      const a = Math.floor((k * time.length) / W);
-      const b = Math.max(a + 1, Math.floor(((k + 1) * time.length) / W));
-      hi = -1;
-      lo = 1;
-      for (let s = a; s < b && s < time.length; s += 1) {
-        const v = (time[s] - 128) / 128;
-        if (v > hi) hi = v;
-        if (v < lo) lo = v;
-      }
-    } else {
-      // No signal to read: the blind face, and the still frame. A band of the
-      // same envelope the spikes are drawn from, so the two lanes agree about
-      // how loud the voice is even when neither of them can measure it.
-      const swell = still ? 0.18 : amp * 0.55 * (0.6 + 0.4 * Math.sin(k * 0.05 + t / 120));
-      hi = swell;
-      lo = -swell;
-    }
-    // Never the wrong side of the axis: a column whose samples all sit above the
-    // centre still fills down to it, so the band is continuous.
-    const y0 = wMid - clamp1(Math.max(0, hi) * WAVE_GAIN) * half;
-    const y1 = wMid - clamp1(Math.min(0, lo) * WAVE_GAIN) * half;
-    ctx.fillRect(k, y0, 1, Math.max(1, y1 - y0));
   }
 
   ctx.globalAlpha = 1;

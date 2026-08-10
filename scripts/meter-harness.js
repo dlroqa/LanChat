@@ -61,7 +61,15 @@ async function buildBundle(dir) {
 }
 
 function buildPage(bundle) {
-  const css = fs.readFileSync(path.join(SRC, 'styles.css'), 'utf8');
+  // Normally the stylesheet the app ships. Point LANCHAT_CSS at another one to
+  // measure this panel under it — which is how "the card went back to the size
+  // it was" is a measurement rather than a claim:
+  //
+  //   git show b591054:src/renderer/styles.css > ~/before.css
+  //   LANCHAT_CSS=~/before.css node scripts/meter-harness.js
+  //
+  // Same idea as the second argument scripts/layout-harness.js takes.
+  const css = fs.readFileSync(process.env.LANCHAT_CSS || path.join(SRC, 'styles.css'), 'utf8');
 
   // Transitions are settled rather than travelled: under a virtual time budget a
   // CSS transition never advances, so an opacity read through one comes back at
@@ -216,14 +224,15 @@ const out = {};
   if (cv) {
     const box = cv.getBoundingClientRect();
     const bar = $('.transport-load').getBoundingClientRect();
-    // Behind the buttons, and clear of the card's edge. Both are the point of
-    // where it sits: the graph is a backdrop, and a spike that reached the
-    // border would read as the card sprouting rather than as a graph inside it.
+    // Behind the buttons and filling the card. The graph is a backdrop: it sits
+    // under the controls and is clipped by the card rather than sizing it.
     const card = $('.conn-transport').getBoundingClientRect();
     const row = $('.transport-row').getBoundingClientRect();
     out.meterBehindButtons = box.top < row.bottom;
-    out.meterClearOfCardTop = Math.round(box.top - card.top);
-    out.meterInsideCard = box.bottom <= card.bottom;
+    out.meterInsideCard = box.bottom <= card.bottom + 1 && box.top >= card.top - 1;
+    out.meterFillsCard =
+      Math.round(box.height) >= Math.round(card.height) - 4 &&
+      Math.round(box.width) >= Math.round(card.width) - 4;
     out.meterCoversBar = box.top <= bar.top && box.bottom >= bar.bottom;
     out.meterHeight = Math.round(box.height * 100) / 100;
     out.meterBacked = cv.width > 0 && cv.height > 0;
@@ -245,19 +254,16 @@ const out = {};
 
     // The spectrum sits above the waveform, and the waveform is the one colour
     // not on the ramp — so the lower lane should be dominated by the cyan.
-    const cyanIn = (y0, y1) => {
+    const inkIn = (y0, y1) => {
       const band = ctx.getImageData(0, y0, cv.width, Math.max(1, y1 - y0)).data;
-      let cyan = 0;
-      let any = 0;
-      for (let i = 0; i < band.length; i += 4) {
-        if (band[i + 3] < 40) continue;
-        any += 1;
-        if (band[i + 2] > band[i] + 30 && band[i + 1] > band[i] + 30) cyan += 1;
-      }
-      return any ? Math.round((cyan / any) * 100) : 0;
+      let lit = 0;
+      for (let i = 0; i < band.length; i += 4) if (band[i + 3] >= 40) lit += 1;
+      return Math.round((lit / (band.length / 4)) * 1000) / 10;
     };
-    out.cyanInLowerLane = cyanIn(Math.round(cv.height * 0.7), cv.height);
-    out.cyanInUpperLane = cyanIn(0, Math.round(cv.height * 0.5));
+    // One graph now, so the ramp should be spread over the whole canvas rather
+    // than crowded into the top of it with a second lane underneath.
+    out.inkInLowerHalf = inkIn(Math.round(cv.height * 0.5), cv.height);
+    out.inkInUpperHalf = inkIn(0, Math.round(cv.height * 0.5));
   }
 
   // ---- the platform voice, which has no signal to read ----
@@ -274,6 +280,17 @@ const out = {};
     new Set([out.rowAtRest, out.rowPending, out.rowPrefetch, out.rowSpeaking, out.rowEmpty]).size === 1;
   out.barNeverMoves =
     new Set([out.barOffsetAtRest, out.barOffsetPending, out.barOffsetSpeaking]).size === 1;
+  // Two jobs, one place, never at once. The bar covers the wait while a turn is
+  // being made; the meter covers the sound once it is being said. A frame with
+  // both lit would be claiming a turn was still being synthesised while it was
+  // already speaking, and a frame with neither — during either — would be the
+  // handover dropping the baton.
+  out.handoverExclusive =
+    out.loadSeenPending === 1 && out.meterSeenPending === 0 &&
+    out.loadSeenPrefetch === 1 && out.meterSeenPrefetch === 0 &&
+    out.loadSeenSpeaking === 0 && out.meterSeenSpeaking === 1 &&
+    out.loadSeenAtRest === 0 && out.meterSeenAtRest === 0;
+
   out.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   // Left on the state worth photographing. The screenshot is taken when the page

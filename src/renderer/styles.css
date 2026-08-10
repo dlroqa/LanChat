@@ -4489,36 +4489,22 @@ input[type='range']:disabled::-webkit-slider-thumb {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
-/* One slot under the buttons, and it is always the same height whether anything
-   is in it or not.
+/* The bar that fills the silent gap while a turn is being fetched. It always
+   holds its row — opacity carries it in and out — so nothing below it moves when
+   synthesis starts. The .25s delay is the whole trick that keeps a cache hit,
+   which resolves in a tick, from ever drawing it: no JS timer, so none can leak.
+   The span slides on a transform, never a width, so it cannot reflow the panel.
 
-   Two things share it, and they alternate turn by turn for the whole of a
-   reading: the bar while a turn is being synthesised, the meter while it is
-   being spoken. Sized for both at once so nothing below moves as they swap — a
-   row that grew when the voice started would shift the note under it a dozen
-   times in one discussion.
-
-   The 8px belongs to the slot rather than to the bar inside it, which is what
-   keeps the bar's top edge on the pixel it has always been on. */
-.transport-face {
-  position: relative;
-  height: 30px;
-  margin-top: 8px;
-}
-/* The bar that fills the silent gap while a turn is being fetched. Pinned to the
-   top of the slot, in exactly the place it held before there was a slot, and
-   unchanged in every other way — opacity carries it in and out, so nothing moves
-   when synthesis starts. The .25s delay is the whole trick that keeps a cache
-   hit, which resolves in a tick, from ever drawing it: no JS timer, so none can
-   leak. The span slides on a transform, never a width, so it cannot reflow the
-   panel. */
+   Back in the flow, where it was before the meter existed. It sat in a
+   fixed-height slot for one release, to leave the meter a lane of its own below
+   it; the meter fills the whole card now, so the slot was thirty pixels of
+   nothing whenever a session was not being read. `position: relative` is only
+   there to lift it clear of the canvas behind it. */
 .transport-load {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
+  position: relative;
   z-index: 1;
   height: 3px;
+  margin-top: 8px;
   border-radius: 3px;
   overflow: hidden;
   background: var(--border-soft);
@@ -4559,11 +4545,10 @@ input[type='range']:disabled::-webkit-slider-thumb {
 }
 /* The equalizer, behind the transport.
 
-   It fills the card rather than sitting in a lane of its own, so the spikes rise
-   up behind the buttons — the buttons are the thing being pressed and stay in
-   front, and the graph is the backdrop they sit on. It stops six pixels short of
-   the card's edge on the way up: a spike that reached the border would look like
-   the card had sprouted rather than like a graph inside it.
+   It fills the card, so the spikes rise up behind the buttons — the buttons are
+   the thing being pressed and stay in front, and the graph is the backdrop they
+   sit on. The card clips it, which is what keeps a tall spike from squaring off
+   the rounded corners.
 
    It only ever lights once the bar's work is finished — a turn being made is the
    bar's, a turn being said is this — so the delay on the way in and none on the
@@ -4577,20 +4562,16 @@ input[type='range']:disabled::-webkit-slider-thumb {
    runs up rather than a pair of colours. */
 .transport-meter {
   position: absolute;
-  left: 0;
-  right: 0;
-  /* Measured back up from the slot it lives in: 8px of card padding, the 38px
-     button row and the slot's own 8px of margin put the card's inner edge 54px
-     above here, and 6px of that is left clear. */
-  top: -48px;
-  /* Stated rather than left to `bottom: 0`. A canvas has an intrinsic size, and
-     an absolutely positioned replaced element with `height: auto` takes that and
-     drops the bottom offset — which drew the meter 150px tall, straight through
-     everything under it. */
-  height: 78px;
+  inset: 0;
   z-index: 0;
   display: block;
+  /* Stated rather than left to `inset: 0`. A canvas has an intrinsic size, and an
+     absolutely positioned replaced element with `height: auto` takes that and
+     drops the bottom offset — which once drew the meter 150px tall, straight
+     through everything under it. Four offsets do resolve it, but saying it costs
+     one line and reading it again later costs nothing. */
   width: 100%;
+  height: 100%;
   opacity: 0;
   transition: opacity 0.18s ease 0.12s;
   /* The tallest spikes dissolve into the card rather than stopping dead against
@@ -4613,10 +4594,6 @@ input[type='range']:disabled::-webkit-slider-thumb {
   --meter-hue-to: 285;
   --meter-sat: 76%;
   --meter-light: 61%;
-  /* The lower lane, and the one colour not on the ramp: the waveform is a
-     different measurement from the spectrum above it and should not be mistaken
-     for part of the same graph. */
-  --meter-wave: hsl(188 92% 58%);
   --meter-axis: var(--fg-faint);
 }
 .transport-meter.on {

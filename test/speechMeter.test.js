@@ -32,7 +32,6 @@ const {
   HI_HZ,
   FLOOR,
   RELEASE,
-  LANE_SPLIT,
   BAR_FILL,
   TOKENS,
   usableBins,
@@ -48,7 +47,7 @@ const {
   paint,
 } = new Function(
   `${SRC.replace(/^import[^;]+;$/gm, '').replace(/^export\s+/gm, '')}
-   return { MIN_PITCH, LO_HZ, HI_HZ, FLOOR, RELEASE, LANE_SPLIT, BAR_FILL, TOKENS, usableBins,
+   return { MIN_PITCH, LO_HZ, HI_HZ, FLOOR, RELEASE, BAR_FILL, TOKENS, usableBins,
             barCount, binRanges, barValue, decay, barColors, barDips, readTokens,
             syntheticLevels, stillLevels, paint };`
 )();
@@ -216,7 +215,6 @@ test('the stylesheet is what is read, when it has answered', () => {
         '--meter-hue-to': '200',
         '--meter-sat': '40%',
         '--meter-light': '55%',
-        '--meter-wave': ' hsl(1 2% 3%) ',
         '--meter-axis': 'rgba(1, 2, 3, 0.4)',
       })[name] || '',
   };
@@ -225,7 +223,6 @@ test('the stylesheet is what is read, when it has answered', () => {
     hueTo: 200,
     sat: 40,
     light: 55,
-    wave: 'hsl(1 2% 3%)',
     axis: 'rgba(1, 2, 3, 0.4)',
   });
 });
@@ -284,7 +281,6 @@ function frame(overrides = {}) {
     colors: barColors(bars, TOKENS),
     dips: barDips(bars),
     tokens: TOKENS,
-    time: null,
     ...overrides,
   };
 }
@@ -298,20 +294,18 @@ test('a frame clears once and draws both lanes', () => {
   assert.deepEqual(clears[0].a, [0, 0, 240, 60]);
 
   const axes = ctx.calls.filter((c) => c.op === 'fill' && c.fill === TOKENS.axis);
-  assert.equal(axes.length, 2, 'a centre line for the spectrum and one for the waveform');
-  const [spectrum, wave] = axes.map((c) => c.a[1]);
-  assert.ok(spectrum < wave, 'the spectrum sits above the waveform');
-  // The split is the reason the spectrum reads first: it is the larger lane.
-  assert.ok(spectrum < 60 * LANE_SPLIT && wave > 60 * LANE_SPLIT);
+  assert.equal(axes.length, 1, 'one centre line — there is one graph now');
+  // Centred in the canvas rather than in the upper part of it, which is what the
+  // waveform lane below used to leave room for.
+  assert.ok(Math.abs(axes[0].a[1] - 30) <= 2, `the axis is at the middle, got ${axes[0].a[1]}`);
 
   const spikes = ctx.calls.filter((c) => c.op === 'fill' && opts.colors.includes(c.fill));
   assert.equal(spikes.length, opts.level.length, 'exactly one spike per bar');
 
-  // No rules, no frame, no ticks. Nothing else in the app draws a grid, and a
-  // backdrop behind a control is the last place to start one — so a frame is
-  // exactly the spikes, the two centre lines, and the waveform's own columns.
-  const waveCols = ctx.calls.filter((c) => c.op === 'fill' && c.fill === TOKENS.wave);
-  assert.equal(spikes.length + axes.length + waveCols.length, ctx.calls.length - clears.length);
+  // No rules, no frame, no ticks, and no second lane. Nothing else in the app
+  // draws a grid, and a backdrop behind a control is the last place to start one
+  // — so a frame is exactly the spikes and the one centre line.
+  assert.equal(spikes.length + axes.length, ctx.calls.length - clears.length);
 });
 
 test('the bars are evenly spaced, with an even gap beside each', () => {
@@ -349,9 +343,9 @@ test('a silent bar still holds the axis', () => {
 
 test('every colour the canvas draws with came from the stylesheet', () => {
   const ctx = recorder();
-  const opts = frame({ time: new Uint8Array(2048).fill(128) });
+  const opts = frame();
   paint(ctx, 240, 60, 2, opts);
-  const allowed = new Set([...opts.colors, TOKENS.wave, TOKENS.axis]);
+  const allowed = new Set([...opts.colors, TOKENS.axis]);
   for (const call of ctx.calls) {
     if (call.op !== 'fill') continue;
     assert.ok(allowed.has(call.fill), `${call.fill} is not one of the tokens`);
@@ -361,31 +355,24 @@ test('every colour the canvas draws with came from the stylesheet', () => {
   assert.doesNotMatch(SRC, /#[0-9a-fA-F]{3,8}\b/, 'no hex in the drawing code');
 });
 
-test('the waveform lane is read from the audio when there is audio to read', () => {
-  const quiet = new Uint8Array(2048).fill(128);
-  const loud = new Uint8Array(2048);
-  for (let i = 0; i < loud.length; i += 1) loud[i] = i % 2 ? 255 : 0;
-
-  const heights = (time) => {
-    const ctx = recorder();
-    const opts = frame({ time });
-    paint(ctx, 240, 60, 2, opts);
-    return ctx.calls
-      .filter((c) => c.op === 'fill' && c.fill === TOKENS.wave)
-      .reduce((sum, c) => sum + c.a[3], 0);
-  };
-  assert.ok(heights(loud) > heights(quiet), 'a loud passage draws a taller band than a quiet one');
-});
-
-test('the still frame does not move, whenever it is drawn', () => {
-  const draw = (t) => {
+test('a frame is decided entirely by its levels', () => {
+  // paint has no clock at all now. The waveform lane was the only thing in a
+  // frame that moved on its own, so a still frame is genuinely still: it cannot
+  // drift between the paint that drew it and any later one, which is the whole
+  // of the promise made to a window that asked for less motion.
+  const once = (fill) => {
     const ctx = recorder();
     const opts = frame();
-    stillLevels(opts.level, opts.level.length);
-    paint(ctx, 240, 60, 2, { ...opts, t, still: true });
+    fill(opts.level, opts.level.length);
+    paint(ctx, 240, 60, 2, opts);
     return JSON.stringify(ctx.calls);
   };
-  assert.equal(draw(0), draw(9999), 'reduced motion means one frame, not a slow one');
+  assert.equal(once(stillLevels), once(stillLevels), 'the same levels draw the same frame');
+  assert.notEqual(
+    once(stillLevels),
+    once((level, bars) => syntheticLevels(level, bars, 1000, 0)),
+    'and different levels draw a different one, or the test above proves nothing'
+  );
 });
 
 // --------------------------------------------------- the row, and what is in it
@@ -402,38 +389,34 @@ const ruleFor = (selector) => {
   return CSS.slice(at, CSS.indexOf('\n}', at));
 };
 
-test('the bar and the meter share one slot that never changes height', () => {
-  const face = ruleFor('.transport-face');
-  assert.match(face, /position:\s*relative/);
-  assert.match(face, /height:\s*30px/, 'a fixed height, so nothing below it moves as they swap');
-  assert.match(face, /margin-top:\s*8px/, 'the gap the bar used to carry, now the slot s');
+test('the card carries no slot for the meter to sit in', () => {
+  // The meter had a fixed-height lane of its own for one release. It fills the
+  // card now, and that lane was thirty pixels of nothing under the buttons
+  // whenever a session was not being read — which is exactly what it looked like.
+  assert.doesNotMatch(CSS, /\.transport-face\b/, 'the slot is gone from the stylesheet');
+  assert.doesNotMatch(
+    fs.readFileSync(path.join(RENDERER, 'components', 'ConnectionPanel.jsx'), 'utf8'),
+    /transport-face/,
+    'and from the markup'
+  );
 });
 
-test('the synthesising bar keeps the place it has always had', () => {
+test('the synthesising bar is back in the flow, where it started', () => {
   const load = ruleFor('.transport-load');
-  assert.match(load, /position:\s*absolute/);
-  assert.match(load, /top:\s*0/, 'pinned to the top of the slot, on the pixel it was on before');
-  assert.doesNotMatch(load, /margin-top/, 'the margin moved to the slot, or the bar would shift down');
+  assert.match(load, /margin-top:\s*8px/, 'its own gap again rather than a slot s');
+  assert.doesNotMatch(load, /position:\s*absolute/, 'it takes up room, so the card is sized by it');
+  assert.match(load, /z-index:\s*1/, 'but still above the canvas behind it');
   assert.match(load, /height:\s*3px/, 'and it is the same bar');
   assert.match(load, /transition:\s*opacity 0\.15s ease 0\.25s/, 'including the cache-hit delay');
 });
 
-test('the meter sits behind the buttons, and stops short of the card', () => {
+test('the meter fills the card, behind the buttons', () => {
   const meter = ruleFor('.transport-meter');
   assert.match(meter, /position:\s*absolute/);
-  // Measured back up out of the slot it lives in, so the spikes rise behind the
-  // transport's buttons. The card's inner edge is 54px above the slot — 8px of
-  // padding, the 38px button row and the slot's own 8px of margin — and the
-  // graph is kept clear of it.
-  const top = /top:\s*(-?\d+)px/.exec(meter);
-  assert.ok(top, 'the meter is placed in px, not left to the flow');
-  const above = -Number(top[1]);
-  assert.ok(above > 38, `it reaches up past the buttons (${above}px)`);
-  assert.ok(above < 54, `but never to the card's own edge (${above}px of 54)`);
-  // A canvas is a replaced element: given top and bottom but no height it takes
-  // its own intrinsic 150px and drops the bottom, which drew the meter straight
-  // through everything under the transport.
-  assert.match(meter, /height:\s*\d+px/, 'its height is stated rather than inferred');
+  assert.match(meter, /inset:\s*0/, 'the whole card, not a lane of its own');
+  // A canvas is a replaced element: given offsets but no height it takes its own
+  // intrinsic 150px and draws straight through everything below.
+  assert.match(meter, /height:\s*100%/, 'its height is stated rather than inferred');
   assert.match(meter, /z-index:\s*0/, 'and it is behind what it sits behind');
   // Rounded corners are why the card has to be the thing that clips it.
   assert.match(ruleFor('.conn-transport'), /overflow:\s*hidden/);
@@ -447,7 +430,6 @@ test('the meter sits behind the buttons, and stops short of the card', () => {
     '--meter-hue-to',
     '--meter-sat',
     '--meter-light',
-    '--meter-wave',
     '--meter-axis',
   ]) {
     assert.ok(meter.includes(token), `${token} is declared in the stylesheet, not in the JS`);

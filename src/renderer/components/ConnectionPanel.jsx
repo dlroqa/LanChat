@@ -452,7 +452,6 @@ function TransportMeter({ meter, live, blind }) {
     ro?.observe(cv);
 
     let freq = null;
-    let time = null;
     let level = null;
     let colors = null;
     let dips = null;
@@ -460,7 +459,6 @@ function TransportMeter({ meter, live, blind }) {
     let bars = 0;
     let lastWord = -1;
     let wordAt = 0;
-    let amp = 0.5;
     let raf = 0;
 
     const draw = (t, still) => {
@@ -500,20 +498,20 @@ function TransportMeter({ meter, live, blind }) {
 
       if (still) {
         stillLevels(level, bars);
-        paint(ctx, W, H, dpr, { level, colors, dips, tokens, time: null, still: true });
+        paint(ctx, W, H, dpr, { level, colors, dips, tokens });
         return;
       }
 
       if (face === 'signal') {
+        // Only the spectrum is drawn, so only the spectrum is read. The
+        // time-domain buffer went with the waveform lane it fed.
         const want = meter.bins();
-        const span = meter.samples();
         if (!freq || freq.length !== want) freq = new Uint8Array(want);
-        if (!time || time.length !== span) time = new Uint8Array(span);
-        meter.read(freq, time);
+        meter.read(freq, null);
         for (let i = 0; i < bars; i += 1) {
           level[i] = decay(level[i], barValue(freq, ranges[i * 2], ranges[i * 2 + 1]));
         }
-        paint(ctx, W, H, dpr, { level, colors, dips, tokens, time, t });
+        paint(ctx, W, H, dpr, { level, colors, dips, tokens });
         return;
       }
 
@@ -524,8 +522,8 @@ function TransportMeter({ meter, live, blind }) {
         lastWord = w;
         wordAt = t;
       }
-      amp = syntheticLevels(level, bars, t, t - wordAt);
-      paint(ctx, W, H, dpr, { level, colors, dips, tokens, time: null, t, amp });
+      syntheticLevels(level, bars, t, t - wordAt);
+      paint(ctx, W, H, dpr, { level, colors, dips, tokens });
     };
 
     if (reduced) {
@@ -615,43 +613,32 @@ function Transport({
           <SkipForward size={16} />
         </button>
       </div>
-      {/* One slot under the buttons, always the same height, holding the two
-          things that can be true while a session is being read: a turn being
-          made, and a turn being said. The bar keeps the exact place it has
-          always had at the top of it — the meter takes the room below, and only
-          once the bar's work is done, so the panel never moves and the two are
-          never lit together. */}
-      <div className="transport-face">
-        {/* The gap the position line cannot show. Two shapes on one bar: while
-            the whole session is being synthesised ahead of play it fills to a
-            known proportion; while an ordinary reading fetches its next turn it
-            slides, the duration being unknown. A CSS delay keeps a cache hit
-            from flashing it. A progressbar, not a bare colour, so the state is
-            announced. */}
-        <div
-          className={`transport-load ${pending || prefetch ? 'on' : ''} ${prefetch ? 'filling' : ''}`}
-          role="progressbar"
-          aria-label={prefetch ? 'Synthesising the whole session' : 'Preparing the next turn'}
-          aria-valuenow={
-            prefetch ? Math.round((prefetch.done / Math.max(1, prefetch.total)) * 100) : undefined
-          }
-          aria-valuetext={
-            prefetch
-              ? `${prefetch.done} of ${prefetch.total} prepared`
-              : pending
-                ? 'Preparing the next turn'
-                : 'Ready'
-          }
-        >
-          <span
-            style={
-              prefetch ? { width: `${(prefetch.done / Math.max(1, prefetch.total)) * 100}%` } : undefined
-            }
-          />
-        </div>
-        {/* And the voice itself, in the room below the bar. */}
-        <TransportMeter meter={meter} live={live} blind={engine === 'local'} />
+      {/* The gap the position line cannot show. Two shapes on one bar: while the
+          whole session is being synthesised ahead of play it fills to a known
+          proportion; while an ordinary reading fetches its next turn it slides,
+          the duration being unknown. Always in the layout so nothing below it
+          moves when it lights, and a CSS delay keeps a cache hit from flashing
+          it. A progressbar, not a bare colour, so the state is announced. */}
+      <div
+        className={`transport-load ${pending || prefetch ? 'on' : ''} ${prefetch ? 'filling' : ''}`}
+        role="progressbar"
+        aria-label={prefetch ? 'Synthesising the whole session' : 'Preparing the next turn'}
+        aria-valuenow={prefetch ? Math.round((prefetch.done / Math.max(1, prefetch.total)) * 100) : undefined}
+        aria-valuetext={
+          prefetch
+            ? `${prefetch.done} of ${prefetch.total} prepared`
+            : pending
+              ? 'Preparing the next turn'
+              : 'Ready'
+        }
+      >
+        <span
+          style={prefetch ? { width: `${(prefetch.done / Math.max(1, prefetch.total)) * 100}%` } : undefined}
+        />
       </div>
+      {/* And the voice itself, behind all of it. Last in the markup and first in
+          the paint order, because it is the backdrop the buttons sit on. */}
+      <TransportMeter meter={meter} live={live} blind={engine === 'local'} />
       {/* Polite rather than assertive: worth hearing when it changes, not worth
           cutting into whatever a screen reader is already saying. */}
       <div className="transport-pos" role="status" aria-live="polite">
