@@ -1290,3 +1290,380 @@ test('the spoken word is held across a pause', async () => {
   p.pause();
   assert.equal(p.wordAt, 1, 'a pause freezes the trace rather than clearing it');
 });
+
+// ------------------------------------------ stopping without forgetting
+//
+// The bug these pin: a discussion ending used to call clear(), which empties the
+// list — and an empty list is `empty` in Transport, which disables all three
+// buttons and says "Nothing to read yet". The transport went dead the moment a
+// discussion finished, and the only thing that brought it back was leaving the
+// session and returning, because that is the one change the sync effect watches.
+//
+// So stop() is silence that keeps the list, and a discussion ending on its own
+// does not even do that: the voice is normally several turns behind the
+// transcript by then, and cutting it off there truncates the reading.
+
+test('a stop silences the voice without forgetting the session', async () => {
+  const s = stage();
+  const p = player(s);
+  p.sync(turns('one', 'two', 'three'), { sessionId: 'session:1' });
+  p.playFrom();
+  await settle();
+  assert.equal(s.el.paused, false);
+
+  assert.equal(p.stop(), true);
+  assert.equal(s.el.paused, true, 'the voice stops at once');
+  assert.equal(p.status, IDLE);
+  assert.equal(p.count, 3, 'and the list it was reading is still there');
+  assert.equal(p.sessionId, 'session:1', 'still this session, so nothing re-syncs it');
+  assert.equal(p.index, 0, 'the cursor is left on the turn it was reading');
+});
+
+test('the cursor stops with the sound, and nothing late can move it', async () => {
+  const s = stage();
+  const p = player(s);
+  p.sync(turns('alpha beta gamma'), { sessionId: 'session:1' });
+  p.playFrom();
+  await settle();
+  s.el.duration = 10;
+  s.el.currentTime = 5;
+  s.el.ontimeupdate();
+  assert.ok(p.wordAt >= 0, 'a word is lit while it is being read');
+
+  const update = s.el.ontimeupdate;
+  p.stop();
+  assert.equal(p.wordAt, -1, 'the trace goes out in the same tick as the sound');
+  assert.equal(p.speakingId, null, 'and no bubble is the one being read');
+
+  // The element's own handler, fired late by an engine that had one more
+  // position to report.
+  s.el.currentTime = 9;
+  update?.();
+  assert.equal(p.wordAt, -1, 'a late time update cannot light a word after a stop');
+});
+
+test('play after a stop carries on from the turn it was on', async () => {
+  const s = stage();
+  const p = player(s);
+  p.sync(turns('one', 'two', 'three'));
+  p.playFrom();
+  await settle();
+  s.el.onended();
+  await settle();
+  assert.equal(p.speakingId, '2');
+
+  p.stop();
+  assert.equal(p.status, IDLE);
+  p.toggle();
+  await settle();
+  assert.equal(p.speakingId, '2', 'the same turn, not the top of the session');
+  assert.deepEqual(s.played, ['file:///one.wav', 'file:///two.wav', 'file:///two.wav']);
+});
+
+test('a stop leaves no synthesis in flight to arrive later', async () => {
+  const s = stage();
+  const d = deferredSynth();
+  const p = player(s, { synthesize: d.synthesize });
+  p.sync(turns('one', 'two'));
+  p.playFrom();
+  await settle();
+  assert.equal(p.pending, true);
+
+  p.stop();
+  assert.equal(p.pending, false, 'the bar goes down with the reading');
+  d.calls[0].resolve('file:///one.wav');
+  await settle();
+  assert.deepEqual(s.played, [], 'what came back belongs to a reading nobody is waiting for');
+  assert.equal(p.count, 2, 'and the list is untouched');
+});
+
+test('a stop during the pre-synthesis pass abandons it and keeps the session', async () => {
+  const s = stage();
+  const d = deferredSynth();
+  const p = player(s, { synthesize: d.synthesize });
+  p.setPreload(true);
+  p.sync(turns('one', 'two', 'three'));
+  p.playFrom();
+  await settle();
+  assert.deepEqual(p.prefetch, { done: 0, total: 3 });
+
+  p.stop();
+  assert.equal(p.prefetch, null, 'the filling bar goes down too');
+  for (const call of d.calls) call.resolve('file:///x.wav');
+  await settle();
+  assert.deepEqual(s.played, [], 'the loop left at its next await');
+  assert.equal(p.count, 3, 'and a half-warmed run is still a session to play');
+});
+
+test('a stop while paused is still a stop', async () => {
+  const s = stage();
+  const p = player(s);
+  p.sync(turns('one', 'two'));
+  p.playFrom();
+  await settle();
+  p.pause();
+  assert.equal(p.status, PAUSED);
+
+  assert.equal(p.stop(), true);
+  assert.equal(p.status, IDLE);
+  assert.equal(p.count, 2);
+});
+
+test('a stop with nothing playing changes nothing and says nothing', () => {
+  const s = stage();
+  let changes = 0;
+  const p = player(s, { onChange: () => (changes += 1) });
+  p.sync(turns('one'));
+  changes = 0;
+  assert.equal(p.stop(), false, 'there was nothing to stop');
+  assert.equal(changes, 0, 'and a round view arriving twice a second must not redraw the panel');
+});
+
+test('clear still empties everything, so the two cannot be quietly merged', async () => {
+  const s = stage();
+  const p = player(s);
+  p.sync(turns('one', 'two'), { sessionId: 'session:1' });
+  p.playFrom();
+  await settle();
+  p.clear();
+  assert.equal(p.count, 0);
+  assert.equal(p.sessionId, null);
+  assert.equal(p.status, IDLE);
+});
+
+// The wiring, read from App.jsx: the round handler is the one place the
+// discussion lifecycle reaches the voice, and what it calls there is the whole
+// of this fix.
+test('the round handler stops a reading rather than emptying it', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'App.jsx'), 'utf8');
+  const from = app.indexOf("case 'session-round':");
+  const to = app.indexOf("case 'agent-empty':");
+  assert.ok(from > 0 && to > from, 'the round case is still where this test thinks it is');
+  const branch = app.slice(from, to);
+  assert.doesNotMatch(
+    branch,
+    /speechRef\.current\?\.clear\(/,
+    'a discussion ending must never empty the list — that is what killed the transport'
+  );
+  assert.match(branch, /speechRef\.current\?\.stop\(\)/, 'it silences instead');
+  assert.match(branch, /payload\.ended === 'stopped'/, 'and only a Stop counts as somebody asking for quiet');
+});
+
+// ------------------------------- a turn that ends while the reading is paused
+//
+// speechSynthesis.pause() is a no-op on some engines and lets the utterance in
+// flight run to its end on others, so `onend` arrives after a pause more often
+// than not. Acting on it walked the cursor forward under a paused transport —
+// and at the end of a turn it started the *next* one.
+
+test('a chunk ending under a pause waits rather than speaking the next one', async () => {
+  const s = stage();
+  const l = localStage();
+  const long = `${'alpha '.repeat(40)}stop. ${'beta '.repeat(40)}end.`;
+  const p = localPlayer(s, l, [{ id: '1', text: long, voice: null }]);
+  p.playFrom();
+  await settle();
+  assert.equal(l.spoken.length, 1, 'the first piece is being said');
+
+  p.pause();
+  l.utterances[0].onend();
+  assert.equal(l.spoken.length, 1, 'the platform finished it anyway, and nothing followed');
+  assert.equal(p.status, PAUSED);
+  assert.equal(p.held, 'chunk');
+
+  p.resume();
+  assert.equal(l.spoken.length, 2, 'carrying on says the piece it was holding');
+  assert.equal(p.status, PLAYING);
+  assert.equal(p.held, null);
+});
+
+test('a turn ending under a pause does not start the next turn', async () => {
+  const s = stage();
+  const l = localStage();
+  const p = localPlayer(s, l, [
+    { id: '1', text: 'one', voice: null },
+    { id: '2', text: 'two', voice: null },
+  ]);
+  p.playFrom();
+  await settle();
+  assert.equal(p.speakingId, '1');
+
+  p.pause();
+  l.utterances[0].onend();
+  assert.equal(p.speakingId, '1', 'the cursor stays exactly where the pause left it');
+  assert.equal(p.index, 0);
+  assert.equal(p.status, PAUSED);
+  assert.equal(l.spoken.length, 1, 'and the next turn has not been started');
+  assert.equal(p.held, 'turn');
+
+  p.resume();
+  await settle();
+  assert.equal(p.speakingId, '2', 'carrying on moves it on exactly once');
+  assert.equal(l.spoken.length, 2);
+});
+
+test('a stop during a hold cannot be resumed into', async () => {
+  const s = stage();
+  const l = localStage();
+  const p = localPlayer(s, l, [
+    { id: '1', text: 'one', voice: null },
+    { id: '2', text: 'two', voice: null },
+  ]);
+  p.playFrom();
+  await settle();
+  p.pause();
+  l.utterances[0].onend();
+  assert.equal(p.held, 'turn');
+
+  p.stop();
+  assert.equal(p.held, null, 'silencing a reading drops what it was holding');
+  assert.equal(p.resume(), false, 'and there is nothing to carry on from');
+  assert.equal(l.spoken.length, 1);
+});
+
+// ------------------------------------------------------- what the meter reads
+
+// The stage above, plus the analyser the meter draws from. Its own function
+// rather than a flag on stage(), so every test above goes on proving the thing
+// that matters most about the analyser: the audio does not depend on it.
+function meteredStage() {
+  const base = stage();
+  const chain = [];
+  const analyser = {
+    fftSize: 0,
+    smoothingTimeConstant: 0,
+    frequencyBinCount: 0,
+    context: { sampleRate: 48000 },
+    connect: (to) => chain.push(['analyser', to]),
+    disconnect() {},
+    getByteFrequencyData(buf) {
+      buf.fill(200);
+    },
+    getByteTimeDomainData(buf) {
+      buf.fill(128);
+    },
+  };
+  const destination = { name: 'destination' };
+  const gain = {
+    gain: { value: 0 },
+    connect: (to) => {
+      chain.push(['gain', to]);
+      return to;
+    },
+    disconnect() {},
+  };
+  const source = {
+    connect: (to) => {
+      chain.push(['source', to]);
+      return to;
+    },
+    disconnect() {},
+  };
+  const context = () => ({
+    createMediaElementSource: () => source,
+    createGain: () => gain,
+    createAnalyser: () => {
+      analyser.frequencyBinCount = 1024;
+      return analyser;
+    },
+    destination,
+  });
+  return { ...base, context, analyser, gain, source, destination, chain };
+}
+
+test('the analyser is optional, and the audio is not', async () => {
+  // The plain stage has no createAnalyser at all — the case every other test in
+  // this file runs, and a window whose context cannot make one.
+  const s = stage();
+  const p = player(s);
+  p.sync(turns('one'));
+  p.playFrom();
+  await settle();
+  assert.deepEqual(s.played, ['file:///one.wav'], 'it still speaks');
+  assert.equal(p.analyser, null);
+  assert.equal(p.tap.face(), 'blind', 'and the meter says so rather than claiming a signal');
+});
+
+test('the analyser sits after the gain, so what is metered is what is heard', async () => {
+  const s = meteredStage();
+  const p = player(s);
+  p.sync(turns('one'));
+  p.playFrom();
+  await settle();
+  assert.deepEqual(
+    s.chain,
+    [
+      ['source', s.gain],
+      ['gain', s.analyser],
+      ['analyser', s.destination],
+    ],
+    'source to gain to analyser to output'
+  );
+  assert.equal(s.analyser.fftSize, 2048);
+  assert.equal(p.tap.face(), 'signal');
+  assert.equal(p.tap.bins(), 1024);
+  assert.equal(p.tap.samples(), 2048);
+  assert.equal(p.tap.rate(), 48000);
+});
+
+test('the meter is dark whenever the loading bar has the row', async () => {
+  const s = meteredStage();
+  const d = deferredSynth();
+  const p = player(s, { synthesize: d.synthesize });
+  p.sync(turns('one', 'two'));
+  assert.equal(p.tap.face(), 'off', 'nothing is being read yet');
+
+  p.playFrom();
+  await settle();
+  assert.equal(p.pending, true);
+  assert.equal(p.tap.face(), 'off', 'a turn being made belongs to the bar, not the meter');
+
+  d.calls[0].resolve({ url: 'file:///one.wav', engine: GEMINI });
+  await settle();
+  assert.equal(p.tap.face(), 'signal', 'and the meter takes over once there is sound');
+
+  p.pause();
+  assert.equal(p.tap.face(), 'off');
+  p.resume();
+  assert.equal(p.tap.face(), 'signal');
+  p.stop();
+  assert.equal(p.tap.face(), 'off');
+});
+
+test('a pre-synthesis pass belongs to the bar as well', async () => {
+  const s = meteredStage();
+  const d = deferredSynth();
+  const p = player(s, { synthesize: d.synthesize });
+  p.setPreload(true);
+  p.sync(turns('one', 'two'));
+  p.playFrom();
+  await settle();
+  assert.deepEqual(p.prefetch, { done: 0, total: 2 });
+  assert.equal(p.status, PLAYING, 'a reading is under way even while it is being prepared');
+  assert.equal(p.tap.face(), 'off', 'but there is nothing to meter yet');
+});
+
+test('the platform voice is metered blind, and pulses on its real words', async () => {
+  const s = meteredStage();
+  const l = localStage();
+  const p = localPlayer(s, l, [{ id: '1', text: 'alpha beta', voice: null }]);
+  p.playFrom();
+  await settle();
+  assert.equal(p.tap.face(), 'blind', 'there is no node in the graph to read');
+  assert.equal(p.tap.word(), -1);
+  l.utterances[0].onboundary({ name: 'word', charIndex: 6 });
+  assert.equal(p.tap.word(), 1, 'the boundary the platform really fires');
+});
+
+test('the tap fills the buffers it is given rather than allocating', async () => {
+  const s = meteredStage();
+  const p = player(s);
+  p.sync(turns('one'));
+  p.playFrom();
+  await settle();
+  const freq = new Uint8Array(p.tap.bins());
+  const time = new Uint8Array(p.tap.samples());
+  assert.equal(p.tap.read(freq, time), true);
+  assert.equal(freq[0], 200);
+  assert.equal(time[0], 128);
+});

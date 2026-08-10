@@ -271,6 +271,13 @@ export default function App() {
   // over whichever session was open when it went on. Filled in further down,
   // where the hook that owns the queue lives.
   const speechRef = useRef(null);
+  // Which discussions are paused right now, so a pause can be acted on when it
+  // happens rather than on every view published while it lasts. A round
+  // publishes again while paused — the agent who was mid-answer when the pause
+  // landed reports into it — and acting on the level rather than the edge would
+  // silence a reading somebody had deliberately started again. A ref, not state:
+  // nothing on screen is drawn from it.
+  const pausedRounds = useRef({});
   const groupRef = useRef(null);
   const inCallRef = useRef(false);
   const groupActiveRef = useRef(false);
@@ -1075,13 +1082,36 @@ export default function App() {
             // is: the first of three agents answering has not finished anything.
             retireSuperseded(payload.sessionId, roundOutcome(payload));
           }
-          // A discussion that has stopped has nothing left to say. Stopping one
-          // is usually somebody pressing Stop, which means they want it to be
-          // quiet *now* — carrying on through a backlog of queued turns after
-          // that would make the button look broken. Pausing counts too: the
-          // whole point of pausing is to think, which is hard with a voice
-          // still going.
-          if (!payload.open || payload.paused) speechRef.current?.clear();
+          // A discussion that has ended has nothing left to *say*. The reading
+          // of it is a different thing, and it is not finished.
+          //
+          // A dozen turns arrive faster than anybody can listen to them, so the
+          // voice is normally several turns behind the transcript by the time
+          // the last agent stops. Ending the reading there cuts it off mid
+          // sentence and leaves the transport dead — which is what clear() did
+          // here, because an empty list disables all three buttons and the only
+          // thing that refilled it was leaving the session and coming back. So
+          // an ending of the discussion's own making — its turns spent, nothing
+          // further to add, an agent gone quiet or unable to answer — leaves the
+          // reading alone to finish the list it has.
+          //
+          // Two things are somebody asking for quiet, and only those two stop
+          // it: pressing Stop, and pausing to think. Both stop() rather than
+          // clear(), so the list survives and play picks it up from the turn it
+          // was on, with no session switch in between.
+          //
+          // `ended === 'stopped'` rather than `!payload.open`, because `ended`
+          // is set only by a dialogue and only stopRound passes 'stopped'. A
+          // counsel round closing, a session being trashed and a stale round
+          // being replaced all close with no reason at all, and none of them is
+          // a request for silence.
+          {
+            const wasPaused = pausedRounds.current[payload.sessionId] === true;
+            const nowPaused = Boolean(payload.open && payload.paused);
+            if (nowPaused) pausedRounds.current[payload.sessionId] = true;
+            else delete pausedRounds.current[payload.sessionId];
+            if (payload.ended === 'stopped' || (nowPaused && !wasPaused)) speechRef.current?.stop();
+          }
           break;
         // A run came back with nothing in it. There is no message, so the light is
         // the whole of what is shown — and because no 'chat' event is coming, the
@@ -2130,7 +2160,7 @@ export default function App() {
   // the listener once is safe.
   speechRef.current = {
     onTurn: (msg) => liveSpeech && speech.speak(msg),
-    clear: speech.clear,
+    stop: speech.stop,
   };
 
   // The bubble button. Pressing it on the turn already being read is a pause —
@@ -2485,6 +2515,9 @@ export default function App() {
                         position: speech.position,
                         count: speech.count,
                         engine: speech.engine,
+                        // The audio itself, for the meter that takes the loading
+                        // bar's place once a voice is actually being heard.
+                        meter: speech.meter,
                         onToggle: speech.toggle,
                         onNext: speech.next,
                         onPrev: speech.prev,

@@ -4433,13 +4433,22 @@ input[type='range']:disabled::-webkit-slider-thumb {
    Built out of the same surface, border and radius as .stat above so it reads
    as one more row of the panel rather than a widget dropped into it. */
 .conn-transport {
+  position: relative;
   margin-top: 8px;
   background: var(--surface);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
   padding: 8px;
+  /* The meter reaches up behind the buttons, so the card is what stops it. Round
+     corners are the reason it has to: without this a tall spike would square off
+     the top of the card. */
+  overflow: hidden;
 }
 .transport-row {
+  position: relative;
+  /* Above the meter behind it. The buttons are what the row is for; the graph is
+     a backdrop and must never be mistaken for something to press. */
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4480,14 +4489,36 @@ input[type='range']:disabled::-webkit-slider-thumb {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
-/* The bar that fills the silent gap while a turn is being fetched. It always
-   holds its row — opacity carries it in and out — so nothing below it moves when
-   synthesis starts. The .25s delay is the whole trick that keeps a cache hit,
-   which resolves in a tick, from ever drawing it: no JS timer, so none can leak.
-   The span slides on a transform, never a width, so it cannot reflow the panel. */
-.transport-load {
-  height: 3px;
+/* One slot under the buttons, and it is always the same height whether anything
+   is in it or not.
+
+   Two things share it, and they alternate turn by turn for the whole of a
+   reading: the bar while a turn is being synthesised, the meter while it is
+   being spoken. Sized for both at once so nothing below moves as they swap — a
+   row that grew when the voice started would shift the note under it a dozen
+   times in one discussion.
+
+   The 8px belongs to the slot rather than to the bar inside it, which is what
+   keeps the bar's top edge on the pixel it has always been on. */
+.transport-face {
+  position: relative;
+  height: 30px;
   margin-top: 8px;
+}
+/* The bar that fills the silent gap while a turn is being fetched. Pinned to the
+   top of the slot, in exactly the place it held before there was a slot, and
+   unchanged in every other way — opacity carries it in and out, so nothing moves
+   when synthesis starts. The .25s delay is the whole trick that keeps a cache
+   hit, which resolves in a tick, from ever drawing it: no JS timer, so none can
+   leak. The span slides on a transform, never a width, so it cannot reflow the
+   panel. */
+.transport-load {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  height: 3px;
   border-radius: 3px;
   overflow: hidden;
   background: var(--border-soft);
@@ -4525,6 +4556,80 @@ input[type='range']:disabled::-webkit-slider-thumb {
   transform: none;
   width: 0;
   transition: width 0.2s ease;
+}
+/* The equalizer, behind the transport.
+
+   It fills the card rather than sitting in a lane of its own, so the spikes rise
+   up behind the buttons — the buttons are the thing being pressed and stay in
+   front, and the graph is the backdrop they sit on. It stops six pixels short of
+   the card's edge on the way up: a spike that reached the border would look like
+   the card had sprouted rather than like a graph inside it.
+
+   It only ever lights once the bar's work is finished — a turn being made is the
+   bar's, a turn being said is this — so the delay on the way in and none on the
+   way out means the bar is visibly done before this arrives, rather than the two
+   dissolving through each other.
+
+   Every colour it uses is declared here rather than in the JS. The ramp is a
+   span of hue so the canvas builds the whole spectrum from four numbers read
+   once with getComputedStyle: 0 to 285 is red through orange, yellow, green and
+   cyan to violet, the long way round the wheel, which is why it is a number that
+   runs up rather than a pair of colours. */
+.transport-meter {
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* Measured back up from the slot it lives in: 8px of card padding, the 38px
+     button row and the slot's own 8px of margin put the card's inner edge 54px
+     above here, and 6px of that is left clear. */
+  top: -48px;
+  /* Stated rather than left to `bottom: 0`. A canvas has an intrinsic size, and
+     an absolutely positioned replaced element with `height: auto` takes that and
+     drops the bottom offset — which drew the meter 150px tall, straight through
+     everything under it. */
+  height: 78px;
+  z-index: 0;
+  display: block;
+  width: 100%;
+  opacity: 0;
+  transition: opacity 0.18s ease 0.12s;
+  /* The tallest spikes dissolve into the card rather than stopping dead against
+     its edge. A short fade, not a wash — the spikes keep their colour for all
+     but the last few pixels of their reach, so what softens is the cut rather
+     than the graph. */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 12%, #000 100%);
+
+  /* The spectrum from the reference — red through orange, yellow, green and cyan
+     to violet — written as a span of hue so the canvas builds every bar's colour
+     from two numbers.
+
+     Held a little short of full strength, which is where this panel and that
+     picture meet: the reference is a graph on its own black page and can shout,
+     this one is behind a control on a quiet card and has to be legible without
+     taking the row over. The hues are the reference's; the saturation is the
+     panel's. */
+  --meter-hue-from: 0;
+  --meter-hue-to: 285;
+  --meter-sat: 76%;
+  --meter-light: 61%;
+  /* The lower lane, and the one colour not on the ramp: the waveform is a
+     different measurement from the spectrum above it and should not be mistaken
+     for part of the same graph. */
+  --meter-wave: hsl(188 92% 58%);
+  --meter-axis: var(--fg-faint);
+}
+.transport-meter.on {
+  opacity: 1;
+}
+/* The platform voice has no node in the audio graph to read, so what is drawn
+   for it is a shape rather than a measurement — held back and drained of most of
+   its colour, so it is plainly not the same claim as the lit one. It still moves
+   with the voice: the pulse comes from the word boundaries the platform really
+   does fire. */
+.transport-meter.blind {
+  opacity: 0.5;
+  --meter-sat: 34%;
 }
 /* A long turn is silent while it is being synthesised; the bar above covers that
    gap, and this line names where the reading is and who is speaking. Between the
@@ -5363,6 +5468,13 @@ input[type='range']:disabled::-webkit-slider-thumb {
     width: 100%;
     transform: none;
     opacity: 0.6;
+  }
+  /* The meter makes the same bargain one rule down: the component paints a
+     single still frame and starts no animation loop at all, so the row still
+     says a voice is speaking without anything moving. The fade goes too, or the
+     one frame would arrive by animation. */
+  .transport-meter {
+    transition: none;
   }
   /* The determinate bar still reports its proportion — the number is the point —
      but jumps to it rather than easing. Its inline width wins over the 100%

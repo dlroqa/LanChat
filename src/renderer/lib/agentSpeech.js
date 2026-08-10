@@ -219,10 +219,29 @@ export class AgentSpeech {
     this.localVoice = null;
     this.watchdog = null;
     this.chunkDone = null;
+    // A piece of a turn, or a whole turn, that ended while the reading was
+    // paused — and what should happen when it is resumed.
+    //
+    // The platform voice cannot be relied on to stop when it is told to:
+    // speechSynthesis.pause() is a no-op on some engines and lets the utterance
+    // already in flight run to its end on others, so `onend` arrives after a
+    // pause more often than not. Nothing may move on the back of it. Without
+    // this, pausing on the last piece of a turn started the *next* turn — the
+    // reading carried on with the button saying it had stopped, and the cursor
+    // walked forward under a paused transport.
+    //
+    // So the boundary is remembered rather than acted on, and resume() does what
+    // it would have done. 'chunk' is more of this turn to say; 'turn' is that
+    // this one is over and the next is due.
+    this.held = null; // 'chunk' | 'turn' | null
 
     this.el = null;
     this.source = null;
     this.gain = null;
+    // The tap the transport's meter reads, built lazily with the rest of the
+    // graph. Optional: a context that cannot make one is a meter that stays
+    // dark, never a session that will not speak. See _build().
+    this.analyser = null;
     this.timer = null;
     this.volume = 0.9;
     // Ids already in the list, so a re-render or a message arriving twice cannot
@@ -235,6 +254,61 @@ export class AgentSpeech {
     // would be followed by the turn you skipped.
     this.gen = 0;
     this.speaking = false;
+
+    // What the transport's meter reads, and the only thing it reads.
+    //
+    // Built once, here, and never replaced, so the component holding it can keep
+    // it for the life of the panel and start its animation loop once rather than
+    // tearing one down and building another on every render.
+    //
+    // Nothing in it goes through React. _announce() re-renders the whole side
+    // panel, and a meter that announced itself sixty times a second would
+    // re-render it sixty times a second to paint a picture React is not
+    // painting. The loop asks these questions per frame instead, straight off
+    // the instance.
+    this.tap = {
+      // Which face the meter should be showing right now.
+      //
+      //   'signal' — an online voice through the graph, with an analyser to read
+      //   'blind'  — the platform voice, which has no node in the graph at all
+      //   'off'    — nothing to draw, and the row belongs to the loading bar
+      //
+      // `pending` and `prefetch` are 'off' on purpose: a turn being synthesised
+      // is the bar's job, and the two must never be lit at once. The component
+      // gates on the same rule from the React side; this is the half that cannot
+      // lag a tick behind what is actually making noise.
+      face: () => {
+        if (this.status !== PLAYING || this.pending || this.prefetch) return 'off';
+        if (this.mode === 'url' && this.analyser) return 'signal';
+        return this.mode ? 'blind' : 'off';
+      },
+      // How big the caller's buffers must be. Two different lengths, and they are
+      // not interchangeable: the FFT reports fftSize/2 bins, the time domain
+      // reports fftSize samples.
+      bins: () => this.analyser?.frequencyBinCount || 0,
+      samples: () => this.analyser?.fftSize || 0,
+      // Hz per bin comes from the device's real rate, which is 44.1k on some
+      // machines and 48k on others — a mapping that assumed one would put the
+      // whole spectrum in the wrong place on the other.
+      rate: () => this.analyser?.context?.sampleRate || 48000,
+      // Filled in place, never allocated: this is called every frame.
+      read: (freq, time) => {
+        const a = this.analyser;
+        if (!a) return false;
+        try {
+          if (freq) a.getByteFrequencyData(freq);
+          if (time) a.getByteTimeDomainData(time);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      // The platform voice fires a boundary per word, and that is a real signal
+      // even though its audio is out of reach — the blind face pulses on it, so
+      // what is drawn there still moves with the speech rather than being an
+      // animation playing beside it.
+      word: () => this.wordAt,
+    };
   }
 
   // What the window draws from.
@@ -353,9 +427,42 @@ export class AgentSpeech {
     return this._goto(at);
   }
 
-  // Everything stops and nothing is remembered. Called when the session changes,
-  // when a round is stopped or paused, and when the setting goes off — all of
-  // which mean the same thing: nobody is listening to this any more.
+  // Silence, without forgetting.
+  //
+  // The middle answer between pause and clear, and the one that was missing. A
+  // discussion that was stopped — or paused — wants quiet *now*, but the list it
+  // was reading is still the session on screen, and the transport must stay
+  // live: press play and it carries on from the turn it was on.
+  //
+  // clear() is not that answer and never was. It empties the list, an empty list
+  // is `empty` in Transport, and `empty` disables all three buttons and says
+  // "Nothing to read yet" — which is why the transport went dead the moment a
+  // discussion ended and only came back by leaving the session and returning.
+  // clear() keeps its own job below: a different session, or the feature
+  // switched off, where nothing of this reading survives.
+  //
+  // The cursor stops with the sound, in the same tick: _stopAudio() puts the
+  // spoken-word trace out, and the generation bump means a boundary or a time
+  // update arriving a moment later cannot light one again.
+  stop() {
+    // Already quiet. Worth the early return rather than the tidier
+    // unconditional version: round views arrive several times a second while a
+    // discussion runs, and _setStatus announces on every call, so a stop that
+    // does nothing would still redraw the panel each time.
+    if (this.status === IDLE) return false;
+    // Everything in flight belongs to a reading nobody is listening to now: the
+    // synthesis being awaited in _speak, the pre-synthesis loop, an `onend`
+    // about to advance the cursor. One bump lands all three in a window that has
+    // moved on, exactly as _goto's does.
+    this.gen += 1;
+    this._stopAudio();
+    this._setStatus(IDLE);
+    return true;
+  }
+
+  // Everything stops and nothing is remembered. Called when the session changes
+  // and when the setting goes off — both of which mean the same thing: this
+  // reading is not the one anybody is going to come back to.
   clear() {
     this.gen += 1;
     this._stopAudio();
@@ -410,8 +517,27 @@ export class AgentSpeech {
 
   resume() {
     if (this.status !== PAUSED) return false;
+    // What finished while nothing was supposed to be happening. Taken before the
+    // status moves, because both branches below act as a reading that is running
+    // again.
+    const held = this.held;
+    this.held = null;
     this._setStatus(PLAYING);
+    // The turn ended under the pause. Carrying on means the *next* turn, and
+    // _finish is what knows whether there is one — it also arms the cap itself,
+    // by way of _goto, so nothing is armed here.
+    if (held === 'turn') {
+      this._finish();
+      return true;
+    }
     this._arm();
+    // A piece of the turn ended under the pause. synth.resume() cannot resume an
+    // utterance that has already finished — that is the whole reason the reading
+    // used to run on instead of holding — so the next piece is spoken outright.
+    if (held === 'chunk') {
+      this._speakChunk();
+      return true;
+    }
     try {
       if (this.mode === 'local') {
         this.synth?.resume();
@@ -450,12 +576,14 @@ export class AgentSpeech {
   dispose() {
     this.clear();
     try {
+      this.analyser?.disconnect();
       this.gain?.disconnect();
       this.source?.disconnect();
     } catch {}
     this.el = null;
     this.source = null;
     this.gain = null;
+    this.analyser = null;
   }
 
   // ------------------------------------------------------------------ speaking
@@ -663,6 +791,14 @@ export class AgentSpeech {
         this._stopWatchdog();
         this.utterance = null;
         this.chunkAt += 1;
+        // Told to stop, and it finished anyway. Nothing moves on the back of an
+        // event the platform should not have sent: the boundary is remembered
+        // and resume() acts on it. See `held` in the constructor for why this
+        // arrives at all.
+        if (this.status === PAUSED) {
+          this.held = this.chunkAt < this.chunks.length ? 'chunk' : 'turn';
+          return;
+        }
         if (this.chunkAt < this.chunks.length && this.status !== IDLE) this._speakChunk();
         else if (this.chunkAt >= this.chunks.length) this._finish();
       };
@@ -733,10 +869,42 @@ export class AgentSpeech {
       const source = audio.createMediaElementSource(el);
       const gain = audio.createGain();
       gain.gain.value = this.volume;
-      source.connect(gain).connect(audio.destination);
+      // The tap the transport's meter draws from, after the gain rather than
+      // before it, so what the meter shows is what is coming out of the speakers
+      // — the volume slider moves it, which is the honest answer.
+      //
+      // Optional, and the audio does not depend on it. A context with no
+      // createAnalyser falls through to the plain chain below and everything
+      // plays exactly as it did; an analyser that will not build is a meter that
+      // stays dark, not a session that will not speak.
+      //
+      // 2048 rather than the 512 audioMeter.js uses, and for a different job:
+      // that one wants a single RMS number, this one draws eighty-odd bars
+      // between 120Hz and 7kHz and a waveform band across a 250px canvas. At
+      // 48kHz, 512 gives 94Hz bins — too coarse to separate the formants that
+      // make a voice look like a voice — and 512 samples, about one per column,
+      // which draws a line rather than a band. See lib/speechMeter.js.
+      let analyser = null;
+      if (typeof audio.createAnalyser === 'function') {
+        try {
+          analyser = audio.createAnalyser();
+          analyser.fftSize = 2048;
+          analyser.smoothingTimeConstant = 0.7;
+        } catch {
+          analyser = null;
+        }
+      }
+      if (analyser) {
+        source.connect(gain);
+        gain.connect(analyser);
+        analyser.connect(audio.destination);
+      } else {
+        source.connect(gain).connect(audio.destination);
+      }
       this.el = el;
       this.source = source;
       this.gain = gain;
+      this.analyser = analyser;
       return true;
     } catch {
       // Audio unavailable — never let a voice break a session.
@@ -755,6 +923,14 @@ export class AgentSpeech {
   // This turn is over, however it ended. On to the next, or done.
   _finish() {
     if (this.status === IDLE) return;
+    // Paused. A turn ending is not permission to start the next one — the
+    // cursor stays exactly where the pause left it, and resume() moves it on.
+    // Same reason as the hold in _speakChunk: the platform voice ends turns it
+    // was told to stop.
+    if (this.status === PAUSED) {
+      this.held = 'turn';
+      return;
+    }
     this._stopAudio();
     if (this.index + 1 < this.list.length) {
       this._goto(this.index + 1);
@@ -791,6 +967,10 @@ export class AgentSpeech {
     this.chunkDone = null;
     this.chunks = [];
     this.chunkAt = 0;
+    // Nothing is waiting to be carried on. A boundary held under a pause belongs
+    // to the reading being silenced here, and resuming after a stop must not act
+    // on it — which is how stop(), clear() and _goto() all get this for free.
+    this.held = null;
     // No turn is in flight once the audio is silenced. _speak arms this again for
     // the one it is about to fetch; anything stopped is not being fetched. A
     // pre-synthesis pass is stopped the same way — this is the one place both
@@ -1036,6 +1216,11 @@ export function useAgentSpeech({
     // Which word of the current turn is being spoken, or -1. The bubble being
     // read lights this word and traces it along as the voice moves.
     wordAt: player.wordAt,
+    // The audio the transport's meter draws. Built once with the player and
+    // never replaced, so the canvas loop that reads it sixty times a second can
+    // be started once and left alone — and so none of that reading goes anywhere
+    // near React. See the tap in the constructor.
+    meter: player.tap,
 
     // The live path: an agent has just answered. Built into a turn here and
     // handed whole, so the player can speak it even in the tick before the sync
@@ -1047,6 +1232,10 @@ export function useAgentSpeech({
     toggle: () => player.toggle(),
     next: () => player.next(),
     prev: () => player.prev(),
-    clear: () => player.clear(),
+    // Quiet now, list kept — see stop(). Deliberately the only way to silence
+    // this from outside: clear() belongs to the session-change effect above, and
+    // handing it out is exactly how the transport came to be emptied by a
+    // discussion ending.
+    stop: () => player.stop(),
   };
 }

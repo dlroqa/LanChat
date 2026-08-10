@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Avatar from './Avatar.jsx';
 import EmptyState from './EmptyState.jsx';
 import { Sessions, Play, Pause, SkipBack, SkipForward } from '../lib/icons.jsx';
@@ -8,6 +8,18 @@ import { turnStanding, turnStandingLabel } from '../lib/turnStanding.js';
 import { sessionStanding, sessionStandingLabel } from '../lib/sessionStanding.js';
 import { counselNames } from '../lib/counselCopy.js';
 import { useSweep, useBurstHue, useReadyBurst, useReducedMotion, boxReach } from '../lib/statusMotion.js';
+import {
+  barCount,
+  barColors,
+  barDips,
+  barValue,
+  binRanges,
+  decay,
+  paint,
+  readTokens,
+  stillLevels,
+  syntheticLevels,
+} from '../lib/speechMeter.js';
 
 // Live connection quality for the selected peer, drawn from real round-trip
 // measurements taken over the peer WebSocket (see src/main/linkStats.js) — the
@@ -394,6 +406,159 @@ function engineName(engine) {
   return null;
 }
 
+// The equalizer that takes the loading bar's place once a voice is being heard.
+//
+// Everything it draws it reads straight off the player's tap, in its own
+// animation frame, onto a canvas. It never sets state and never re-renders
+// anything: the player's onChange redraws the whole panel, and a meter that went
+// through it would do that sixty times a second to paint something React is not
+// painting. The two booleans below are all React decides — whether there is
+// anything to run at all, and which face — and both change a handful of times
+// per reading rather than per frame.
+//
+// The arithmetic lives in lib/speechMeter.js so it can be read and tested
+// without a canvas. What is left here is plumbing.
+function TransportMeter({ meter, live, blind }) {
+  const ref = useRef(null);
+  const reduced = useReducedMotion();
+
+  useEffect(() => {
+    // Nothing is being heard: no loop, no frames, no work at all. `live` is the
+    // whole of the promise that an idle window burns nothing — the loop does not
+    // exist unless there is something to draw.
+    if (!live || !meter) return undefined;
+    const cv = ref.current;
+    // No canvas in a harness that renders without a DOM, and no 2d context in a
+    // window that will not give one. Either way there is nothing to draw on, and
+    // a meter is not worth an exception.
+    const ctx = cv && typeof cv.getContext === 'function' ? cv.getContext('2d') : null;
+    if (!ctx) return undefined;
+
+    // One read of the theme, when the loop starts — which is once per turn, so a
+    // token changed while the app is open is picked up within a turn.
+    // getComputedStyle is a layout read and has no business in a frame.
+    const tokens = readTokens(typeof getComputedStyle === 'function' ? getComputedStyle(cv) : null);
+
+    // Size is measured on resize rather than per frame: a getBoundingClientRect
+    // inside an animation frame forces a synchronous layout every frame, for a
+    // number that changes only when the window does.
+    let box = cv.getBoundingClientRect();
+    const ro =
+      typeof ResizeObserver === 'function'
+        ? new ResizeObserver(() => {
+            box = cv.getBoundingClientRect();
+          })
+        : null;
+    ro?.observe(cv);
+
+    let freq = null;
+    let time = null;
+    let level = null;
+    let colors = null;
+    let dips = null;
+    let ranges = null;
+    let bars = 0;
+    let lastWord = -1;
+    let wordAt = 0;
+    let amp = 0.5;
+    let raf = 0;
+
+    const draw = (t, still) => {
+      const dpr = Math.min(2, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
+      const W = Math.max(1, Math.round(box.width * dpr));
+      const H = Math.max(1, Math.round(box.height * dpr));
+      // Assigning either dimension clears the canvas, so it is done only when one
+      // has really changed — and it is the one place the per-bar tables are
+      // rebuilt, because every one of them is sized by the bar count.
+      //
+      // `!level` is not belt and braces. The tables belong to this effect, and
+      // the effect re-runs whenever the face changes — a reading that moves from
+      // an online voice to the platform's, say. The canvas is already the right
+      // size by then, so a check on the size alone left every table null and the
+      // first frame after the change threw.
+      if (cv.width !== W || cv.height !== H || !level) {
+        cv.width = W;
+        cv.height = H;
+        // The blind face has no analyser and so answers zero to both of these.
+        // One pair of fallbacks, used for every table, rather than a different
+        // guess at each call — two guesses that disagree would size the buckets
+        // against a spectrum that does not exist.
+        const fft = meter.samples() || 2048;
+        const bins = meter.bins() || fft / 2;
+        bars = barCount(box.width, bins, meter.rate(), fft);
+        level = new Float32Array(bars);
+        colors = barColors(bars, tokens);
+        dips = barDips(bars);
+        ranges = binRanges(bars, meter.rate(), fft, bins);
+      }
+      const face = meter.face();
+      // A frame or two of nothing, between the last sound of one turn and the
+      // first of the next. Left as it was rather than cleared: the CSS is already
+      // fading the canvas out, and a blank flash under a fade is worse than a
+      // held frame.
+      if (face === 'off') return;
+
+      if (still) {
+        stillLevels(level, bars);
+        paint(ctx, W, H, dpr, { level, colors, dips, tokens, time: null, still: true });
+        return;
+      }
+
+      if (face === 'signal') {
+        const want = meter.bins();
+        const span = meter.samples();
+        if (!freq || freq.length !== want) freq = new Uint8Array(want);
+        if (!time || time.length !== span) time = new Uint8Array(span);
+        meter.read(freq, time);
+        for (let i = 0; i < bars; i += 1) {
+          level[i] = decay(level[i], barValue(freq, ranges[i * 2], ranges[i * 2 + 1]));
+        }
+        paint(ctx, W, H, dpr, { level, colors, dips, tokens, time, t });
+        return;
+      }
+
+      // Blind: the platform voice, with no node in the graph to read. Its
+      // envelope still comes from a real signal — the word boundaries it fires.
+      const w = meter.word();
+      if (w !== lastWord) {
+        lastWord = w;
+        wordAt = t;
+      }
+      amp = syntheticLevels(level, bars, t, t - wordAt);
+      paint(ctx, W, H, dpr, { level, colors, dips, tokens, time: null, t, amp });
+    };
+
+    if (reduced) {
+      // One frame, painted once. The motion is gone and the state is not — the
+      // same bargain .transport-load.on makes in the stylesheet.
+      draw(0, true);
+    } else {
+      const frame = (t) => {
+        draw(t, false);
+        raf = requestAnimationFrame(frame);
+      };
+      raf = requestAnimationFrame(frame);
+    }
+
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      ro?.disconnect();
+    };
+    // `meter` is the player's tap, built once with the player and never
+    // replaced, so this list changes only when the reading does.
+  }, [meter, live, blind, reduced]);
+
+  return (
+    // Decoration, and said so: what it shows is already in words in
+    // .transport-pos, which is the role="status" a screen reader is listening to.
+    <canvas
+      ref={ref}
+      className={`transport-meter ${live ? 'on' : ''} ${blind ? 'blind' : ''}`}
+      aria-hidden="true"
+    />
+  );
+}
+
 function Transport({
   playing,
   paused,
@@ -402,6 +567,7 @@ function Transport({
   position,
   count,
   engine,
+  meter,
   onToggle,
   onNext,
   onPrev,
@@ -410,6 +576,12 @@ function Transport({
   // Why it is off, said on the control rather than left to be guessed at.
   const why = empty ? 'Nothing has been said in this session yet' : undefined;
   const label = playing ? 'Pause' : paused ? 'Continue reading aloud' : 'Read this session aloud';
+  // Whether a voice is actually being heard, which is the whole of the rule
+  // deciding which face has the row. A turn being synthesised belongs to the
+  // bar; only the sound itself belongs to the meter, so the two can never be lit
+  // at once. The player's tap gates on the same thing from the audio side, where
+  // it cannot lag a tick behind what is making noise.
+  const live = Boolean(playing && !pending && !prefetch);
 
   return (
     <div className="conn-transport">
@@ -443,28 +615,42 @@ function Transport({
           <SkipForward size={16} />
         </button>
       </div>
-      {/* The gap the position line cannot show. Two shapes on one bar: while the
-          whole session is being synthesised ahead of play it fills to a known
-          proportion; while an ordinary reading fetches its next turn it slides,
-          the duration being unknown. Always in the layout so nothing below it
-          moves when it lights, and a CSS delay keeps a cache hit from flashing
-          it. A progressbar, not a bare colour, so the state is announced. */}
-      <div
-        className={`transport-load ${pending || prefetch ? 'on' : ''} ${prefetch ? 'filling' : ''}`}
-        role="progressbar"
-        aria-label={prefetch ? 'Synthesising the whole session' : 'Preparing the next turn'}
-        aria-valuenow={prefetch ? Math.round((prefetch.done / Math.max(1, prefetch.total)) * 100) : undefined}
-        aria-valuetext={
-          prefetch
-            ? `${prefetch.done} of ${prefetch.total} prepared`
-            : pending
-              ? 'Preparing the next turn'
-              : 'Ready'
-        }
-      >
-        <span
-          style={prefetch ? { width: `${(prefetch.done / Math.max(1, prefetch.total)) * 100}%` } : undefined}
-        />
+      {/* One slot under the buttons, always the same height, holding the two
+          things that can be true while a session is being read: a turn being
+          made, and a turn being said. The bar keeps the exact place it has
+          always had at the top of it — the meter takes the room below, and only
+          once the bar's work is done, so the panel never moves and the two are
+          never lit together. */}
+      <div className="transport-face">
+        {/* The gap the position line cannot show. Two shapes on one bar: while
+            the whole session is being synthesised ahead of play it fills to a
+            known proportion; while an ordinary reading fetches its next turn it
+            slides, the duration being unknown. A CSS delay keeps a cache hit
+            from flashing it. A progressbar, not a bare colour, so the state is
+            announced. */}
+        <div
+          className={`transport-load ${pending || prefetch ? 'on' : ''} ${prefetch ? 'filling' : ''}`}
+          role="progressbar"
+          aria-label={prefetch ? 'Synthesising the whole session' : 'Preparing the next turn'}
+          aria-valuenow={
+            prefetch ? Math.round((prefetch.done / Math.max(1, prefetch.total)) * 100) : undefined
+          }
+          aria-valuetext={
+            prefetch
+              ? `${prefetch.done} of ${prefetch.total} prepared`
+              : pending
+                ? 'Preparing the next turn'
+                : 'Ready'
+          }
+        >
+          <span
+            style={
+              prefetch ? { width: `${(prefetch.done / Math.max(1, prefetch.total)) * 100}%` } : undefined
+            }
+          />
+        </div>
+        {/* And the voice itself, in the room below the bar. */}
+        <TransportMeter meter={meter} live={live} blind={engine === 'local'} />
       </div>
       {/* Polite rather than assertive: worth hearing when it changes, not worth
           cutting into whatever a screen reader is already saying. */}
