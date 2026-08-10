@@ -4,6 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { cleanTurns, DEFAULT_TURNS } = require('./dialogue.js');
+const { cleanObserver } = require('./observer.js');
+const { cleanMembers } = require('./room.js');
 
 // Persistent list of sessions, stored as plain JSON in the Electron userData
 // dir — its own file rather than config.json, for the same reason agents.json is
@@ -33,8 +35,24 @@ const MAX_TITLE = 80;
 // gets `parallel`, which is the right way for this to degrade: the session still
 // asks the same agents the same question, it simply stops looping. Nothing about
 // the record has to be repaired to go back.
-const MODES = ['parallel', 'relay', 'dialogue'];
+//
+// `observer` and `human` degrade the same way and it is worth saying what that
+// costs, because it is more than it was for `dialogue`. An older build opening
+// an observer session asks every agent in it, out loud, the thing the person
+// said — which is the opposite of what the mode is for. It is still a working
+// session rather than an unreadable file, which is the bar this rule has always
+// set, but it is a downgrade somebody would notice rather than one they would
+// not.
+const MODES = ['parallel', 'relay', 'dialogue', 'observer', 'human'];
 const DEFAULT_MODE = 'parallel';
+
+// The modes that never fan a question out to everybody at once.
+//
+// Read by send() to decide which orchestration a round gets. Named here, beside
+// the list, so adding a sixth mode is one edit rather than a hunt through
+// index.js for every `mode ===` that would have needed it.
+const OBSERVER_MODE = 'observer';
+const HUMAN_MODE = 'human';
 
 function newSessionId() {
   return `${SESSION_ID_PREFIX}${crypto.randomUUID()}`;
@@ -87,6 +105,20 @@ function normalize(record) {
   if (record.allAgents === undefined) record.allAgents = false;
   if (!MODES.includes(record.mode)) record.mode = DEFAULT_MODE;
   if (record.turns === undefined) record.turns = DEFAULT_TURNS;
+  // The people in the room, and whose room it is.
+  //
+  // Absent on every session written before sharing existed, which reads exactly
+  // right: no members and no host is a private workspace belonging to whoever is
+  // looking at it. Nothing has to be repaired and nothing is written back.
+  if (record.members === undefined) record.members = [];
+  if (record.hostPeerId === undefined) record.hostPeerId = null;
+  // How loud this session's observers may be. Absent means the safe reading —
+  // balanced, and never interrupting — which cleanObserver decides rather than
+  // this line, so there is one place that opinion lives.
+  if (record.observer === undefined) record.observer = cleanObserver(undefined);
+  // Which shuffle the last question in this session ran. Nothing before this
+  // build had one, and null simply means the next roll is unconstrained.
+  if (record.lastArrangement === undefined) record.lastArrangement = null;
   return record;
 }
 
@@ -137,7 +169,7 @@ class SessionRegistry {
     return this.records.find((r) => r.id === id) || null;
   }
 
-  create({ title, agentId, agentIds, allAgents, mode, turns } = {}) {
+  create({ title, agentId, agentIds, allAgents, mode, turns, members, hostPeerId, observer } = {}) {
     const now = Date.now();
     const list = agentIds ? cleanIds(agentIds) : cleanIds(agentId ? [agentId] : []);
     const record = {
@@ -166,6 +198,56 @@ class SessionRegistry {
       // somebody chose — and so the field is always there to read rather than
       // being one more thing that might be missing.
       turns: cleanTurns(turns === undefined ? DEFAULT_TURNS : turns),
+      // Who else is in this room. Empty is the ordinary case and the one every
+      // session started as: a workspace with one person in it.
+      members: cleanMembers(members),
+      // Whose room it is. Null means ours — see isHost in room.js for why the
+      // absence rather than a flag is the right way round.
+      hostPeerId: typeof hostPeerId === 'string' && hostPeerId ? hostPeerId : null,
+      // How loud the observers may be, and whether they may interrupt at all.
+      // Off, unless somebody says otherwise, and cleanObserver owns that.
+      observer: cleanObserver(observer),
+      // Which shuffle the last Human Like question ran, so the next one can
+      // avoid it. Nothing has happened yet, so there is nothing to avoid.
+      lastArrangement: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.records.push(record);
+    this.#save();
+    return record;
+  }
+
+  // A room somebody else is running, written down under their id.
+  //
+  // The only place a session record is created with an id it was given rather
+  // than one it minted. That is not a loophole in newSessionId — it is the whole
+  // requirement: both ends have to file the same conversation under the same
+  // name, or a message about it could not say which room it belonged to.
+  //
+  // The id is still checked to be a session id, so nothing off the wire can talk
+  // this registry into holding a record keyed by an agent thread or a peer.
+  // Refuses to overwrite: a second invitation to a room we already have is a
+  // duplicate frame, not a reason to discard what is in it.
+  createShared({ id, title, hostPeerId, members } = {}) {
+    if (!isSessionId(id) || this.get(id)) return null;
+    if (typeof hostPeerId !== 'string' || !hostPeerId) return null;
+    const now = Date.now();
+    const record = {
+      id,
+      title: cleanTitle(title),
+      agentId: null,
+      // A guest asks nobody. The agents in a shared session are the host's, and
+      // they are asked by the host — see the note on sharing in sessions/index.js
+      // for why one machine does all the asking.
+      agentIds: [],
+      allAgents: false,
+      mode: DEFAULT_MODE,
+      turns: DEFAULT_TURNS,
+      members: cleanMembers(members),
+      hostPeerId,
+      observer: cleanObserver(undefined),
+      lastArrangement: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -182,6 +264,27 @@ class SessionRegistry {
     if (patch.allAgents !== undefined) record.allAgents = patch.allAgents === true;
     if (patch.mode !== undefined) record.mode = cleanMode(patch.mode);
     if (patch.turns !== undefined) record.turns = cleanTurns(patch.turns);
+    // The roster. Replaced wholesale rather than merged, because room.js hands
+    // back a whole list by design — every one of its operations returns the new
+    // roster, so a caller that changed nothing writes back what it read and this
+    // stays a plain assignment rather than a second set of merge rules.
+    if (patch.members !== undefined) record.members = cleanMembers(patch.members);
+    if (patch.hostPeerId !== undefined) {
+      record.hostPeerId = typeof patch.hostPeerId === 'string' && patch.hostPeerId ? patch.hostPeerId : null;
+    }
+    // Merged rather than replaced: the picker changes the level without knowing
+    // whether interrupting is on, and the kill switch is pulled without knowing
+    // the level. A wholesale write from either would silently undo the other.
+    if (patch.observer !== undefined) {
+      record.observer = cleanObserver({ ...cleanObserver(record.observer), ...patch.observer });
+    }
+    // Which shuffle just ran, remembered only so the next one can differ. Null
+    // is a legitimate value — it is what a session that has never run one has —
+    // so this is written through unguarded rather than falling back to a number.
+    if (patch.lastArrangement !== undefined) {
+      const n = Number(patch.lastArrangement);
+      record.lastArrangement = Number.isFinite(n) ? n : null;
+    }
     // `agentId` is a mirror of the counsel, not a member of it, and it is written
     // on every change so it can never disagree with the list.
     //
@@ -307,6 +410,8 @@ module.exports = {
   MAX_TITLE,
   MODES,
   DEFAULT_MODE,
+  OBSERVER_MODE,
+  HUMAN_MODE,
   DEFAULT_TURNS,
   cleanIds,
   cleanTurns,

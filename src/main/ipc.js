@@ -340,6 +340,26 @@ function createIpc({
   // who was left out. Worked out in main, which is the only place that knows,
   // and pushed rather than reassembled in the window out of four kinds of event.
   bus.on('session-round', (round) => emit('session-round', round));
+  // What an observed session has noticed. Arrives with nobody having asked,
+  // which is the whole point of it — a card reaches the shelf because an
+  // observer thought it was worth having, not because somebody pressed
+  // anything. Carries the shelf in full rather than a delta, for the reason
+  // session-round does: the window renders what it is told rather than keeping
+  // its own tally of what it has been told so far.
+  bus.on('session-observer', (state) => emit('session-observer', state));
+  // An observer that asked for the floor and was given it.
+  //
+  // Its own event rather than the agent-reply path, because it did not come from
+  // a run anybody started: there is no `ref` naming a question it answers, no
+  // round waiting on it, and nothing to mark failed if it never arrives. What it
+  // shares with every other answer is where it ends up — appended to the session
+  // and rendered as a message with a speaker — so that is done here, once,
+  // beside the other writers rather than inside sessions.
+  bus.on('session-said', ({ sessionId, message }) => {
+    if (!sessions.isSessionId(sessionId) || !message) return;
+    store.append(sessionId, message);
+    emit('chat', message);
+  });
 
   // A refusal, for the roster to explain. An old build and an attacker are
   // refused identically — this only decides which sentence is shown, and it is
@@ -508,6 +528,36 @@ function createIpc({
         if (!notice) store.append(from, message);
         if (failed && msg.failedRef) store.update(from, msg.failedRef, { failed: true });
         emit('chat', message);
+        break;
+      }
+      // ---- a shared session ----
+      //
+      // `from` is the peer's own proved identity, stamped by the server from the
+      // socket it was proved on; the session id rides as a field. So the guard at
+      // the top of this router — which drops any frame claiming a local thread id
+      // as its *sender* — needs no exception for these, and does not get one.
+      //
+      // Every one of them is authorised inside sessions against our own record.
+      // Nothing on the frame decides whether the sender is allowed to be doing
+      // this, because everything on the frame was written by them.
+      case 'session-invite': {
+        sessions.onInvite(from, msg);
+        break;
+      }
+      case 'session-invite-reply': {
+        sessions.onInviteReply(from, msg);
+        break;
+      }
+      case 'session-sync': {
+        sessions.onSync(from, msg);
+        break;
+      }
+      case 'session-chat': {
+        sessions.onRoomChat(from, msg);
+        break;
+      }
+      case 'session-leave': {
+        sessions.onRoomLeave(from, msg);
         break;
       }
       // A peer typing into a shared agent's own thread rather than using @name.
@@ -977,11 +1027,47 @@ function createIpc({
   // Who a session asks: a list of agents, or whoever is available, whether they
   // are asked all at once, one after another, or left to talk to each other —
   // and, for that last one, how many turns they get.
-  ipcMain.handle('lanchat:setSessionCounsel', (_e, { id, agentIds, allAgents, mode, turns }) => {
-    const record = sessions.setCounsel(id, { agentIds, allAgents, mode, turns });
+  ipcMain.handle('lanchat:setSessionCounsel', (_e, { id, agentIds, allAgents, mode, turns, observer }) => {
+    const record = sessions.setCounsel(id, { agentIds, allAgents, mode, turns, observer });
     if (record) publishSessions();
     return record;
   });
+
+  // What is on an observed session's shelf, for a window that has just opened
+  // one. The cards live in main's memory, so a window that arrived after they
+  // did has no other way to learn about them — the same reason roundFor exists.
+  ipcMain.handle('lanchat:sessionShelf', (_e, { id }) => sessions.shelfFor(id));
+
+  // Taking a card off the shelf. Hiding and dismissing are the same act in a
+  // session with one person in it, and the handler says so by taking both.
+  ipcMain.handle('lanchat:shelfAction', (_e, { id, cardId, action }) =>
+    sessions.shelfAction(id, cardId, action)
+  );
+
+  // An observer asking to say something, and the answer to it. Read for a window
+  // that opened while a request was already standing; answered by the three
+  // buttons on the request itself.
+  // Asking somebody into a room, and taking them back out. Both host-only, and
+  // sessions is where that is decided rather than here — an authorisation rule
+  // that lived in the IPC layer would have to be repeated for the wire path.
+  ipcMain.handle('lanchat:inviteToSession', (_e, { id, peerId }) => {
+    const ok = sessions.invitePeer(id, peerId);
+    if (ok) publishSessions();
+    return ok;
+  });
+  ipcMain.handle('lanchat:removeFromSession', (_e, { id, peerId }) => {
+    const ok = sessions.removePeer(id, peerId);
+    if (ok) publishSessions();
+    return ok;
+  });
+  ipcMain.handle('lanchat:answerSessionInvite', (_e, { id, accepted }) => {
+    const ok = sessions.answerInvite(id, accepted);
+    if (ok) publishSessions();
+    return ok;
+  });
+
+  ipcMain.handle('lanchat:sessionFloor', (_e, { id }) => sessions.floorFor(id));
+  ipcMain.handle('lanchat:floorAction', (_e, { id, action }) => sessions.floorAction(id, action));
 
   // The one-agent door into the same thing. Nothing in this window uses it any
   // more, but it costs three lines and it is what a renderer from before counsels

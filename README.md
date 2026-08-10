@@ -494,19 +494,54 @@ That line is a menu of checkboxes. Tick two agents and your next question goes t
 week, or one a peer starts sharing, joins on its own without you going back to say so. Un-tick
 anybody and it is an ordinary list again.
 
-There are three ways to put the question:
+There are five ways to put the question:
 
 | | |
 |---|---|
 | **All at once** | Everybody gets it together and each answers independently. Use this when you want opinions that have not influenced each other. |
 | **In turn** | They answer one after another, each shown what has already been said. Use this when you want them building on each other. |
 | **Between themselves** | They discuss it, replying to each other for a set number of turns. Two is the usual number and any number works. Use this when the disagreement is the useful part. |
+| **Observer Agent** | Nobody is asked anything. The agents read what is said and stay quiet, and put a card on the shelf when they notice something worth knowing. Use this when you are thinking out loud. |
+| **Human Like** | One lap in turn, one lap between themselves, and one turn for whoever has been watching — in an order rolled fresh for every question. Exactly one turn each per part, so it never becomes a wall of text. |
 
 The composer tells you which it will do before you type. Every answer carries the name of the
 agent that gave it and its own colour, so four replies read as four contributions rather than one
 wall of text. The colour comes from the agent's identity rather than from where it happens to sit
 in the list, so it is the same colour every time and two agents with the same name are still two
 colours.
+
+### Being watched rather than asked
+
+**Observer Agent** is the one mode where pressing Enter does not ask anybody anything. What you
+type is written down and the agents read it; whether any of them says something is decided
+afterwards, by what they have to say, and the ordinary answer is that none of them does. You can
+type six times in a row and none of it is refused, because there is no round to wait on.
+
+Three things can happen instead:
+
+- **Nothing.** The common case, and the reason the mode is worth leaving switched on.
+- **A card on the shelf**, under the session title. Glanceable, ignorable, and gone when you
+  dismiss it. It never makes an unread mark. Opening one offers **Ask about it**, which puts the
+  claim in your composer as your own question — an observer's idea joins the conversation when you
+  decide it should, and not before.
+- **A request for the floor**, above the composer, saying who is asking and what they would say.
+  **Hear it**, **Not now** — which turns it into an ordinary card — or **No**. Granting it is
+  permission rather than an instruction: it still waits for a pause before speaking, and it speaks
+  once and then waits for you.
+
+Naming an agent (`@Zima`) always asks that one directly, and skips every threshold above.
+
+**Allow interruptions** is off, and stays off unless you switch it on. With it on, an observer may
+cut in without waiting — but only about a rule you actually stated, only when what is about to
+happen cannot easily be undone, and never more than a few times an hour.
+
+### People in a session
+
+An Observer Agent or Human Like session can have other people in it. Pick them from **People** in
+the same menu; they are asked rather than added, and nothing they type reaches the room until they
+accept. Whoever started the session runs it: everyone's words go there, that machine asks the
+agents, and it tells everybody what happened — which is what keeps one order and one transcript.
+Somebody joining part-way through is given what was already said.
 
 ### Letting agents talk
 

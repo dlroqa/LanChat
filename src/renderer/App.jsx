@@ -189,6 +189,13 @@ export default function App() {
   // discussion that stops for no stated reason is the thing somebody watching it
   // most wants explained.
   const [lastRounds, setLastRounds] = useState({}); // sessionId -> closed round view
+  // What each observed session's agents have noticed. Keyed by session so that
+  // switching between two of them shows each one's own shelf rather than
+  // whichever was looked at last.
+  const [shelves, setShelves] = useState({}); // sessionId -> [card]
+  // What is asking to be heard in each session, if anything. Kept beside the
+  // shelves and keyed the same way, because they arrive on the same event.
+  const [floors, setFloors] = useState({}); // sessionId -> request | null
   // Live output while it is being written, per thread and then per agent.
   //
   // One string per thread was enough while one agent answered at a time. A
@@ -1059,6 +1066,13 @@ export default function App() {
         // Where a session's question stands. Arrives whenever anything about the
         // round changes and once more as it closes; the closed one is what ends
         // the wait, because one answer out of three does not.
+        // An observer noticed something. Arrives with nobody having asked, which
+        // is the whole point of it — so it updates a shelf and does nothing
+        // else: no unread mark, no sound, no scroll.
+        case 'session-observer':
+          setShelves((s) => ({ ...s, [payload.sessionId]: payload.shelf || [] }));
+          setFloors((f) => ({ ...f, [payload.sessionId]: payload.floor || null }));
+          break;
         case 'session-round':
           setRounds((r) => {
             if (!payload.open) {
@@ -1703,8 +1717,71 @@ export default function App() {
   // everybody changes both halves at once, and two calls would leave a moment
   // where the record said something nobody chose.
   async function setSessionCounsel(id, patch) {
+    // Inviting somebody is not a counsel change and does not travel with one.
+    // The picker emits it through the same onChange because it is the same menu,
+    // and it is separated here rather than in the component: who is in a room is
+    // decided in main, where the authorisation lives, and a patch that carried
+    // both would ask setCounsel to know about peers.
+    if (patch && patch.invite) {
+      // Nothing is updated here. Main publishes the whole session list after a
+      // roster change, down the same channel every other change to it arrives
+      // on — so there is one path into that state rather than two that can
+      // disagree about who is in the room.
+      if (patch.inviting) await api.inviteToSession(id, patch.invite);
+      else await api.removeFromSession(id, patch.invite);
+      return;
+    }
     const record = await api.setSessionCounsel(id, patch);
     if (record) setSessions((list) => list.map((s) => (s.id === record.id ? record : s)));
+  }
+
+  // Who could be invited into a room. Real people only — an agent is already in
+  // the counsel and a session is not a person, so neither belongs on a roster of
+  // who else could be here.
+  const invitablePeers = useMemo(
+    () => peers.filter((p) => p.kind !== 'agent' && p.kind !== 'session'),
+    [peers]
+  );
+
+  // Taking a card off the shelf.
+  //
+  // Removed here as well as in main, rather than waiting to be told: the card is
+  // gone the instant it is dismissed, and a shelf that lingered until a round
+  // trip completed would let somebody click twice on something already going.
+  function dismissIdea(card) {
+    if (!card || !selectedId) return;
+    setShelves((s) => ({
+      ...s,
+      [selectedId]: (s[selectedId] || []).filter((c) => c.id !== card.id),
+    }));
+    api.shelfAction(selectedId, card.id, 'dismiss');
+  }
+
+  // Answering a request for the floor.
+  //
+  // The answer is not applied here — main owns whether an observer speaks, and a
+  // window that decided locally would be a second opinion about the one thing
+  // this feature must never get wrong. What comes back is the published state,
+  // by the same event every other change to it arrives on.
+  function answerFloor(action) {
+    if (!selectedId) return;
+    api.floorAction(selectedId, action);
+  }
+
+  // Asking about one.
+  //
+  // Deliberately the ordinary composer: the claim is put back as something the
+  // person is about to say, not sent on their behalf. What reaches the
+  // transcript is therefore a person asking a question — an observer's idea
+  // becomes part of the conversation only when somebody decides it should, which
+  // is the whole argument of the feature in one interaction.
+  //
+  // It goes through the same door a refused send uses to refill the composer, so
+  // there is one way words arrive there rather than two.
+  function askAboutIdea(card) {
+    if (!card || !selectedId) return;
+    setDraft({ threadId: selectedId, text: card.claim, nonce: Date.now() });
+    dismissIdea(card);
   }
 
   // Calling off a question a session has out. Nothing is updated here: main
@@ -2430,6 +2507,15 @@ export default function App() {
             onSummon={summonAgent}
             onRenameSession={renameSession}
             onSetCounsel={setSessionCounsel}
+            // What the observers noticed here, and the people who could be
+            // invited in. Both narrowed to the session being looked at, so one
+            // session's shelf never shows above another's conversation.
+            shelf={shelves[selectedId] || []}
+            roomPeers={invitablePeers}
+            onDismissIdea={dismissIdea}
+            onAskIdea={askAboutIdea}
+            floor={floors[selectedId] || null}
+            onFloorAction={answerFloor}
             onStopRound={stopSessionRound}
             onPauseRound={pauseSessionRound}
             onResumeRound={resumeSessionRound}

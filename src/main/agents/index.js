@@ -899,6 +899,90 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
     );
   }
 
+  // Asking an agent something without it becoming part of the conversation.
+  //
+  // Every other way into a transport ends at reply(), which puts words on the
+  // bus, where ipc.js files them in a thread. That is right for an answer and
+  // wrong for a question the person never asked: an observer working out whether
+  // it has anything worth saying would otherwise print its reasoning into the
+  // conversation it was meant to be quietly watching, and the shelf would be
+  // built out of messages that had already spoilt the thing they were about.
+  //
+  // So this is the read-only door. It runs the same transport, honours the same
+  // busy gate, and resolves with the text — and it never calls reply(), never
+  // emits a chat event, and never writes anything down. The caller decides what,
+  // if anything, becomes visible.
+  //
+  // Four things it deliberately will not do:
+  //
+  //  - **Ask for approval.** A background pass must never raise a tool-approval
+  //    card: the person did not start this and cannot be expected to adjudicate
+  //    it. An agent that wants approval mid-consult is abandoned, and the pass
+  //    returns nothing. Silence is always an acceptable answer here, which is
+  //    what makes that safe.
+  //  - **Serve a peer.** `origin` is not a parameter. Consulting is local-only
+  //    by construction, so no fair-share turn is spent and nothing a peer sent
+  //    can reach it.
+  //  - **Show a typing indicator.** Nobody is waiting for this, and a thread
+  //    that says an agent is thinking when the person asked nothing is a lie
+  //    about what the app is doing.
+  //  - **Report a failure.** A consult that errors, times out or comes back
+  //    unreadable resolves to null. There is no ⚠️ message, because there is no
+  //    question in the transcript for it to sit under.
+  async function consult(agentId, text) {
+    const entry = live.get(agentId);
+    const record = registry.get(agentId);
+    if (!record || !entry || entry.busy) return null;
+    if (typeof text !== 'string' || !text.trim()) return null;
+
+    entry.busy = true;
+    let streamed = '';
+    let settled = false;
+    try {
+      return await new Promise((resolve) => {
+        // One resolution, whichever way it arrives. A transport that calls both
+        // onDone and onError — or calls one of them twice — must not leave a
+        // caller awaiting a promise that has already been settled, or worse,
+        // release the busy flag twice.
+        const finish = (value) => {
+          if (settled) return;
+          settled = true;
+          entry.busy = false;
+          resolve(value);
+        };
+        entry.transport
+          .send(
+            { text },
+            {
+              onDelta: (delta) => {
+                streamed += delta;
+              },
+              // Deliberately empty. Status is live feedback about a run somebody
+              // is watching, and nobody is watching this one.
+              onStatus: () => {},
+              onApproval: () => {
+                // Abandoned rather than answered. Stopping the run is what makes
+                // the refusal real — leaving it parked would hold the agent busy
+                // waiting for a card that is never going to be shown.
+                Promise.resolve(stopRun(agentId)).catch(() => {});
+                finish(null);
+              },
+              onApprovalClosed: () => {},
+              // An agent asking the person a question. There is no person here,
+              // so there is nothing to answer it and the pass ends.
+              onInput: () => finish(null),
+              onDone: ({ text: output }) => finish(output || streamed || null),
+              onError: () => finish(null),
+            }
+          )
+          .catch(() => finish(null));
+      });
+    } catch {
+      entry.busy = false;
+      return null;
+    }
+  }
+
   // Agent output re-enters the app through the same bus event as peer traffic, so
   // it is stored and rendered by the existing ipc.js router with no special case.
   //
@@ -1675,6 +1759,10 @@ function createAgentHub({ userDataDir, hub, bus, store, safeStorage, transports 
       deliver(agentId, text, null, { thread, ref, a2a });
       return true;
     },
+    // Asking an agent something the person never asked, and keeping it out of
+    // the conversation. Returns the text, or null for anything that did not
+    // produce usable words — see consult() for the four things it will not do.
+    consult,
     // Whether there is anything there to ask. Asked separately from ask() so a
     // caller can write the question down before putting it, rather than after:
     // a transport that answers immediately would otherwise have its reply filed

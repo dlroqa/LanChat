@@ -306,8 +306,18 @@ test('mounted in a browser: ticking a counsel together, and nothing lost on the 
   }
   assert.deepEqual(
     s.opened.modes.map((m) => `${m.name}=${m.checked}`),
-    ['All at once=true', 'In turn=false', 'Between themselves=false'],
-    'the three modes are one choice, so they are radios'
+    [
+      'All at once=true',
+      'In turn=false',
+      'Between themselves=false',
+      // The two later ones. Added to the end of this list rather than folded
+      // into it: the first three read exactly as they always did, in the same
+      // order and with the same one ticked, which is the whole assertion that
+      // adding two modes did not disturb the three that were here.
+      'Observer Agent=false',
+      'Human Like=false',
+    ],
+    'the modes are one choice, so they are radios'
   );
   // ---- the turn budget ----------------------------------------------------
   //

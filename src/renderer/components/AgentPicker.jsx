@@ -29,12 +29,31 @@ const MIN_TURNS = 2;
 const MAX_TURNS = 12;
 const DEFAULT_TURNS = 6;
 
+// The modes that are a room rather than a question.
+//
+// Observing and Human Like both assume people are talking to each other with
+// agents around them, which is the only setting where inviting somebody makes
+// sense. The other three are one person asking a counsel something, and a roster
+// on one of those would offer to add a person to a conversation that has no
+// shape for a second one.
+const ROOM_MODES = new Set(['observer', 'human']);
+
 export default function AgentPicker({
   agents = [],
   agentIds = [],
   allAgents = false,
   mode = 'parallel',
   turns = DEFAULT_TURNS,
+  // The people in the room, and everybody who could be. Only two modes have a
+  // room at all — see the people section below for why the list is not simply
+  // always there.
+  peers = [],
+  members = [],
+  observer = null,
+  // A session somebody else runs. Every control is read-only in one: the host
+  // owns the mode, the counsel and the roster, and a guest changing them locally
+  // would be a second source of truth for a conversation with one authority.
+  guest = false,
   onChange,
 }) {
   const [open, setOpen] = useState(false);
@@ -212,6 +231,111 @@ export default function AgentPicker({
     </li>
   );
 
+  // The one switch that lets an agent cut across somebody mid-sentence.
+  //
+  // Under the mode it belongs to and only when that mode is chosen, like the
+  // turn stepper — a control with no effect is a control somebody will try. It
+  // is a checkbox rather than a third loudness setting because it is not a
+  // matter of degree: either this room has agreed that an agent may interrupt
+  // it, or it has not, and the default is that it has not.
+  //
+  // The note says what it costs rather than what it does. "Let observers
+  // interrupt" reads as a feature; saying it will cut in is what somebody
+  // actually needs to know before agreeing to it.
+  const settings = observer || {};
+  const observerRow = (
+    <li role="none" className="agent-sub">
+      <button
+        type="button"
+        role="menuitemcheckbox"
+        aria-checked={settings.protective === true}
+        className={`agent-pick agent-sub-pick ${settings.protective === true ? 'on' : ''}`}
+        disabled={guest}
+        onClick={() => onChange({ observer: { protective: !settings.protective } })}
+        onKeyDown={(e) => keys(e, () => onChange({ observer: { protective: !settings.protective } }))}
+      >
+        <span className="agent-tick" aria-hidden="true">
+          {settings.protective === true ? <Check size={13} /> : null}
+        </span>
+        <span className="agent-pick-text">
+          <span className="agent-pick-name">Allow interruptions</span>
+          <span className="agent-pick-note">
+            they may cut in about something already agreed — off unless you say so
+          </span>
+        </span>
+      </button>
+    </li>
+  );
+
+  // Who else is in the room.
+  //
+  // A person is not an agent and this list says so by being separate: agents are
+  // ticked to be asked, and people are invited to be here. The states are shown
+  // rather than flattened into a tick — somebody who was asked and has not
+  // answered is a different thing from somebody who declined, and a session that
+  // showed both as "not ticked" would have nothing to say about why nobody came.
+  const stateNote = (member, peer) => {
+    if (!member) return peer && peer.online === false ? 'offline — cannot be invited' : 'not invited';
+    switch (member.state) {
+      case 'joined':
+        return peer && peer.online === false ? 'in the room · offline right now' : 'in the room';
+      case 'invited':
+        return 'invited — waiting for an answer';
+      case 'declined':
+        return 'said no';
+      case 'left':
+        return 'left the room';
+      case 'revoked':
+        return 'removed';
+      default:
+        return 'not invited';
+    }
+  };
+
+  const peopleSection = (
+    <>
+      <li role="none" className="agent-menu-rule" />
+      <li role="none" className="agent-menu-head" aria-hidden="true">
+        People
+      </li>
+      {peers.length === 0 && <li className="agent-menu-empty">Nobody else is online.</li>}
+      {peers.map((peer) => {
+        const member = members.find((m) => m.peerId === peer.id) || null;
+        const here = Boolean(member && member.state === 'joined');
+        const waiting = Boolean(member && member.state === 'invited');
+        // Somebody offline cannot be invited — an invitation is a live offer and
+        // there is nobody to receive it. Already being in the room is different:
+        // they stay in it while their machine is off, exactly as an agent stays
+        // in a counsel.
+        const blocked = !here && !waiting && peer.online === false;
+        return (
+          <li key={peer.id} role="none">
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={here}
+              className={['agent-pick', here ? 'on' : '', blocked ? 'off' : '', waiting ? 'gone' : '']
+                .filter(Boolean)
+                .join(' ')}
+              disabled={guest || blocked}
+              onClick={() => onChange({ invite: peer.id, inviting: !member || !here })}
+              onKeyDown={(e) => keys(e, () => onChange({ invite: peer.id, inviting: !member || !here }))}
+              title={guest ? 'Only the person who started this session can invite people.' : ''}
+            >
+              <span className="agent-tick" aria-hidden="true">
+                {here ? <Check size={13} /> : null}
+              </span>
+              <span className="agent-pick-text">
+                <span className="agent-pick-name">{peer.name || peer.hostname}</span>
+                <span className="agent-pick-note">{stateNote(member, peer)}</span>
+              </span>
+            </button>
+          </li>
+        );
+      })}
+    </>
+  );
+
   return (
     <div className="agent-picker" ref={box}>
       <button
@@ -293,6 +417,19 @@ export default function AgentPicker({
               sitting there greyed out beside the other two. */}
           {modeRow('dialogue', 'Between themselves', 'they reply to each other until they are done')}
           {mode === 'dialogue' ? turnStepper : null}
+          {/* The two that came later, and they are a different kind of thing —
+              the three above are ways of putting a question, and these are ways
+              of being in a room. Below the rule rather than mixed in with them,
+              so the menu reads as "how do they answer" and then "or something
+              else entirely" rather than as five equivalent options. */}
+          {modeRow('observer', 'Observer Agent', 'they watch, and speak when it matters')}
+          {mode === 'observer' ? observerRow : null}
+          {modeRow('human', 'Human Like', 'in turn, between themselves and watching — shuffled')}
+          {/* Only the two modes that have a room. A session in the other three is
+              one person asking some agents a question, and a roster on it would
+              be an invitation to a conversation that does not have a shape for
+              more than one person to be in. */}
+          {ROOM_MODES.has(mode) ? peopleSection : null}
         </ul>
       )}
     </div>

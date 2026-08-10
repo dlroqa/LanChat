@@ -1,7 +1,30 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const { SessionRegistry, isSessionId, DEFAULT_TITLE } = require('./registry.js');
+const {
+  SessionRegistry,
+  isSessionId,
+  DEFAULT_TITLE,
+  OBSERVER_MODE,
+  HUMAN_MODE,
+  cleanTitle,
+} = require('./registry.js');
+const {
+  isHost,
+  isGuest,
+  memberOf,
+  mayPost,
+  maySetup,
+  mayDirect,
+  invite,
+  setState,
+  accept,
+  decline,
+  leave,
+  revoke,
+  audience,
+  shared,
+} = require('./room.js');
 const { FolderRegistry } = require('./folders.js');
 const { parseTranscript } = require('./transcript.js');
 const { composeContext, contextRecord } = require('./prompt.js');
@@ -16,6 +39,43 @@ const {
   finalLeftNotice,
 } = require('./dialogue.js');
 const { userMessage, agentMessage, turnsOf, taskState } = require('./a2a.js');
+const {
+  IN_TURN,
+  BETWEEN,
+  OBSERVE,
+  CYCLED,
+  rollArrangement,
+  planCycle,
+  nextInSegment,
+  cycleCost,
+  segmentNotice,
+  cycleNotice,
+} = require('./humanlike.js');
+const {
+  mentions,
+  cleanObserver,
+  cleanCandidate,
+  levelFor,
+  dedupe,
+  categoryOf,
+  shelfLabel,
+  CANDIDATE_TYPES,
+  SHELF,
+  PROTECTIVE,
+  expired,
+} = require('./observer.js');
+const {
+  watchPrompt,
+  extractionPrompt,
+  candidatePrompt,
+  admittedPrompt,
+  parseExtraction,
+  parseCandidate,
+  worthRepairing,
+  repairPrompt,
+} = require('./observerPrompt.js');
+const { seamOpen, seamStarved, turnSpent, protectiveAllowedNow } = require('./seam.js');
+const { newFrame, mergeFrame, concrete } = require('./plan.js');
 const { PEER_MIN_INTERVAL_MS } = require('../agents/index.js');
 
 // Sessions: a titled workspace with a conversation in it.
@@ -133,12 +193,16 @@ function createSessions({
   // definition — the whole point of the setting is that the membership is not
   // fixed — and a best effort is the right amount for a field that only matters
   // to a version of the app this person may never run again.
-  function setCounsel(id, { agentIds, allAgents, mode, turns } = {}) {
+  function setCounsel(id, { agentIds, allAgents, mode, turns, observer } = {}) {
     const patch = {};
     if (agentIds !== undefined) patch.agentIds = agentIds;
     if (allAgents !== undefined) patch.allAgents = allAgents;
     if (mode !== undefined) patch.mode = mode;
     if (turns !== undefined) patch.turns = turns;
+    // How loud this session's observers may be, and whether they may interrupt.
+    // Merged rather than replaced in the registry — see update() there — so the
+    // picker changing the level cannot silently switch interrupting back off.
+    if (observer !== undefined) patch.observer = observer;
     if (allAgents === true) patch.agentId = askable().find((a) => a.ready)?.id || null;
     return sessions.update(id, patch);
   }
@@ -240,6 +304,27 @@ function createSessions({
       // second implementation that disagrees on exactly the turn that ended it.
       // Only on a dialogue — the other two modes have no turn to be on, and a
       // field that is always null is a field somebody will one day try to read.
+      // Which part of a cycle is running, and which of the six shuffles it is.
+      //
+      // Published rather than counted in the window, for the same reason the
+      // discussion's turn is: the segment is advanced here, by the thing that
+      // decides whether there is another one, and a window keeping its own tally
+      // would disagree on exactly the turn that ended it.
+      ...(round.segments.length && {
+        turn: round.turn,
+        cap: round.cap,
+        ended: round.ended,
+        speaking: round.speaking,
+        left: [...round.left],
+        notices: round.notices.slice(),
+        paused: round.paused,
+        arrangement: round.arrangement,
+        segment: {
+          kind: (segmentOf(round) || {}).kind || null,
+          index: round.segmentAt,
+          of: round.segments.length,
+        },
+      }),
       ...(round.mode === 'dialogue' && {
         turn: round.turn,
         cap: round.cap,
@@ -320,6 +405,18 @@ function createSessions({
         // and noise above the next question, exactly like the missed notice.
         ...(round.mode === 'dialogue' && {
           endedNotice: endedNotice(round.ended, { turn: round.turn, cap: round.cap }),
+        }),
+        // A cycle that ran its three parts has its own sentence: it did not run
+        // out of budget and the agents did not run out of things to say, which
+        // are the only two endings dialogue.js knows how to describe. It simply
+        // had three parts and finished them. An ending of any other kind — the
+        // room emptying, somebody pressing Stop — keeps the words that ending
+        // already has.
+        ...(round.segments.length && {
+          endedNotice:
+            round.ended === CYCLED
+              ? cycleNotice(round.arrangement, { spoke: round.answers.length })
+              : endedNotice(round.ended, { turn: round.turn, cap: round.cap }),
         }),
       });
   }
@@ -484,6 +581,34 @@ function createSessions({
     }
     if (open) closeRound(open);
 
+    // ---- a room, rather than a workspace ----
+    //
+    // A guest does not run rounds and has no counsel of its own: the agents in a
+    // shared session belong to the host and are asked by the host, because one
+    // machine doing all the asking is what keeps one order and stops two ends
+    // starting two rounds for one question.
+    //
+    // Answered here, above the counsel entirely. Resolving one first would find
+    // nobody to ask — correctly, since a guest points at no agents — and refuse
+    // the sentence, turning every word typed in a shared room into an error
+    // about agents the person never expected to have.
+    if (isGuest(record)) {
+      const quotedForRoom = contextRecord(context);
+      const mine = {
+        id: crypto.randomUUID(),
+        peerId: sessionId,
+        direction: 'out',
+        kind: 'text',
+        text,
+        ts: Date.now(),
+        ...(quotedForRoom && { context: quotedForRoom }),
+      };
+      store.append(sessionId, mine);
+      sessions.touch(sessionId);
+      tell(record.hostPeerId, { type: 'session-chat', sessionId, text, id: mine.id, ts: mine.ts });
+      return { ...mine, delivered: true };
+    }
+
     const { targets, missed } = resolveCounsel(record, { askable: askable() });
     // Nobody at all. The question is handed back rather than written into a
     // transcript nothing will ever answer, and the sentence says which of them
@@ -500,6 +625,34 @@ function createSessions({
     // two agents to talk is a fact about this moment, not about the record.
     const dialogue = record.mode === 'dialogue';
     if (dialogue && targets.length < 2) return refuse(sessionId, text, docs, soloNotice(targets, missed));
+
+    // A cycle needs a room, for the same reason a discussion does: two of its
+    // three parts are agents reading each other, and one agent has nobody to
+    // read. Refused with the same sentence rather than quietly running a
+    // smaller thing, because somebody who chose this mode asked for a
+    // conversation and would otherwise silently get a single answer.
+    const human = record.mode === HUMAN_MODE;
+    if (human && targets.length < 2) return refuse(sessionId, text, docs, soloNotice(targets, missed));
+
+    // ---- observing ----
+    //
+    // The one mode where saying something does not, by itself, ask anybody
+    // anything. The words are written down and the agents read them; whether any
+    // of them speaks is decided afterwards, by what they have to say, and the
+    // ordinary outcome is that none of them does.
+    //
+    // Naming an agent is the exception and it is absolute: being asked directly
+    // is its own justification, so a mention skips every threshold the quiet
+    // path applies. It does not skip the ones that are not about thresholds —
+    // an agent that is switched off is still switched off, and resolveCounsel
+    // above has already left it out.
+    const observing = record.mode === OBSERVER_MODE;
+    const named = observing
+      ? mentions(
+          text,
+          targets.map((t) => ({ ...t, id: t.agentId }))
+        )
+      : [];
 
     const quoted = contextRecord(context);
     const composed = composeContext(quoted, prompt == null ? text : prompt);
@@ -530,10 +683,92 @@ function createSessions({
     store.append(sessionId, message);
     sessions.touch(sessionId);
 
+    // The host's own words, passed on to the room. Everything an agent says is
+    // relayed where it is written down; this is the one thing said here that
+    // nothing else would carry.
+    if (shared(record)) {
+      tellRoom(record, {
+        type: 'session-chat',
+        sessionId,
+        text,
+        speaker: identityName(),
+        id: message.id,
+        ts: message.ts,
+      });
+    }
+
+    // Said, and nobody asked anything.
+    //
+    // The whole of observer mode in one branch, and it returns before a round
+    // exists because there is nothing to wait for: no agent has been given a
+    // question, so there is no set of answers to collect and no reason to hold
+    // the workspace shut. Somebody thinking out loud in an observed session can
+    // type six times in a row and none of it is refused.
+    //
+    // What happens instead is watch(): the agents read what was said, the plan
+    // frame is brought up to date, and a card may appear on the shelf a moment
+    // later. None of that is awaited — a session must never be slower to accept
+    // a sentence because an observer is thinking about the last one.
+    // The whole of the quiet half, and it is quiet in the strongest sense: the
+    // words are written down, no agent is disturbed, and nothing is said.
+    //
+    // What is deliberately not here is a background run per message. Asking every
+    // agent to consider every sentence would double the cost of a conversation to
+    // produce silence almost every time — and doing it through `ask` would print
+    // each agent's reasoning into the transcript it was meant to be watching,
+    // because every reply that path produces is routed to a thread and stored.
+    // Speaking unasked waits for a way to consult an agent silently; staying
+    // quiet does not, and staying quiet is the behaviour that makes an observed
+    // session worth having.
+    if (observing) {
+      // When the person last spoke, and how much they said — the debounce is
+      // longer after one line than after a paragraph, because somebody who has
+      // just sent one line is usually still typing the next.
+      const state = watchStateFor(sessionId);
+      state.lastHumanAt = Date.now();
+      state.lastHumanText = text;
+      state.humanTurns = (state.humanTurns || 0) + 1;
+      // Ideas raised about a conversation the room has since moved past. Swept
+      // here, when the person speaks, because that is the event that moves it —
+      // a card is stale relative to what has been said, not to the clock alone.
+      const fresh = state.shelf.filter(
+        (c) =>
+          !expired(
+            { targetPlanVersion: c.planVersion, createdAt: c.createdAt },
+            { planVersion: state.frame.version, humanTurnsSince: state.humanTurns - c.atTurn }
+          )
+      );
+      if (fresh.length !== state.shelf.length) {
+        state.shelf = fresh;
+        publishWatch(sessionId, state);
+      }
+    }
+    if (observing && named.length === 0) {
+      // Started and not awaited. The sentence is already accepted and written
+      // down; whether an observer eventually has something to say about it is a
+      // separate question with its own timing, and nothing about typing should
+      // wait on it. A pass that throws is caught inside watch().
+      Promise.resolve(watch(sessionId)).catch(() => {});
+      return { ...message, delivered: true };
+    }
+
+    // Who this round actually asks. Everybody in the counsel, except in an
+    // observed session where somebody named names — there, only the agents that
+    // were named, because "what does @Zima think?" is a question for Zima and
+    // answering it with three opinions is not being helpful.
+    const asking = observing && named.length ? named : targets;
+
     const round = {
       id: crypto.randomUUID(),
       sessionId,
-      mode: dialogue ? 'dialogue' : record.mode === 'relay' ? 'relay' : 'parallel',
+      // What kind of round this is.
+      //
+      // An observed session that was asked something directly runs an ordinary
+      // parallel round: the mode describes how the answers are gathered, and
+      // several named agents answering one question is exactly that. The mode
+      // the *session* is in is on the record; this is what this question is
+      // doing.
+      mode: human ? HUMAN_MODE : dialogue ? 'dialogue' : record.mode === 'relay' ? 'relay' : 'parallel',
       // The one message every run in this round is answering. All of them carry
       // it as `ref`, which is why an error has to name the agent as well: the
       // question alone no longer identifies which run failed.
@@ -542,7 +777,7 @@ function createSessions({
       composed,
       docs,
       quoted,
-      asked: targets,
+      asked: asking,
       queue: [],
       running: new Set(),
       answers: [],
@@ -559,7 +794,7 @@ function createSessions({
       // Held separately from `asked` because `asked` is who took part and this
       // is the rota — they are the same list today and would come apart the
       // moment anything ever joined a discussion in progress.
-      order: dialogue ? targets.slice() : [],
+      order: dialogue ? asking.slice() : [],
       // Which turn is being taken, counting from one, and the ceiling it is
       // counting towards. The cap is copied off the record here rather than read
       // from it later: a discussion runs for the budget it was started with, and
@@ -584,6 +819,23 @@ function createSessions({
       // reports and held here until the turn is actually taken, so a pause never
       // loses whose go it was.
       nextUp: null,
+      // ---- a Human Like cycle's own bookkeeping ----
+      //
+      // Empty for every other mode, and that emptiness is what the segment layer
+      // is switched on by: `round.segments.length` is the single condition, so
+      // the four modes that came before this one take exactly the paths they
+      // always did. Nothing below is read unless a cycle planned it.
+      //
+      // The parts this question will run, in the order rolled for it, each with
+      // its own queue of who speaks. Decided once, here, rather than worked out
+      // as the round goes — a queue settled in advance is a queue that can be
+      // counted, which is what makes "one turn each" a property rather than a
+      // promise.
+      segments: [],
+      segmentAt: 0,
+      // Which of the six shuffles this is, kept so the window can say so and so
+      // the next question in this session can avoid it.
+      arrangement: null,
       // The discussion itself, as A2A messages — see a2a.js.
       //
       // This is the record every turn is rendered from, and it is one list
@@ -607,7 +859,25 @@ function createSessions({
     round.history.push(userMessage({ text: composed, contextId: sessionId, taskId: round.id, turn: 0 }));
     rounds.set(sessionId, round);
 
-    if (round.mode === 'dialogue') {
+    // A cycle: three parts in a rolled order, one turn each per part.
+    //
+    // Above the three branches that were here before it, and it is the only one
+    // that has to decide anything before it can start — the others already know
+    // who they are asking. Below this, nothing is changed.
+    if (round.mode === HUMAN_MODE) {
+      // Rolled here, once, and remembered on the record so the next question in
+      // this session can avoid it. Written down before anything is dispatched: a
+      // transport that answers inside the call can run the whole cycle and close
+      // the round before this line would otherwise be reached, and the next
+      // question would then be free to repeat the shape this one just used.
+      const cycle = planCycle(rollArrangement(record.lastArrangement), asking);
+      round.arrangement = cycle.arrangement;
+      round.segments = cycle.segments;
+      round.cap = cycleCost(asking.length);
+      sessions.update(sessionId, { lastArrangement: cycle.arrangement });
+      startSegment(round);
+      if (round.open) publish(round);
+    } else if (round.mode === 'dialogue') {
       // One agent at a time, always, so the busy gate in agents/index.js is never
       // the thing that ends a discussion — by the time somebody's turn comes
       // round again their last run is long over.
@@ -620,16 +890,16 @@ function createSessions({
       dispatch(round, round.order[0]);
       if (round.open) publish(round);
     } else if (round.mode === 'relay') {
-      round.queue = targets.slice();
+      round.queue = asking.slice();
       publish(round);
       dispatchNext(round);
     } else {
       // Everybody is marked as thinking before anybody is asked. A transport
       // that answers inside the call would otherwise close the round on the
       // first answer, while the rest of the counsel had not been asked yet.
-      for (const t of targets) round.running.add(t.agentId);
+      for (const t of asking) round.running.add(t.agentId);
       publish(round);
-      for (const t of targets) dispatch(round, t);
+      for (const t of asking) dispatch(round, t);
     }
 
     // Who was left out, said once. Never stored — it is true about this question
@@ -663,6 +933,33 @@ function createSessions({
   // everything once; a dialogue would carry the whole discussion again on every
   // turn, and the agents already hold their own side of it.
   function questionFor(round, target) {
+    // In a cycle it is the part that decides, not the round. A cycle is the
+    // three older modes taken in turns, so each part asks for exactly what that
+    // mode has always asked for — the builders below are the same ones, handed
+    // different numbers.
+    const segment = segmentOf(round);
+    if (segment) {
+      if (segment.kind === IN_TURN) return relayPrompt(round.composed, round.answers);
+      if (segment.kind === BETWEEN) {
+        return dialoguePrompt({
+          question: round.composed,
+          speaker: target,
+          roster: remaining(round.order.length ? round.order : round.asked, round.left),
+          history: turnsOf(round.history.slice(1)),
+          // Where this speaker stands inside its own part, not inside the whole
+          // cycle. A discussion segment is one lap, so the agent taking the last
+          // turn of it is told this is the last turn — which is what makes it
+          // say the thing it would want said last instead of leaving a thread
+          // hanging for a lap that is never coming.
+          turn: segment.spoken.length,
+          cap: segment.size,
+        });
+      }
+      // The observing part. It is asked to watch rather than to answer, and
+      // saying nothing is the ordinary outcome — see the charter in
+      // observerPrompt.js for why the instruction is written as prohibitions.
+      return observerQuestion(round, target);
+    }
     if (round.mode === 'relay') return relayPrompt(round.composed, round.answers);
     if (round.mode === 'dialogue') {
       return dialoguePrompt({
@@ -804,6 +1101,782 @@ function createSessions({
     return ok;
   }
 
+  // What the agent taking the watching turn of a cycle is shown.
+  //
+  // Its reply goes straight into the transcript, so it is asked in plain
+  // language rather than for a candidate block — see watchPrompt for why those
+  // are two different things and must stay so.
+  function observerQuestion(round, target) {
+    return watchPrompt({
+      question: round.composed,
+      speaker: target,
+      roster: remaining(round.asked, round.left),
+      history: turnsOf(round.history.slice(1)),
+      // No plan frame yet. Building one means asking an agent a question whose
+      // answer does not land in the transcript, and `agentHub.ask` has no such
+      // door — every reply it produces is routed to a thread and stored (see
+      // ipc.js). Rather than print an extraction into the conversation it was
+      // meant to be watching, the turn is taken on the conversation itself,
+      // which is what watchPrompt is written to work from.
+      frame: null,
+    });
+  }
+
+  // ---- sharing a session ----
+  //
+  // A session began as a private workspace and can become a room. The rules for
+  // who may do what live in room.js, as functions of a record and a proved peer
+  // id; this is the part that moves frames and writes things down.
+  //
+  // **The session id rides as a field, never as a sender.** The guard in ipc.js
+  // drops any frame whose `from` is a local thread id, because that would be a
+  // peer impersonating one of our threads. Naming a room is not impersonating a
+  // thread, so nothing here needs that rule relaxed and it is left exactly as it
+  // was. Membership is always looked up in our own record — a peer claiming to
+  // be in a room is not a peer who is in one.
+
+  // What this machine is called, for the name on our own words when they reach
+  // somebody else's copy of the room. Read at the moment of sending rather than
+  // held, because a person can rename themselves mid-conversation.
+  function identityName() {
+    const me = hub && hub.getIdentity && hub.getIdentity();
+    return (me && (me.name || me.hostname)) || 'Someone';
+  }
+
+  function tell(peerId, frame) {
+    return hub ? hub.send(peerId, frame) : false;
+  }
+
+  // Everybody in the room, minus whoever caused the thing being told.
+  function tellRoom(record, frame, except = null) {
+    for (const peerId of audience(record, except)) tell(peerId, frame);
+  }
+
+  // Asking somebody in.
+  //
+  // Host only, and `maySetup` is what says so — a guest's copy of a session is a
+  // view of the host's, and a guest handing out invitations to somebody else's
+  // room would be a second authority over who is in it.
+  function invitePeer(sessionId, peerId) {
+    const record = get(sessionId);
+    if (!record || !maySetup(record, null) || !peerId) return false;
+    const identity = hub && hub.identities.get(peerId);
+    const name = (identity && (identity.name || identity.hostname)) || null;
+    const members = invite(record, peerId, name);
+    sessions.update(sessionId, { members });
+    tell(peerId, {
+      type: 'session-invite',
+      sessionId,
+      title: record.title,
+      mode: record.mode,
+    });
+    return true;
+  }
+
+  // Taking somebody back out. They are told, so their copy stops accepting
+  // anything from us rather than sitting there looking live.
+  function removePeer(sessionId, peerId) {
+    const record = get(sessionId);
+    if (!record || !maySetup(record, null)) return false;
+    const members = revoke(record, peerId);
+    sessions.update(sessionId, { members });
+    tell(peerId, { type: 'session-leave', sessionId });
+    return true;
+  }
+
+  // An invitation arriving.
+  //
+  // A record is written for it immediately, marked with whose room it is and
+  // with us in it as `invited` — not joined. That distinction is the whole of the
+  // consent model: an invitation is not a key, and nothing may be sent or
+  // received for this session until somebody here says yes.
+  function onInvite(fromPeerId, { sessionId, title } = {}) {
+    if (!fromPeerId || !isSessionId(sessionId)) return null;
+    // Already known: a duplicate invite frame, or one re-sent after a reconnect.
+    if (sessions.get(sessionId)) return null;
+    const record = sessions.createShared({
+      id: sessionId,
+      title: cleanTitle(title),
+      hostPeerId: fromPeerId,
+      members: [{ peerId: fromPeerId, state: 'joined' }],
+    });
+    if (bus) bus.emit('session-invited', { sessionId, from: fromPeerId, title: record.title });
+    return record;
+  }
+
+  // Answering one.
+  function answerInvite(sessionId, accepted) {
+    const record = sessions.get(sessionId);
+    if (!record || !isGuest(record)) return false;
+    tell(record.hostPeerId, {
+      type: 'session-invite-reply',
+      sessionId,
+      accepted: accepted === true,
+    });
+    if (!accepted) {
+      // Declining removes the record. Keeping a workspace nobody agreed to join
+      // would leave a room in the sidebar that does nothing.
+      sessions.remove(sessionId);
+      return true;
+    }
+    sessions.update(sessionId, { members: setState(record, record.hostPeerId, 'joined') });
+    return true;
+  }
+
+  // The other end answering.
+  function onInviteReply(fromPeerId, { sessionId, accepted } = {}) {
+    const record = get(sessionId);
+    if (!record || !maySetup(record, null)) return;
+    if (!memberOf(record, fromPeerId)) return;
+    const members = accepted ? accept(record, fromPeerId) : decline(record, fromPeerId);
+    sessions.update(sessionId, { members });
+    if (!accepted) return;
+    // What they have missed. Sent once, on joining, because a room somebody
+    // walks into halfway through is unreadable without it.
+    tell(fromPeerId, {
+      type: 'session-sync',
+      sessionId,
+      title: record.title,
+      messages: store.read(sessionId).slice(-SYNC_MESSAGES),
+    });
+  }
+
+  // How much of a conversation a newcomer is given. Enough to follow what is
+  // being decided, bounded so that joining a long-running room is not a transfer
+  // of the whole history.
+  const SYNC_MESSAGES = 200;
+
+  function onSync(fromPeerId, { sessionId, messages } = {}) {
+    const record = sessions.get(sessionId);
+    if (!mayDirect(record, fromPeerId)) return;
+    // Replaced rather than merged: this is the host's transcript, and the host
+    // is the authority on what was said and in what order.
+    store.clear(sessionId);
+    for (const m of Array.isArray(messages) ? messages : []) {
+      if (!m || typeof m.text !== 'string') continue;
+      store.append(sessionId, {
+        id: m.id || crypto.randomUUID(),
+        peerId: sessionId,
+        // Everything that arrives from the room reads as incoming, including our
+        // own earlier words — we were not here when they were said.
+        direction: 'in',
+        kind: 'text',
+        text: m.text,
+        ts: Number.isFinite(m.ts) ? m.ts : Date.now(),
+        ...(m.speaker && { speaker: m.speaker }),
+      });
+    }
+    if (bus) bus.emit('session-synced', { sessionId });
+  }
+
+  // Being told somebody has gone, or that we have.
+  //
+  // Two frames in one, told apart by who sent it and which side we are. From the
+  // host to us, it means we have been taken out: the record stays — it holds a
+  // real conversation and deleting somebody's transcript because a peer said so
+  // would be letting them delete our data — but it stops being live, and the
+  // host is no longer a member we accept anything from. From a guest to the
+  // host, it is that guest leaving.
+  function onRoomLeave(fromPeerId, { sessionId } = {}) {
+    const record = get(sessionId);
+    if (!record) return;
+    if (isGuest(record)) {
+      if (fromPeerId !== record.hostPeerId) return;
+      sessions.update(sessionId, { members: setState(record, fromPeerId, 'left') });
+    } else {
+      if (!memberOf(record, fromPeerId)) return;
+      sessions.update(sessionId, { members: leave(record, fromPeerId) });
+    }
+    if (bus) bus.emit('session-room', { sessionId });
+  }
+
+  // Something said in a room.
+  //
+  // On the host this is a member's words: authorised against our own record,
+  // written down, and passed on to everybody else. On a guest it is the host
+  // relaying the room, and only the host — see mayPost in room.js for why a
+  // guest never takes words from another guest directly.
+  function onRoomChat(fromPeerId, { sessionId, text, speaker, id, ts } = {}) {
+    const record = get(sessionId);
+    if (!record || typeof text !== 'string' || !text.trim()) return;
+    if (!mayPost(record, fromPeerId)) return;
+
+    const identity = hub && hub.identities.get(fromPeerId);
+    const said = {
+      id: id || crypto.randomUUID(),
+      peerId: sessionId,
+      direction: 'in',
+      kind: 'text',
+      text,
+      ts: Number.isFinite(ts) ? ts : Date.now(),
+      // Who said it. On the host that is the peer who sent it; on a guest the
+      // host has already stamped it, and their word for who spoke is the one
+      // that counts.
+      speaker: speaker || (identity && (identity.name || identity.hostname)) || 'Someone',
+    };
+    if (bus) bus.emit('session-said', { sessionId, message: said });
+    sessions.touch(sessionId);
+
+    // The host is the only one that relays. A guest re-broadcasting would put
+    // the same sentence round the room twice.
+    if (isHost(record)) {
+      tellRoom(
+        record,
+        { type: 'session-chat', sessionId, text, speaker: said.speaker, id: said.id, ts: said.ts },
+        fromPeerId
+      );
+      // An observed room watches everybody in it, not only whoever is at this
+      // keyboard — which is the whole reason a session can have people in it.
+      if (record.mode === OBSERVER_MODE) {
+        const state = watchStateFor(sessionId);
+        state.lastHumanAt = Date.now();
+        state.lastHumanText = text;
+        state.humanTurns = (state.humanTurns || 0) + 1;
+        Promise.resolve(watch(sessionId)).catch(() => {});
+      }
+    }
+  }
+
+  // ---- watching ----
+  //
+  // What an observed session does with a sentence nobody asked anybody about.
+  //
+  // Two passes, both through agentHub.consult, which is the door that runs a
+  // transport without its words reaching a thread. One agent reads the room and
+  // says what the plan is; if there turns out to be a plan, the others are asked
+  // whether they have anything worth saying about it. The ordinary outcome of
+  // the second pass is that nobody does.
+  //
+  // Nothing here is awaited by send(). A session must never be slower to accept
+  // a sentence because an observer is still thinking about the last one, and a
+  // person typing six times in a row must not queue six passes — see `thinking`
+  // below, which is what makes the pass at-most-one-at-a-time per session.
+
+  // The plan each observed session is keeping, and what is on its shelf.
+  //
+  // In memory, like `rounds` above and for the same reason: a candidate is a
+  // live thing that has to be re-grounded against a conversation before it can
+  // be acted on, and one restored from disk would be a proposal about a room
+  // nobody is in any more.
+  const watching = new Map();
+
+  function watchStateFor(sessionId) {
+    if (!watching.has(sessionId)) {
+      watching.set(sessionId, {
+        frame: newFrame(sessionId),
+        shelf: [],
+        thinking: false,
+        // What a seam is measured against: who is mid-sentence, when the last
+        // person spoke and how long what they said was, and when an observer
+        // last took a turn unasked.
+        typing: {},
+        lastHumanAt: 0,
+        lastHumanText: '',
+        lastSpokeAt: 0,
+        floor: null,
+        timer: null,
+        humanTurns: 0,
+        // When this session last cut across somebody. A list rather than a
+        // timestamp, because the rule is both "not too soon after the last one"
+        // and "not too many in an hour", and the second needs the history.
+        interruptions: [],
+      });
+    }
+    return watching.get(sessionId);
+  }
+
+  // The last few things said, as the observers are shown them.
+  //
+  // Read from the transcript rather than kept alongside it, so a pass sees what
+  // is actually in the conversation — including anything an agent answered when
+  // it was named directly, which the observers were not party to.
+  const WATCH_TURNS = 12;
+
+  function roomHistory(sessionId) {
+    return store
+      .read(sessionId)
+      .slice(-WATCH_TURNS)
+      .filter((m) => m.kind === 'text' && m.text && !m.notice && !m.error)
+      .map((m) => ({
+        id: m.id,
+        name: m.speaker || (m.direction === 'out' ? 'The person watching' : 'Someone'),
+        text: m.text,
+      }));
+  }
+
+  // One reading of the room, and possibly one card on the shelf.
+  async function watch(sessionId) {
+    const state = watchStateFor(sessionId);
+    // At most one pass per session at a time. Somebody thinking out loud writes
+    // several sentences in a row, and starting a pass for each would put every
+    // agent in the room to work on a conversation that is still being written.
+    if (state.thinking) return null;
+    const record = get(sessionId);
+    if (!record || record.mode !== OBSERVER_MODE) return null;
+
+    // Local agents only. A peer's agent is paced by their anti-flood and its
+    // fair-share quota is meant for questions somebody actually asked — spending
+    // it on a background pass that usually produces silence would be a poor way
+    // to treat a neighbour. Shared agents in an observed session answer when
+    // they are named, and at no other time.
+    const { targets } = resolveCounsel(record, { askable: askable() });
+    const local = targets.filter((t) => !t.remote);
+    if (local.length === 0) return null;
+
+    state.thinking = true;
+    try {
+      const history = roomHistory(sessionId);
+      if (history.length === 0) return null;
+
+      // ---- is there a plan here? ----
+      const reader = local[0];
+      const read = await agentHub.consult(reader.agentId, extractionPrompt({ history, frame: state.frame }));
+      const extracted = parseExtraction(read);
+      if (extracted) {
+        state.frame = mergeFrame(state.frame, extracted, {
+          messageIds: history.map((h) => h.id),
+        });
+      }
+      // No plan, nothing to say about one. This is the common path and it costs
+      // exactly one run — the expensive second pass never happens.
+      if (!concrete(state.frame)) return null;
+
+      // ---- has anybody anything worth saying? ----
+      const raised = [];
+      for (const target of local) {
+        const ask = candidatePrompt({
+          history,
+          frame: state.frame,
+          speaker: target,
+          types: CANDIDATE_TYPES,
+        });
+        const said = await agentHub.consult(target.agentId, ask);
+        let parsed = parseCandidate(said);
+        // One more try, and only for an answer that was visibly trying.
+        //
+        // A reply with a block that failed to yield a claim is a model that
+        // understood the shape and fumbled it, and that is worth asking again.
+        // A reply with no block at all is a transport that is not going to
+        // produce one, and asking twice buys a second nothing. Never a third
+        // attempt: a repair loop that can run twice can run forever on a model
+        // having a bad day, and the failure is a session quietly spending money
+        // to be told nothing.
+        if (!parsed && worthRepairing(said)) {
+          parsed = parseCandidate(await agentHub.consult(target.agentId, repairPrompt(said, ask)));
+        }
+        if (!parsed) continue;
+        const candidate = cleanCandidate(parsed, {
+          observerId: target.agentId,
+          planId: state.frame.planId,
+          planVersion: state.frame.version,
+        });
+        // Grounding is checked against what is really in the room. A claim citing
+        // a message that does not exist is a claim about nothing, whatever it
+        // says about itself.
+        if (!candidate) continue;
+        const real = new Set(history.map((h) => String(h.id)));
+        candidate.evidence = candidate.evidence.filter((id) => real.has(id));
+        raised.push(candidate);
+      }
+
+      // Two observers noticing the same thing is one card, with both names on it.
+      const merged = dedupe(raised);
+      const settings = cleanObserver(record.observer);
+      const cards = [];
+      for (const candidate of merged) {
+        const level = levelFor(candidate, { observer: settings, plan: state.frame });
+        if (!level) continue;
+        cards.push({
+          id: crypto.randomUUID(),
+          level,
+          category: categoryOf(candidate),
+          label: shelfLabel(
+            candidate,
+            candidate.observerIds.map((id) => (local.find((t) => t.agentId === id) || {}).name)
+          ),
+          claim: candidate.claim,
+          evidence: candidate.evidence,
+          observerIds: candidate.observerIds,
+          planVersion: state.frame.version,
+          atTurn: state.humanTurns || 0,
+          createdAt: Date.now(),
+        });
+      }
+      if (cards.length === 0) return null;
+
+      // At most one thing may ask for the floor at a time, and only if nothing
+      // already is. The rest go to the shelf — a losing candidate is still
+      // useful, it simply does not get to interrupt on its own account.
+      // ---- interrupting ----
+      //
+      // The one thing here that does not wait for a gap, because the whole claim
+      // of it is that waiting would cost something that cannot be got back: a
+      // hard constraint about to be broken, or a step about to be taken that
+      // cannot be undone.
+      //
+      // Everything that makes it rare has already happened by this point.
+      // levelFor granted the rung only for a declared hard-constraint conflict,
+      // only against a constraint the person actually stated, and only in a room
+      // that switched interruptions on. What is left here is the rationing —
+      // which is deliberately outside levelFor, because "is this important
+      // enough" and "have we done this too often lately" are different
+      // questions and a candidate must not be able to answer the second one.
+      const urgent = cards.find((c) => c.level === PROTECTIVE);
+      if (urgent && protectiveAllowedNow(state.interruptions)) {
+        state.interruptions = [...(state.interruptions || []), Date.now()];
+        // Straight through the floor machinery, minus the waiting. It is still
+        // one turn, still generated after the decision to speak rather than
+        // before, and still re-grounded against everything said since.
+        state.floor = {
+          card: urgent,
+          candidate: merged.find((m) => m.claim === urgent.claim) || null,
+          observerId: urgent.observerIds[0],
+          observerName: (local.find((t) => t.agentId === urgent.observerIds[0]) || {}).name || 'An observer',
+          requestedAt: Date.now(),
+          seen: new Set(history.map((h) => h.id)),
+          // An interruption is the one thing here that does not ask. Being
+          // granted on arrival is exactly what the room agreed to when it
+          // switched interruptions on.
+          granted: true,
+        };
+        state.shelf = [...state.shelf, ...cards.filter((c) => c !== urgent)];
+        publishWatch(sessionId, state);
+        await admit(sessionId);
+        return cards;
+      }
+      // Rationed out. It does not evaporate — an interruption refused for being
+      // too soon after the last one is still the most important thing anybody
+      // has said, so it takes the floor the ordinary way and waits its turn.
+      const asking = state.floor ? null : cards.find((c) => c.level !== SHELF);
+      state.shelf = [...state.shelf, ...cards.filter((c) => c !== asking)];
+      if (asking) {
+        const raised = merged.find((m) => m.claim === asking.claim) || null;
+        state.floor = {
+          card: asking,
+          candidate: raised,
+          observerId: asking.observerIds[0],
+          observerName: (local.find((t) => t.agentId === asking.observerIds[0]) || {}).name || 'An observer',
+          requestedAt: Date.now(),
+          // What the room had already said when this was raised, so the
+          // re-grounding pass can tell the observer what it has missed.
+          seen: new Set(history.map((h) => h.id)),
+          // Not granted. This is the whole difference between asking and
+          // speaking, and it is a field rather than an inference so that no path
+          // can arrive at admit() without somebody having said yes.
+          granted: false,
+        };
+      }
+      publishWatch(sessionId, state);
+      return cards;
+    } catch (err) {
+      // A pass that fell over costs nothing and says nothing. Human chat and
+      // every other mode are untouched by it, which is the property that matters
+      // most about this whole path.
+      console.error('[sessions] an observer pass failed:', err.message);
+      return null;
+    } finally {
+      state.thinking = false;
+    }
+  }
+
+  // ---- the soft floor ----
+  //
+  // An idea good enough that waiting for somebody to look at the shelf would
+  // cost something, but not so urgent it may cut across a sentence. It asks.
+  //
+  // Three things have to be true before it speaks, and they are checked in this
+  // order because they get more expensive:
+  //
+  //  1. There is a seam — nobody typing, nothing just said, no agent answering,
+  //     and no observer having spoken since the last person did.
+  //  2. The claim still stands against everything said since it was raised.
+  //  3. The words exist. They are generated *now*, after admission, and never
+  //     before: a paragraph written ten turns ago and held in a queue is a
+  //     paragraph about a conversation that has moved on.
+  //
+  // If no seam arrives before its patience runs out, it stops waiting and
+  // becomes an ordinary card. Nothing is lost — the idea was worth having and
+  // still is; what ended was its claim on the next gap.
+
+  const FLOOR_TICK_MS = 1500;
+
+  function floorState(state) {
+    if (!state.floor) state.floor = null;
+    return state.floor;
+  }
+
+  // Whether an observer may take an unsolicited turn at this instant.
+  function seamNow(sessionId, state) {
+    const round = rounds.get(sessionId);
+    // One unsolicited turn, then wait for a person.
+    //
+    // Deliberately separate from the cooldown inside seamOpen, because the two
+    // rules are about different things and neither implies the other. The
+    // cooldown is a clock: it stops a second contribution arriving hard on the
+    // heels of the first. This is a conversation rule: however long it has been,
+    // an observer that has spoken does not speak again until somebody has
+    // answered it. Without this, a room left alone for two minutes would come
+    // back to two observer turns in a row talking to each other.
+    if (turnSpent({ spokeAt: state.lastSpokeAt, lastHumanAt: state.lastHumanAt })) return false;
+    return seamOpen({
+      typing: state.typing,
+      lastHumanAt: state.lastHumanAt,
+      lastHumanText: state.lastHumanText,
+      // An agent mid-answer is an agent being listened to. Reading the live
+      // round rather than a flag of our own, so there is one answer to "is
+      // something already speaking" rather than two that can disagree.
+      streaming: Boolean(round && round.open),
+      lastSpokeAt: state.lastSpokeAt,
+    });
+  }
+
+  // Waiting for a gap, and taking it.
+  function waitForSeam(sessionId) {
+    const state = watchStateFor(sessionId);
+    if (state.timer) return;
+    state.timer = setInterval(() => {
+      const floor = floorState(state);
+      if (!floor) {
+        clearInterval(state.timer);
+        state.timer = null;
+        return;
+      }
+      // Patience ran out. The request stops waiting and joins the shelf, which
+      // is a demotion rather than a deletion — see the comment above.
+      if (seamStarved(floor.requestedAt)) {
+        state.floor = null;
+        state.shelf = [...state.shelf, { ...floor.card, starved: true }];
+        clearInterval(state.timer);
+        state.timer = null;
+        publishWatch(sessionId, state);
+        return;
+      }
+      // Asked, and not yet answered. The request stands until the person says
+      // yes, says no, or the conversation moves past it — a seam is when it may
+      // *speak*, never permission to.
+      if (!floor.granted) return;
+      if (!seamNow(sessionId, state)) return;
+      clearInterval(state.timer);
+      state.timer = null;
+      Promise.resolve(admit(sessionId)).catch((err) => {
+        console.error('[sessions] an admitted turn failed:', err.message);
+      });
+    }, FLOOR_TICK_MS);
+    if (state.timer.unref) state.timer.unref();
+  }
+
+  // The floor was granted. Say it — if it is still worth saying.
+  async function admit(sessionId) {
+    const state = watchStateFor(sessionId);
+    const floor = floorState(state);
+    if (!floor) return null;
+    const record = get(sessionId);
+    if (!record || record.mode !== OBSERVER_MODE) {
+      state.floor = null;
+      return null;
+    }
+    state.floor = null;
+
+    const history = roomHistory(sessionId);
+    // Everything said since the request went in. Handed to the prompt so the
+    // observer can withdraw in one sentence if the room has already covered it —
+    // an observer that says something already answered is the fastest way to
+    // teach somebody never to grant the floor again.
+    const since = history
+      .filter((h) => !floor.seen.has(h.id))
+      .map((h) => `${h.name}: ${h.text}`)
+      .join('\n');
+
+    const said = await agentHub.consult(
+      floor.observerId,
+      admittedPrompt({ candidate: floor.candidate, frame: state.frame, history, since })
+    );
+    const text = String(said == null ? '' : said).trim();
+    // Nothing usable. The floor was granted and handed back, which costs one run
+    // and says nothing — the correct outcome for an observer that thought better
+    // of it.
+    if (!text) {
+      publishWatch(sessionId, state);
+      return null;
+    }
+
+    // One unsolicited turn, and the clock that enforces the next one starting
+    // from here.
+    state.lastSpokeAt = Date.now();
+    const message = {
+      id: crypto.randomUUID(),
+      peerId: sessionId,
+      direction: 'in',
+      kind: 'text',
+      text,
+      ts: Date.now(),
+      speaker: floor.observerName,
+      agentId: floor.observerId,
+    };
+    if (bus) bus.emit('session-said', { sessionId, message });
+    sessions.touch(sessionId);
+    publishWatch(sessionId, state);
+    return message;
+  }
+
+  function publishWatch(sessionId, state) {
+    if (!bus) return;
+    bus.emit('session-observer', {
+      sessionId,
+      shelf: state.shelf.map((c) => ({ ...c })),
+      // What is asking to be heard, if anything. The claim travels with it: a
+      // request that hid what it wanted to say would be a notification with
+      // extra friction, and there would be nothing to decide on.
+      floor: state.floor
+        ? {
+            id: state.floor.card.id,
+            who: state.floor.observerName,
+            claim: state.floor.card.claim,
+            category: state.floor.card.category,
+            granted: state.floor.granted === true,
+          }
+        : null,
+      plan: {
+        version: state.frame.version,
+        goal: state.frame.goal,
+        concrete: concrete(state.frame),
+      },
+    });
+  }
+
+  // Taking a card off the shelf, or putting it out of sight.
+  //
+  // Hiding and dismissing are the same act here, which they would not be in a
+  // room with several people in it: there is one person, and their opinion of a
+  // card is the room's.
+  function shelfAction(sessionId, cardId, action) {
+    const state = watching.get(sessionId);
+    if (!state) return false;
+    const card = state.shelf.find((c) => c.id === cardId);
+    if (!card) return false;
+    if (action === 'hide' || action === 'dismiss') {
+      state.shelf = state.shelf.filter((c) => c.id !== cardId);
+      publishWatch(sessionId, state);
+      return true;
+    }
+    return false;
+  }
+
+  // Answering a request for the floor.
+  //
+  // Three answers, and they are the three things a person actually wants to say
+  // to "may I say something": yes, not now, and no.
+  //
+  //  hear    — yes. It still waits for a seam before speaking, because granting
+  //            the floor is permission rather than an instruction to talk over
+  //            whatever is happening this second.
+  //  shelf   — not now. It becomes an ordinary card, which is where it would
+  //            have gone if it had scored a little lower.
+  //  dismiss — no. Gone.
+  //
+  // Nothing here generates a word. The speech is written after admission and
+  // after re-grounding, in admit(), and this only decides whether that happens.
+  function floorAction(sessionId, action) {
+    const state = watching.get(sessionId);
+    if (!state || !state.floor) return false;
+    if (action === 'hear') {
+      // Idempotent: pressing it twice must not start two clocks, and the second
+      // press of an already-granted request is not an error.
+      if (state.floor.granted) return true;
+      state.floor.granted = true;
+      publishWatch(sessionId, state);
+      waitForSeam(sessionId);
+      return true;
+    }
+    if (action === 'shelf') {
+      state.shelf = [...state.shelf, state.floor.card];
+      state.floor = null;
+      publishWatch(sessionId, state);
+      return true;
+    }
+    if (action === 'dismiss') {
+      state.floor = null;
+      publishWatch(sessionId, state);
+      return true;
+    }
+    return false;
+  }
+
+  function floorFor(sessionId) {
+    const state = watching.get(sessionId);
+    if (!state || !state.floor) return null;
+    return {
+      id: state.floor.card.id,
+      who: state.floor.observerName,
+      claim: state.floor.card.claim,
+      category: state.floor.card.category,
+      granted: state.floor.granted === true,
+    };
+  }
+
+  function shelfFor(sessionId) {
+    const state = watching.get(sessionId);
+    return state ? state.shelf.map((c) => ({ ...c })) : [];
+  }
+
+  // ---- a Human Like cycle ----
+  //
+  // Three parts, in a rolled order, each giving every agent exactly one turn.
+  // The whole of it sits above the per-mode machinery rather than inside it: a
+  // segment picks its next speaker and dispatches, and when it runs out the next
+  // segment starts. What each speaker is *shown* is still decided by
+  // questionFor, using the same relay and dialogue builders the older modes use,
+  // so a cycle is genuinely those modes rather than an imitation of them.
+
+  function segmentOf(round) {
+    return round.segments.length ? round.segments[round.segmentAt] || null : null;
+  }
+
+  // Hand the floor to the next agent in the current part, or move on.
+  //
+  // The one place a cycle spends a turn, so no path can wear the budget down by
+  // forgetting to count — the same reason takeTurn exists for a discussion.
+  function startSegment(round) {
+    const segment = segmentOf(round);
+    if (!segment) {
+      closeRound(round, CYCLED);
+      return null;
+    }
+    const next = nextInSegment(segment, round.left);
+    if (!next) return advanceSegment(round);
+    segment.spoken.push(next.agentId);
+    round.turn += 1;
+    round.speaking = next.agentId;
+    // Dispatched before the window is told, for the reason takeTurn gives: it is
+    // dispatch that puts an agent into `running`, so publishing first would send
+    // a view with nobody thinking in it. It may also close the round from under
+    // us when an agent is refused at the door, which is why every publish after
+    // a dispatch in this file is guarded.
+    dispatch(round, next);
+    return round.open ? view(round) : null;
+  }
+
+  // This part is finished; start the next, or finish the cycle.
+  function advanceSegment(round) {
+    round.segmentAt += 1;
+    if (round.segmentAt >= round.segments.length) {
+      closeRound(round, CYCLED);
+      return null;
+    }
+    const segment = segmentOf(round);
+    // Said once, as it happens, and never stored — the same rule every other
+    // notice a session produces follows. It names the part and the shuffle,
+    // because the order was rolled and somebody watching two questions run
+    // differently should be able to see that is what happened.
+    const notice = segmentNotice(segment, {
+      index: round.segmentAt,
+      of: round.segments.length,
+      arrangement: round.arrangement,
+    });
+    if (notice) round.notices.push(notice);
+    return startSegment(round);
+  }
+
   // The next agent in a relay, or the end of the round.
   function dispatchNext(round) {
     const next = round.queue.shift();
@@ -885,6 +1958,58 @@ function createSessions({
     // nobody is left to talk to — but for four it threw away a conversation
     // three agents were still having. So an agent that stops now leaves, the
     // rest carry on, and the round ends when the room does.
+    // A cycle decides here whether this part has anybody left in it.
+    //
+    // Above the dialogue branch and entered only when a cycle planned segments,
+    // so the four modes that came before take exactly the paths they always did.
+    // The rule is simpler than a discussion's because the hard part was settled
+    // in advance: a part has a queue, the queue is every agent once, and when it
+    // empties the part is over. Nothing here can extend a part or hand an agent
+    // a second turn in one.
+    if (round.segments.length) {
+      round.speaking = null;
+      // An agent that could not answer, said nothing, or signed off leaves the
+      // room for the rest of the cycle — including the parts that have not run
+      // yet. Asking it again in the next part would spend a peer's fair share on
+      // a question already known to be unanswerable, and would put "could not
+      // answer" in the transcript three times for one failure.
+      //
+      // Declining the watching turn is the exception, and it is the whole point
+      // of that part. An observer asked "say something, or say nothing" and
+      // answering nothing has done exactly what was asked — treating that as an
+      // agent going quiet would drop it out of the parts still to come and,
+      // where it was the last one left, end the cycle for having behaved
+      // correctly.
+      const watching = segmentOf(round) && segmentOf(round).kind === OBSERVE;
+      const declined = watching && kind === 'empty';
+      const departed =
+        declined || kind === 'answer'
+          ? converged(text)
+            ? 'converged'
+            : null
+          : kind === 'empty'
+            ? 'silence'
+            : 'error';
+      if (departed) {
+        round.left.add(agentId);
+        const still = remaining(round.asked, round.left);
+        const notice = still.length
+          ? leftNotice((who && who.name) || null, departed, still.length)
+          : finalLeftNotice((who && who.name) || null, departed);
+        if (notice) round.notices.push(notice);
+        // Nobody left at all. The cycle stops rather than running two more
+        // empty parts.
+        if (still.length === 0) {
+          closeRound(round, 'dwindled');
+          return null;
+        }
+      }
+      const next = startSegment(round);
+      if (!round.open) return null;
+      publish(round);
+      return next || view(round);
+    }
+
     if (round.mode === 'dialogue') {
       round.speaking = null;
       // What this agent just did, if it means it is finished. Nothing came back
@@ -1160,6 +2285,18 @@ function createSessions({
     pauseRound,
     resumeRound,
     roundFor,
+    shelfFor,
+    shelfAction,
+    floorFor,
+    floorAction,
+    invitePeer,
+    removePeer,
+    onInvite,
+    answerInvite,
+    onInviteReply,
+    onSync,
+    onRoomChat,
+    onRoomLeave,
     askable,
     importText,
     isSessionId,

@@ -8,6 +8,8 @@ import AgentFlash from './AgentFlash.jsx';
 import SessionTitle from './SessionTitle.jsx';
 import FindBar from './FindBar.jsx';
 import AgentPicker from './AgentPicker.jsx';
+import IdeaShelf from './IdeaShelf.jsx';
+import FloorRequest from './FloorRequest.jsx';
 import FolderPicker from './FolderPicker.jsx';
 import {
   Phone,
@@ -34,6 +36,18 @@ const GROUP_WINDOW = 4 * 60 * 1000; // group consecutive messages within 4 min
 
 export default function ChatPane({
   peer,
+  // What this session's observers have noticed, and the online people who could
+  // be invited into it. Both are empty for every thread that is not an observed
+  // or Human Like session, and the two surfaces that read them draw nothing at
+  // all when they are.
+  shelf = [],
+  roomPeers = [],
+  onDismissIdea,
+  onAskIdea,
+  // An observer asking to say something, and the three answers to it. Null
+  // whenever nothing is asking, which is nearly always.
+  floor = null,
+  onFloorAction,
   messages,
   typing,
   awaiting,
@@ -439,8 +453,18 @@ export default function ChatPane({
                 allAgents={Boolean(peer.allAgents)}
                 mode={peer.mode || 'parallel'}
                 turns={peer.turns}
+                peers={roomPeers}
+                members={peer.members || []}
+                observer={peer.observer || null}
+                guest={Boolean(peer.hostPeerId)}
                 onChange={(patch) => onSetCounsel(peer.id, patch)}
               />
+              {/* Beside the chip rather than above the composer, because it is
+                  not a thing to answer — it is a thing to notice, and the header
+                  is where this session's standing facts already live. It draws
+                  nothing at all when the shelf is empty, which is most of the
+                  time. */}
+              <IdeaShelf cards={shelf} onDismiss={onDismissIdea} onAsk={onAskIdea} />
             </div>
           ) : (
             <div className="sub">
@@ -730,6 +754,17 @@ export default function ChatPane({
           />
         )}
       </div>
+
+      {/* An observer asking for the floor. Directly above the composer, because
+          it is a decision and the composer is where decisions are made in this
+          window — and below the transcript, because nothing it says has been
+          said yet. */}
+      <FloorRequest
+        floor={floor}
+        onHear={() => onFloorAction && onFloorAction('hear')}
+        onShelf={() => onFloorAction && onFloorAction('shelf')}
+        onDismiss={() => onFloorAction && onFloorAction('dismiss')}
+      />
 
       {/* Text can be composed while a peer is offline and is queued until they
           return. Files and voice need a live connection, so those stay gated.

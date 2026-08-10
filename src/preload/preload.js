@@ -52,6 +52,16 @@ contextBridge.exposeInMainWorld('lanchat', {
   createSession: (draft) => invoke('lanchat:createSession', draft || {}),
   renameSession: (id, title) => invoke('lanchat:renameSession', { id, title }),
   setSessionCounsel: (id, patch) => invoke('lanchat:setSessionCounsel', { id, ...(patch || {}) }),
+  // What an observed session's agents have noticed, for a window that opened
+  // after they noticed it — the cards live in main's memory, so there is no
+  // other way to learn about one that arrived before this window did.
+  sessionShelf: (id) => invoke('lanchat:sessionShelf', { id }),
+  shelfAction: (id, cardId, action) => invoke('lanchat:shelfAction', { id, cardId, action }),
+  sessionFloor: (id) => invoke('lanchat:sessionFloor', { id }),
+  floorAction: (id, action) => invoke('lanchat:floorAction', { id, action }),
+  inviteToSession: (id, peerId) => invoke('lanchat:inviteToSession', { id, peerId }),
+  removeFromSession: (id, peerId) => invoke('lanchat:removeFromSession', { id, peerId }),
+  answerSessionInvite: (id, accepted) => invoke('lanchat:answerSessionInvite', { id, accepted }),
   setSessionAgent: (id, agentId) => invoke('lanchat:setSessionAgent', { id, agentId }),
   askableAgents: () => invoke('lanchat:askableAgents'),
   sessionRound: (id) => invoke('lanchat:sessionRound', { id }),

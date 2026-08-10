@@ -2139,3 +2139,831 @@ test('a picture an agent made never crosses the wire, over a real socket', async
   assert.ok(asked.text.includes(png), 'B still said what B said');
   assert.equal(asked.media, undefined, 'but a path that is not on this machine is just text');
 });
+
+// ---------------------------------------------------------------------------
+// Observing, and a Human Like cycle.
+//
+// The two modes added after the first three. Both are tested through the same
+// node harness the others use, because the thing worth proving about them is
+// what actually reaches an agent and what actually lands in a transcript —
+// neither of which a unit test on the pure layer can see.
+
+test('an observed session writes down what was said and asks nobody', async () => {
+  const { A, session } = await counselNode('quiet', ['Hermes', 'Tessie'], { mode: 'observer' });
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'thinking out loud about the port' });
+  // Nothing to wait for, which is the point — so wait for the one thing that
+  // would prove it wrong: an agent being asked.
+  await new Promise((r) => setTimeout(r, 300));
+
+  // An observer does read the room — that is what it is for. What it must never
+  // do is turn that reading into part of the conversation, so the assertion is
+  // about the transcript rather than about whether a transport ran.
+  const thread = A.store.read(session.id);
+  assert.equal(thread.length, 1, 'only the words that were typed are in the thread');
+  assert.equal(thread[0].direction, 'out');
+  assert.equal(thread[0].speaker, undefined, 'and no agent answered into it');
+});
+
+test('an observed session refuses nothing, however much is typed into it', async () => {
+  const { A, session } = await counselNode('quiet2', ['Hermes', 'Tessie'], { mode: 'observer' });
+
+  // Six in a row. In every other mode the second would be refused while the
+  // first was still out; here there is no round to be waiting on, and somebody
+  // thinking out loud must not be told to wait for agents that were never asked.
+  for (let i = 0; i < 6; i += 1) {
+    const said = A.call('lanchat:sendChat', { peerId: session.id, text: `thought ${i}` });
+    assert.notEqual(said.rejected, true, `thought ${i} should not be refused`);
+  }
+  await new Promise((r) => setTimeout(r, 300));
+  const thread = A.store.read(session.id);
+  assert.equal(thread.length, 6, 'every sentence was kept');
+  assert.equal(
+    thread.every((m) => m.direction === 'out'),
+    true,
+    'and no agent answered into it'
+  );
+});
+
+test('naming an agent in an observed session asks that one and only that one', async () => {
+  const { A, session } = await counselNode('named', ['Hermes', 'Tessie'], { mode: 'observer' });
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'what does @Tessie make of that?' });
+  await waitFor(() => A.store.read(session.id).length === 2, 5000, 'Tessie to answer');
+
+  assert.equal(A.log.length, 1, 'being asked directly asks one agent, not the room');
+  const answer = A.store.read(session.id).find((m) => m.direction === 'in');
+  assert.equal(answer.speaker, 'Tessie', 'and it is the one that was named');
+});
+
+test('a Human Like cycle gives every agent one turn in each of its three parts', async () => {
+  const { A, session } = await counselNode('cycle', ['Hermes', 'Tessie'], { mode: 'human' });
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'how should we do this?' });
+  // Two agents, three parts, one turn each: four spoken turns plus at most one
+  // watching turn. Wait for the round to close rather than for a count, so the
+  // assertion below is about what actually happened rather than what was hoped.
+  await waitFor(() => !lastRound(A).open, 8000, 'the cycle to finish');
+
+  const spoke = {};
+  for (const m of A.store.read(session.id)) {
+    if (m.direction === 'in' && m.speaker) spoke[m.speaker] = (spoke[m.speaker] || 0) + 1;
+  }
+  // The rule the whole mode rests on: nobody speaks twice in one part, so with
+  // three parts nobody can have spoken more than three times.
+  for (const [name, n] of Object.entries(spoke)) {
+    assert.ok(n <= 3, `${name} spoke ${n} times — no agent may exceed one turn per part`);
+  }
+  assert.ok(A.log.length >= 2, 'and the agents were actually asked something');
+});
+
+test('two questions in a row never run the same shuffle', async () => {
+  const { A, session } = await counselNode('shuffle', ['Hermes', 'Tessie'], { mode: 'human' });
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'first question' });
+  await waitFor(() => !lastRound(A).open, 8000, 'the first cycle to finish');
+  const first = A.call('lanchat:listSessions').find((s) => s.id === session.id).lastArrangement;
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'second question' });
+  await waitFor(() => !lastRound(A).open, 8000, 'the second cycle to finish');
+  const second = A.call('lanchat:listSessions').find((s) => s.id === session.id).lastArrangement;
+
+  assert.ok(first >= 1 && first <= 6, 'the first question rolled a real arrangement');
+  assert.ok(second >= 1 && second <= 6, 'and so did the second');
+  assert.notEqual(second, first, 'and the second is never the shape the first just used');
+});
+
+test('a cycle needs a room, and says so rather than quietly asking one agent', async () => {
+  const { A, session } = await counselNode('solo-cycle', ['Hermes'], { mode: 'human' });
+
+  const said = A.call('lanchat:sendChat', { peerId: session.id, text: 'anybody?' });
+  assert.equal(said.rejected, true, 'one agent is not a room');
+  assert.match(said.notice.text, /discussion needs two/);
+  assert.deepEqual(A.log, [], 'and nothing was asked');
+});
+
+// ---------------------------------------------------------------------------
+// The watching pass: reading a room without joining the conversation.
+//
+// Driven through a scripted transport rather than the echoing stub, because what
+// is being tested is what happens to an agent's *structured* answer — and the
+// stub cannot produce one. The two passes are told apart by which prompt they
+// were given, which is also how a real agent tells them apart.
+
+function blockOf(lines) {
+  return ['```lanchat', ...lines, '```'].join('\n');
+}
+
+// A transport that reads the room and then has something to say about it.
+function scriptedObserver(log, { claim, type = 'missing_dependency' } = {}) {
+  return {
+    http: ({ id, name }) => ({
+      id,
+      name,
+      kind: 'stub',
+      start: async () => ({ detail: 'ready' }),
+      send: async ({ text }, h) => {
+        log.push({ name, text });
+        // The real id of a message actually in the room. watched() renders each
+        // turn as `[id] Name:`, so a scripted agent cites what a real one would
+        // — and a card built on an id that is not in the room is dropped by the
+        // grounding filter, which is exactly what should happen.
+        const cited = (text.match(/^\[([^\]\s]+)\]\s+\S.*:$/m) || [])[1] || 'm1';
+        // The extraction pass asks for a plan and says so.
+        if (/describe the plan being made/i.test(text)) {
+          return h.onDone?.({
+            text: blockOf([
+              `goal: Share the port between two agents [${cited}]`,
+              `constraint: Must work on a LAN [${cited}] hard`,
+              `action: Bind 47100 on both machines [${cited}]`,
+            ]),
+          });
+        }
+        // The candidate pass names the types it will accept.
+        if (/silence_risk/i.test(text)) {
+          if (!claim) return h.onDone?.({ text: 'NOTHING' });
+          return h.onDone?.({
+            text: blockOf([
+              `type: ${type}`,
+              `claim: ${claim}`,
+              `evidence: ${cited}`,
+              'novelty: 0.9',
+              'impact: 0.5',
+              'urgency: 0.2',
+              'confidence: 0.9',
+              'interruption_cost: 0.4',
+              'silence_risk: 0.3',
+            ]),
+          });
+        }
+        return h.onDone?.({ text: `echo:${text}` });
+      },
+      stop: async () => {},
+    }),
+  };
+}
+
+async function observerNode(name, names, transports) {
+  const A = makeNode(name, null, { transports });
+  const agents = [];
+  for (const agentName of names) {
+    const { agent } = await A.agentHub.add({ name: agentName, kind: 'http', config: {} });
+    agents.push(agent);
+  }
+  const session = A.call('lanchat:createSession', {});
+  A.call('lanchat:setSessionCounsel', {
+    id: session.id,
+    agentIds: agents.map((a) => a.id),
+    mode: 'observer',
+  });
+  return { A, agents, session };
+}
+
+test('a plan taking shape puts a card on the shelf and nothing in the transcript', async () => {
+  const log = [];
+  const { A, session } = await observerNode('shelf', ['Mac'], {
+    ...scriptedObserver(log, { claim: 'Nothing acquires the lock before the port is shared.' }),
+  });
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'lets bind 47100 on both machines' });
+  await waitFor(
+    () => A.call('lanchat:sessionShelf', { id: session.id }).length > 0,
+    6000,
+    'a card to reach the shelf'
+  );
+
+  const shelf = A.call('lanchat:sessionShelf', { id: session.id });
+  assert.equal(shelf.length, 1, 'one idea, one card');
+  assert.equal(shelf[0].category, 'Missing prerequisite');
+  assert.match(shelf[0].claim, /acquires the lock/);
+  // The whole point of consulting rather than asking: the observer's reasoning
+  // never became part of the conversation it was reading.
+  const thread = A.store.read(session.id);
+  assert.equal(thread.length, 1, 'the transcript holds only what the person typed');
+  assert.equal(thread[0].direction, 'out');
+});
+
+test('an observer with nothing to say leaves the shelf empty', async () => {
+  const log = [];
+  const { A, session } = await observerNode('quiet-shelf', ['Mac'], scriptedObserver(log, { claim: null }));
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'lets bind 47100 on both machines' });
+  // Wait for the passes to have actually run, then assert on the outcome — so
+  // this cannot pass merely because nothing happened yet.
+  await waitFor(() => log.some((l) => /silence_risk/i.test(l.text)), 6000, 'the candidate pass to run');
+  await new Promise((r) => setTimeout(r, 200));
+
+  assert.deepEqual(
+    A.call('lanchat:sessionShelf', { id: session.id }),
+    [],
+    'saying nothing is the ordinary outcome'
+  );
+  assert.equal(A.store.read(session.id).length, 1, 'and it stays out of the transcript');
+});
+
+test('an agent that answers in prose never produces a card', async () => {
+  // The documented degradation: a transport that cannot emit the block simply
+  // never raises anything. It is not an error and nothing is written down.
+  const { A, session } = await counselNode('prose', ['Hermes'], { mode: 'observer' });
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'lets bind 47100 on both machines' });
+  await new Promise((r) => setTimeout(r, 400));
+
+  assert.deepEqual(A.call('lanchat:sessionShelf', { id: session.id }), [], 'no block, no candidate, no card');
+  assert.equal(A.store.read(session.id).length, 1, 'and the conversation is untouched');
+});
+
+test('two observers noticing the same thing produce one card between them', async () => {
+  const log = [];
+  const { A, session } = await observerNode('merge', ['Mac', 'Zima'], {
+    ...scriptedObserver(log, { claim: 'The coordinator lock is missing before the port is shared.' }),
+  });
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'lets bind 47100 on both machines' });
+  await waitFor(
+    () => A.call('lanchat:sessionShelf', { id: session.id }).length > 0,
+    6000,
+    'a card to reach the shelf'
+  );
+  await new Promise((r) => setTimeout(r, 200));
+
+  const shelf = A.call('lanchat:sessionShelf', { id: session.id });
+  assert.equal(shelf.length, 1, 'two observers, one idea, one card');
+  assert.equal(shelf[0].observerIds.length, 2, 'and both are credited on it');
+});
+
+test('a card can be taken off the shelf and stays off', async () => {
+  const log = [];
+  const { A, session } = await observerNode('dismiss', ['Mac'], {
+    ...scriptedObserver(log, { claim: 'Nothing acquires the lock before the port is shared.' }),
+  });
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'lets bind 47100 on both machines' });
+  await waitFor(
+    () => A.call('lanchat:sessionShelf', { id: session.id }).length > 0,
+    6000,
+    'a card to reach the shelf'
+  );
+
+  const [card] = A.call('lanchat:sessionShelf', { id: session.id });
+  assert.equal(A.call('lanchat:shelfAction', { id: session.id, cardId: card.id, action: 'dismiss' }), true);
+  assert.deepEqual(A.call('lanchat:sessionShelf', { id: session.id }), [], 'dismissing takes it away');
+  // Idempotent: a second dismissal of something already gone is not an error.
+  assert.equal(A.call('lanchat:shelfAction', { id: session.id, cardId: card.id, action: 'dismiss' }), false);
+});
+
+// ---------------------------------------------------------------------------
+// The soft floor: asking to say something, and waiting for a gap.
+
+// An observer whose candidate is worth interrupting for, and which then has
+// something to say when the floor is granted.
+function floorObserver(log) {
+  return {
+    http: ({ id, name }) => ({
+      id,
+      name,
+      kind: 'stub',
+      start: async () => ({ detail: 'ready' }),
+      send: async ({ text }, h) => {
+        log.push({ name, text });
+        const cited = (text.match(/^\[([^\]\s]+)\]\s+\S.*:$/m) || [])[1] || 'm1';
+        if (/describe the plan being made/i.test(text)) {
+          return h.onDone?.({
+            text: blockOf([
+              `goal: Ship it today [${cited}]`,
+              `constraint: Must work on a LAN [${cited}] hard`,
+              `action: Bind 47100 on both machines [${cited}]`,
+            ]),
+          });
+        }
+        if (/silence_risk/i.test(text)) {
+          return h.onDone?.({
+            text: blockOf([
+              'type: missing_dependency',
+              'claim: Nothing releases the port when the host disconnects.',
+              `evidence: ${cited}`,
+              'novelty: 0.9',
+              'impact: 0.9',
+              'urgency: 0.4',
+              'confidence: 0.9',
+              'interruption_cost: 0.2',
+              'silence_risk: 0.8',
+            ]),
+          });
+        }
+        // The admitted turn: generated only after the floor is granted.
+        if (/the room agreed/i.test(text)) {
+          return h.onDone?.({
+            text: 'The port is never released if the host drops. Add a reclaim on timeout.',
+          });
+        }
+        return h.onDone?.({ text: `echo:${text}` });
+      },
+      stop: async () => {},
+    }),
+  };
+}
+
+test('an observer asks for the floor, waits for a gap, and then speaks once', async () => {
+  const log = [];
+  const { A, session } = await observerNode('floor', ['Mac'], floorObserver(log));
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'we will just bind 47100 on both machines' });
+
+  // It must not speak immediately: something was only just said, which is one of
+  // the four ways a moment can be the wrong one.
+  await waitFor(() => log.some((l) => /silence_risk/i.test(l.text)), 6000, 'the candidate pass to run');
+  assert.equal(
+    A.store.read(session.id).filter((m) => m.direction === 'in').length,
+    0,
+    'nothing is said while the sentence is still warm'
+  );
+
+  // It is asking, not speaking. Nothing is said until somebody says yes — which
+  // is the whole difference between an observer and a participant.
+  await waitFor(() => A.call('lanchat:sessionFloor', { id: session.id }), 6000, 'the request to appear');
+  const asking = A.call('lanchat:sessionFloor', { id: session.id });
+  assert.equal(asking.granted, false, 'it has asked and is waiting for an answer');
+  assert.match(asking.claim, /Nothing releases the port/, 'and it says what it wants to say while asking');
+  assert.equal(A.store.read(session.id).filter((m) => m.direction === 'in').length, 0, 'still nothing said');
+
+  A.call('lanchat:floorAction', { id: session.id, action: 'hear' });
+  // Granted is permission, not an instruction to talk over whatever is
+  // happening — so it still waits for a gap before speaking.
+  await waitFor(
+    () => A.store.read(session.id).some((m) => m.direction === 'in'),
+    20000,
+    'the observer to take the gap'
+  );
+
+  const spoken = A.store.read(session.id).filter((m) => m.direction === 'in');
+  assert.equal(spoken.length, 1, 'exactly one unsolicited turn');
+  assert.equal(spoken[0].speaker, 'Mac', 'and it says who said it');
+  assert.match(spoken[0].text, /reclaim on timeout/, 'the words are the admitted ones');
+  // The speech was generated after admission, never before — so the admitted
+  // prompt must have been the last thing asked, not the first.
+  const admitted = log.findIndex((l) => /the room agreed/i.test(l.text));
+  const candidate = log.findIndex((l) => /silence_risk/i.test(l.text));
+  assert.ok(admitted > candidate, 'the words are written only once the floor is granted');
+});
+
+test('an observer that has spoken does not speak again until a person does', async () => {
+  const log = [];
+  const { A, session } = await observerNode('one-turn', ['Mac'], floorObserver(log));
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'we will just bind 47100 on both machines' });
+  await waitFor(() => A.call('lanchat:sessionFloor', { id: session.id }), 6000, 'the request to appear');
+  A.call('lanchat:floorAction', { id: session.id, action: 'hear' });
+  await waitFor(
+    () => A.store.read(session.id).some((m) => m.direction === 'in'),
+    20000,
+    'the first unsolicited turn'
+  );
+
+  // Left alone well past the debounce. A second turn here would be two observers
+  // talking to each other with somebody watching.
+  await new Promise((r) => setTimeout(r, 9000));
+  assert.equal(
+    A.store.read(session.id).filter((m) => m.direction === 'in').length,
+    1,
+    'one turn, and then it waits for a person'
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Interrupting: the loudest thing an observer can do, and the one that has to be
+// hardest to reach.
+
+// An observer that always finds a hard-constraint conflict worth interrupting
+// about, so the gates around it can be tested one at a time.
+function urgentObserver(log) {
+  return {
+    http: ({ id, name }) => ({
+      id,
+      name,
+      kind: 'stub',
+      start: async () => ({ detail: 'ready' }),
+      send: async ({ text }, h) => {
+        log.push({ name, text });
+        const cited = (text.match(/^\[([^\]\s]+)\]\s+\S.*:$/m) || [])[1] || 'm1';
+        if (/describe the plan being made/i.test(text)) {
+          return h.onDone?.({
+            text: blockOf([
+              `goal: Ship it today [${cited}]`,
+              `constraint: Must work on a LAN [${cited}] hard`,
+              `action: Broadcast on the public interface [${cited}]`,
+            ]),
+          });
+        }
+        if (/silence_risk/i.test(text)) {
+          return h.onDone?.({
+            text: blockOf([
+              'type: hard_constraint_conflict',
+              'claim: Broadcasting on the public interface breaks the LAN-only rule.',
+              `evidence: ${cited}`,
+              'novelty: 0.9',
+              'impact: 0.9',
+              'urgency: 0.9',
+              'confidence: 0.9',
+              'interruption_cost: 0.2',
+              'silence_risk: 0.9',
+            ]),
+          });
+        }
+        if (/the room agreed/i.test(text)) {
+          return h.onDone?.({ text: 'That broadcast leaves the LAN. Bind to the local interface instead.' });
+        }
+        return h.onDone?.({ text: `echo:${text}` });
+      },
+      stop: async () => {},
+    }),
+  };
+}
+
+test('a room that never agreed to interruptions is not interrupted', async () => {
+  // The default, and the assertion that matters most in this whole file. An
+  // agent that can cut across you is something you agree to, once, in your own
+  // words — so a session nobody configured must never produce one.
+  const log = [];
+  const { A, session } = await observerNode('no-interrupt', ['Mac'], urgentObserver(log));
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'we will broadcast on the public interface' });
+  await waitFor(() => log.some((l) => /silence_risk/i.test(l.text)), 6000, 'the candidate pass to run');
+  await new Promise((r) => setTimeout(r, 400));
+
+  // It has not cut in. It may still ask for the floor — that is the loudest a
+  // room which has not opted in can be shown — but nothing has been said yet.
+  assert.equal(
+    A.store.read(session.id).filter((m) => m.direction === 'in').length,
+    0,
+    'nothing was said without waiting for a gap'
+  );
+});
+
+test('a room that agreed is interrupted at once, and only about a stated rule', async () => {
+  const log = [];
+  const { A, session } = await observerNode('interrupt', ['Mac'], urgentObserver(log));
+  A.call('lanchat:setSessionCounsel', { id: session.id, observer: { protective: true } });
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'we will broadcast on the public interface' });
+  // No waiting for a seam: that is the whole difference between this and the
+  // soft floor, so a short window is the assertion.
+  await waitFor(
+    () => A.store.read(session.id).some((m) => m.direction === 'in'),
+    8000,
+    'the interruption to land'
+  );
+
+  const said = A.store.read(session.id).filter((m) => m.direction === 'in');
+  assert.equal(said.length, 1, 'one interruption');
+  assert.equal(said[0].speaker, 'Mac');
+  assert.match(said[0].text, /leaves the LAN/);
+});
+
+test('switching interruptions back off stops them', async () => {
+  const log = [];
+  const { A, session } = await observerNode('un-interrupt', ['Mac'], urgentObserver(log));
+  A.call('lanchat:setSessionCounsel', { id: session.id, observer: { protective: true } });
+  A.call('lanchat:setSessionCounsel', { id: session.id, observer: { protective: false } });
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'we will broadcast on the public interface' });
+  await waitFor(() => log.some((l) => /silence_risk/i.test(l.text)), 6000, 'the candidate pass to run');
+  await new Promise((r) => setTimeout(r, 400));
+
+  assert.equal(
+    A.store.read(session.id).filter((m) => m.direction === 'in').length,
+    0,
+    'the switch is the stop, and it takes effect on the next candidate'
+  );
+});
+
+test('turning interruptions on does not disturb the rest of the settings', async () => {
+  // The observer patch is merged rather than written wholesale, so switching one
+  // thing cannot silently reset another.
+  const { A, session } = await observerNode('merge-settings', ['Mac'], urgentObserver([]));
+  A.call('lanchat:setSessionCounsel', { id: session.id, observer: { protective: true } });
+  A.call('lanchat:setSessionCounsel', { id: session.id, agentIds: [] });
+  const record = A.call('lanchat:listSessions').find((s) => s.id === session.id);
+  assert.equal(record.observer.protective, true, 'changing the counsel left the switch alone');
+  assert.equal(record.mode, 'observer', 'and the mode too');
+});
+
+test('a fumbled block is asked for once more, and a missing one is not', async () => {
+  // Two different failures that must be treated differently: a model that
+  // understood the shape and got it wrong is worth one more run; a transport
+  // that will never emit a block is not, and asking twice buys a second nothing.
+  const asked = [];
+  const fumbling = {
+    http: ({ id, name }) => ({
+      id,
+      name,
+      kind: 'stub',
+      start: async () => ({ detail: 'ready' }),
+      send: async ({ text }, h) => {
+        asked.push(text);
+        const cited = (text.match(/^\[([^\]\s]+)\]\s+\S.*:$/m) || [])[1] || 'm1';
+        if (/describe the plan being made/i.test(text)) {
+          return h.onDone?.({
+            text: blockOf([
+              `goal: Ship it [${cited}]`,
+              `constraint: Must work on a LAN [${cited}] hard`,
+              `action: Bind 47100 [${cited}]`,
+            ]),
+          });
+        }
+        // The repair ask, answered properly this time. Checked before the
+        // candidate ask because the repair now repeats that ask in full — which
+        // is the whole point of it, since the answer has to cite message ids.
+        if (/could not be read/i.test(text)) {
+          return h.onDone?.({
+            text: blockOf([
+              'type: risk',
+              'claim: The port is never released when the host drops.',
+              `evidence: ${cited}`,
+              'novelty: 0.9',
+              'impact: 0.4',
+              'urgency: 0.2',
+              'confidence: 0.9',
+              'interruption_cost: 0.4',
+              'silence_risk: 0.3',
+            ]),
+          });
+        }
+        // A block with no claim in it: understood the shape, fumbled the content.
+        if (/silence_risk/i.test(text)) return h.onDone?.({ text: blockOf(['type: risk']) });
+        return h.onDone?.({ text: `echo:${text}` });
+      },
+      stop: async () => {},
+    }),
+  };
+
+  const { A, session } = await observerNode('repair', ['Mac'], fumbling);
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'we will bind 47100 on both machines' });
+  await waitFor(
+    () => A.call('lanchat:sessionShelf', { id: session.id }).length > 0,
+    8000,
+    'the repaired candidate to reach the shelf'
+  );
+
+  const repairs = asked.filter((t) => /could not be read/i.test(t));
+  assert.equal(repairs.length, 1, 'asked again exactly once — never twice');
+  const [card] = A.call('lanchat:sessionShelf', { id: session.id });
+  assert.match(card.claim, /never released/, 'and the second answer is the one that counted');
+});
+
+test('an observer that is told "not now" says nothing and keeps the idea', async () => {
+  const log = [];
+  const { A, session } = await observerNode('not-now', ['Mac'], floorObserver(log));
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'we will just bind 47100 on both machines' });
+  await waitFor(() => A.call('lanchat:sessionFloor', { id: session.id }), 6000, 'the request to appear');
+
+  A.call('lanchat:floorAction', { id: session.id, action: 'shelf' });
+  assert.equal(A.call('lanchat:sessionFloor', { id: session.id }), null, 'the request is gone');
+  // "Not now" is the answer that stops the choice being between an interruption
+  // and losing the idea: it becomes an ordinary card.
+  const shelf = A.call('lanchat:sessionShelf', { id: session.id });
+  assert.equal(shelf.length, 1, 'and the idea is on the shelf');
+  assert.match(shelf[0].claim, /Nothing releases the port/);
+
+  await new Promise((r) => setTimeout(r, 9000));
+  assert.equal(A.store.read(session.id).filter((m) => m.direction === 'in').length, 0, 'and it never speaks');
+});
+
+test('an observer that is told no is gone, idea and all', async () => {
+  const log = [];
+  const { A, session } = await observerNode('told-no', ['Mac'], floorObserver(log));
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'we will just bind 47100 on both machines' });
+  await waitFor(() => A.call('lanchat:sessionFloor', { id: session.id }), 6000, 'the request to appear');
+
+  A.call('lanchat:floorAction', { id: session.id, action: 'dismiss' });
+  assert.equal(A.call('lanchat:sessionFloor', { id: session.id }), null);
+  assert.deepEqual(A.call('lanchat:sessionShelf', { id: session.id }), [], 'no is the end of it');
+
+  await new Promise((r) => setTimeout(r, 9000));
+  assert.equal(A.store.read(session.id).filter((m) => m.direction === 'in').length, 0);
+});
+
+test('granting the floor twice does not start two clocks', async () => {
+  const log = [];
+  const { A, session } = await observerNode('twice', ['Mac'], floorObserver(log));
+
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'we will just bind 47100 on both machines' });
+  await waitFor(() => A.call('lanchat:sessionFloor', { id: session.id }), 6000, 'the request to appear');
+
+  assert.equal(A.call('lanchat:floorAction', { id: session.id, action: 'hear' }), true);
+  // Idempotent: a second press is not an error and must not produce a second
+  // turn once the gap arrives.
+  assert.equal(A.call('lanchat:floorAction', { id: session.id, action: 'hear' }), true);
+  await waitFor(
+    () => A.store.read(session.id).some((m) => m.direction === 'in'),
+    20000,
+    'the one turn to land'
+  );
+  await new Promise((r) => setTimeout(r, 2000));
+  assert.equal(A.store.read(session.id).filter((m) => m.direction === 'in').length, 1, 'one grant, one turn');
+});
+
+// ---------------------------------------------------------------------------
+// A shared session, over a real socket.
+//
+// This is the part of the feature that moves data between computers, so it is
+// proved between two nodes on real sockets rather than against a stub. What is
+// being tested is not that a message arrives — it is that the ones which should
+// not arrive do not.
+
+test('a session can be shared with a person, and their words reach the room', async (t) => {
+  const A = makeNode('host', await freePort());
+  const B = makeNode('guest', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+  await connect(B, A);
+  const idB = B.getIdentity().id;
+
+  const session = A.call('lanchat:createSession', { title: 'where to put the lock' });
+  assert.equal(A.call('lanchat:inviteToSession', { id: session.id, peerId: idB }), true);
+
+  // The invitation reaches B and is written down as an invitation — not as a
+  // room they are in. An invitation is not a key.
+  await waitFor(
+    () => B.call('lanchat:listSessions').some((s) => s.id === session.id),
+    5000,
+    'the invitation to arrive'
+  );
+  const invited = B.call('lanchat:listSessions').find((s) => s.id === session.id);
+  assert.equal(invited.hostPeerId, A.getIdentity().id, "B's copy knows whose room it is");
+  assert.equal(invited.title, 'where to put the lock', 'and what it is called');
+
+  // Before accepting, B may not put anything in it.
+  B.call('lanchat:sendChat', { peerId: session.id, text: 'sneaking in' });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(
+    A.store.read(session.id).length,
+    0,
+    'nothing from somebody who has not accepted reaches the room'
+  );
+
+  B.call('lanchat:answerSessionInvite', { id: session.id, accepted: true });
+  await waitFor(
+    () =>
+      (A.call('lanchat:listSessions').find((x) => x.id === session.id).members || []).some(
+        (m) => m.peerId === idB && m.state === 'joined'
+      ),
+    5000,
+    'the host to record the acceptance'
+  );
+
+  // Now their words do arrive, attributed.
+  B.call('lanchat:sendChat', { peerId: session.id, text: 'put it in the coordinator' });
+  await waitFor(() => A.store.read(session.id).length > 0, 5000, "B's message to reach the host");
+  const said = A.store.read(session.id);
+  assert.equal(said.length, 1);
+  assert.equal(said[0].text, 'put it in the coordinator');
+  assert.equal(said[0].speaker, 'guest', 'and it says who said it');
+});
+
+test('a peer who was never invited cannot put anything in a room', async (t) => {
+  const A = makeNode('host2', await freePort());
+  const B = makeNode('stranger', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+  await connect(B, A);
+
+  // A room A made and told nobody about. B knows the id only because this test
+  // hands it over — which is the point: knowing the name of a room is not
+  // membership of it.
+  const session = A.call('lanchat:createSession', { title: 'private' });
+  B.hub.send(A.getIdentity().id, {
+    type: 'session-chat',
+    sessionId: session.id,
+    text: 'let me in',
+  });
+  await new Promise((r) => setTimeout(r, 400));
+
+  assert.equal(A.store.read(session.id).length, 0, 'membership is looked up, never taken from the frame');
+});
+
+test('a peer cannot hand us a transcript for a room we do not belong to', async (t) => {
+  const A = makeNode('victim', await freePort());
+  const B = makeNode('liar', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+  await connect(B, A);
+
+  const session = A.call('lanchat:createSession', { title: 'ours' });
+  A.store.append(session.id, {
+    id: 'real-1',
+    peerId: session.id,
+    direction: 'out',
+    kind: 'text',
+    text: 'something we actually said',
+    ts: Date.now(),
+  });
+
+  // A sync frame is how a newcomer is given the conversation. Accepting one for
+  // a room we host would let any online peer replace our transcript.
+  B.hub.send(A.getIdentity().id, {
+    type: 'session-sync',
+    sessionId: session.id,
+    messages: [{ id: 'fake', text: 'nothing like what was said', ts: Date.now() }],
+  });
+  await new Promise((r) => setTimeout(r, 400));
+
+  const thread = A.store.read(session.id);
+  assert.equal(thread.length, 1, 'the transcript is untouched');
+  assert.equal(thread[0].text, 'something we actually said');
+});
+
+test('a guest joining is given what was said before they arrived', async (t) => {
+  const A = makeNode('host3', await freePort());
+  const B = makeNode('latecomer', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+  await connect(B, A);
+  const idB = B.getIdentity().id;
+
+  const session = A.call('lanchat:createSession', { title: 'already going' });
+  A.store.append(session.id, {
+    id: 'earlier-1',
+    peerId: session.id,
+    direction: 'out',
+    kind: 'text',
+    text: 'we settled on the coordinator',
+    ts: Date.now(),
+  });
+
+  A.call('lanchat:inviteToSession', { id: session.id, peerId: idB });
+  await waitFor(
+    () => B.call('lanchat:listSessions').some((s) => s.id === session.id),
+    5000,
+    'the invitation'
+  );
+  B.call('lanchat:answerSessionInvite', { id: session.id, accepted: true });
+
+  // A room walked into halfway through is unreadable without it.
+  await waitFor(() => B.store.read(session.id).length > 0, 5000, 'the transcript to arrive');
+  assert.match(B.store.read(session.id)[0].text, /settled on the coordinator/);
+});
+
+test('declining an invitation leaves nothing behind', async (t) => {
+  const A = makeNode('host4', await freePort());
+  const B = makeNode('declines', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+  await connect(B, A);
+  const idB = B.getIdentity().id;
+
+  const session = A.call('lanchat:createSession', { title: 'no thanks' });
+  A.call('lanchat:inviteToSession', { id: session.id, peerId: idB });
+  await waitFor(
+    () => B.call('lanchat:listSessions').some((s) => s.id === session.id),
+    5000,
+    'the invitation'
+  );
+
+  B.call('lanchat:answerSessionInvite', { id: session.id, accepted: false });
+  assert.equal(
+    B.call('lanchat:listSessions').some((s) => s.id === session.id),
+    false,
+    'a room nobody agreed to join is not a workspace'
+  );
+  await waitFor(
+    () =>
+      (A.call('lanchat:listSessions').find((x) => x.id === session.id).members || []).some(
+        (m) => m.peerId === idB && m.state === 'declined'
+      ),
+    5000,
+    'and the host is told so rather than left waiting'
+  );
+});

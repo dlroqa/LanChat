@@ -7257,6 +7257,234 @@ code.path {
    and the type inside the connection panel follows the panel's own width, so
    the one thing left that a proportion cannot express is a panel going away. */
 
+/* ---- the idea shelf ---------------------------------------------------------
+   What the observers noticed, under the session title.
+
+   Built to be ignorable. Everything else that arrives unbidden in this window
+   asks for something — an unread mark, a sound, a bubble that pushes the
+   conversation up — and the whole argument for leaving an observer switched on
+   is that this does not. So: no badge, no pulse, no entry animation, and a
+   resting state quiet enough to read past.
+
+   The tint on a card is a second signal and never the only one. Each card says
+   what kind of thing it is in words, and the colour only ever agrees with the
+   word beside it. */
+.idea-shelf {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.idea-shelf-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  /* A long shelf scrolls rather than pushing the agent chip off the header.
+     The row is subordinate to the controls beside it and gives way first. */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.idea-shelf-row::-webkit-scrollbar {
+  display: none;
+}
+.idea-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    border-color 0.12s ease;
+}
+.idea-card:hover,
+.idea-card.open {
+  background: var(--surface-hover);
+  color: var(--fg);
+  border-color: var(--border);
+}
+.idea-card:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+.idea-card-what {
+  white-space: nowrap;
+}
+/* The three tints. Borders rather than fills: a filled chip reads as a thing to
+   act on, and these are things to glance at. */
+.idea-card.hard {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+.idea-card.warn {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+}
+.idea-card.idea {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+}
+
+.idea-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  width: min(340px, 78vw);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  box-shadow: 0 12px 28px rgb(0 0 0 / 45%);
+}
+.idea-pop-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.idea-pop-what {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.idea-pop-age {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+.idea-pop-claim {
+  margin: 0 0 6px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fg);
+}
+.idea-pop-from {
+  margin: 0 0 10px;
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+.idea-pop-acts {
+  display: flex;
+  gap: 6px;
+}
+.idea-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--primary);
+  color: var(--on-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+.idea-act:hover {
+  background: var(--primary-hover);
+}
+.idea-act.quiet {
+  background: transparent;
+  color: var(--fg-muted);
+}
+.idea-act.quiet:hover {
+  background: var(--surface-hover);
+  color: var(--fg);
+}
+.idea-act:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+/* Nothing here moves for anybody who asked for less movement — and there is
+   little enough motion to begin with that removing it costs nothing. */
+@media (prefers-reduced-motion: reduce) {
+  .idea-card {
+    transition: none;
+  }
+}
+
+/* ---- an observer asking for the floor ---------------------------------------
+   Above the composer, because it is a decision and this is where decisions are
+   made in this window. Below the transcript, because nothing it says has been
+   said yet — granting it is what turns a claim into a message.
+
+   Louder than a shelf card and quieter than a message: it has a resting tint so
+   it is noticed, and no motion at all, because something that animates in above
+   the box you are typing in is a thing you resent. */
+.floor-req {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 14px 6px;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--primary) 40%, var(--border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface));
+}
+.floor-req-body {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.floor-req-who {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.floor-req-claim {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--fg-on-tint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.floor-req-waiting {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+.floor-req-acts {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 5px;
+}
+.floor-act {
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--primary);
+  color: var(--on-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+.floor-act:hover {
+  background: var(--primary-hover);
+}
+.floor-act.quiet {
+  background: transparent;
+  color: var(--fg-muted);
+}
+.floor-act.quiet:hover {
+  background: var(--surface-hover);
+  color: var(--fg);
+}
+.floor-act:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
 /* Below this there is no room for three panels. The side panel goes — and the
    grid must lose its third track with it, or the panel would be a third item
    with only two columns to sit in and would be auto-placed into a second row. */

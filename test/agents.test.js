@@ -2694,3 +2694,153 @@ test('the paths stay on this machine: a peer gets the words, never the filesyste
   assert.equal(reply.obj.text, 'Here it is.', 'and the marker naming it does not travel either');
   assert.ok(!JSON.stringify(reply.obj).includes(png), 'the path appears nowhere in the frame');
 });
+
+// ---- consulting: asking without it becoming part of the conversation ----
+//
+// Every other door into a transport ends at reply(), which puts words on the bus
+// where ipc.js files them in a thread. An observer working out whether it has
+// anything worth saying must not do that — it would print its reasoning into the
+// conversation it was meant to be quietly watching. These are the properties
+// that make the read-only door safe to leave open.
+
+test('a consult returns the words and writes nothing down', async () => {
+  const { agentHub, bus, store, log } = makeHub();
+  const { agent: rec } = await agentHub.add({
+    name: 'Watcher',
+    kind: 'http',
+    config: { baseUrl: 'http://x' },
+  });
+
+  const chats = [];
+  bus.on('peer-message', (m) => chats.push(m));
+
+  const said = await agentHub.consult(rec.id, 'is there a plan here?');
+  assert.equal(said, 'echo:is there a plan here?', 'the caller gets the text back');
+  assert.deepEqual(log, ['is there a plan here?'], 'and the agent really was asked');
+  // The whole point: nothing reached the bus, so nothing reached a thread.
+  assert.deepEqual(chats, [], 'a consult puts nothing on the bus');
+  assert.equal(store.read(rec.id).length, 0, 'and nothing in the transcript');
+});
+
+test('a consult never shows a thinking indicator', async () => {
+  const { agentHub, bus } = makeHub();
+  const { agent: rec } = await agentHub.add({
+    name: 'Watcher',
+    kind: 'http',
+    config: { baseUrl: 'http://x' },
+  });
+
+  const typing = [];
+  bus.on('agent-typing', (e) => typing.push(e));
+  await agentHub.consult(rec.id, 'anything?');
+  // A thread that says an agent is thinking when the person asked nothing is a
+  // lie about what the app is doing.
+  assert.deepEqual(typing, [], 'nobody is waiting, so nothing claims to be working');
+});
+
+test('a consult abandons the run rather than asking for approval', async () => {
+  const { agentHub, bus } = approvalHub();
+  const { agent: rec } = await agentHub.add({ name: 'Risky', kind: 'http', config: { baseUrl: 'http://x' } });
+
+  const cards = [];
+  bus.on('agent-approval', (e) => cards.push(e));
+
+  const said = await agentHub.consult(rec.id, 'have a look at this');
+  // The person did not start this and cannot be expected to adjudicate it.
+  assert.equal(said, null, 'a pass that wants approval produces nothing');
+  assert.deepEqual(cards, [], 'and no card is ever raised for it');
+});
+
+test('a consult that fails is silent rather than an error in the transcript', async () => {
+  const dir = tmpdir('consult-err');
+  const bus = new EventEmitter();
+  const hub = new PeerHub({ getIdentity: () => ({ id: 'me', name: 'Me' }), bus });
+  const agentHub = createAgentHub({
+    userDataDir: dir,
+    hub,
+    bus,
+    store: new MessageStore(dir),
+    safeStorage: fakeSafeStorage,
+    transports: {
+      http: ({ id, name }) => ({
+        id,
+        name,
+        kind: 'stub',
+        start: async () => ({ detail: 'ready' }),
+        send: async (_msg, h) => h.onError?.(new Error('timed out')),
+        stop: async () => {},
+      }),
+    },
+  });
+  const { agent: rec } = await agentHub.add({ name: 'Flaky', kind: 'http', config: { baseUrl: 'http://x' } });
+
+  const chats = [];
+  bus.on('peer-message', (m) => chats.push(m));
+  const said = await agentHub.consult(rec.id, 'anything?');
+  assert.equal(said, null, 'a failed consult is nothing, not an error');
+  // There is no question in the transcript for a warning to sit under, so
+  // writing one would be noise about something nobody asked for.
+  assert.deepEqual(chats, [], 'and no warning is written anywhere');
+});
+
+test('a consult leaves the agent free for a real question afterwards', async () => {
+  const { agentHub } = approvalHub();
+  const { agent: rec } = await agentHub.add({ name: 'Risky', kind: 'http', config: { baseUrl: 'http://x' } });
+
+  // The approval path is the one that abandons a run mid-flight, so it is the
+  // one most likely to leave the busy flag stuck — which would silently take the
+  // agent out of every counsel it belongs to.
+  await agentHub.consult(rec.id, 'first');
+  assert.equal(agentHub.isBusy(rec.id), false, 'the busy flag is released either way');
+});
+
+test('a consult is refused while the agent is genuinely busy', async () => {
+  const dir = tmpdir('consult-busy');
+  const bus = new EventEmitter();
+  const hub = new PeerHub({ getIdentity: () => ({ id: 'me', name: 'Me' }), bus });
+  let release = null;
+  const agentHub = createAgentHub({
+    userDataDir: dir,
+    hub,
+    bus,
+    store: new MessageStore(dir),
+    safeStorage: fakeSafeStorage,
+    transports: {
+      http: ({ id, name }) => ({
+        id,
+        name,
+        kind: 'stub',
+        start: async () => ({ detail: 'ready' }),
+        send: async (_msg, h) => {
+          await new Promise((r) => {
+            release = () => {
+              h.onDone?.({ text: 'done' });
+              r();
+            };
+          });
+        },
+        stop: async () => {},
+      }),
+    },
+  });
+  const { agent: rec } = await agentHub.add({ name: 'Slow', kind: 'http', config: { baseUrl: 'http://x' } });
+
+  const running = agentHub.consult(rec.id, 'first');
+  await waitForBusy(agentHub, rec.id);
+  // Background work must never queue behind, or barge in front of, a real one.
+  assert.equal(await agentHub.consult(rec.id, 'second'), null, 'a second consult is refused');
+  release();
+  assert.equal(await running, 'done');
+});
+
+function waitForBusy(agentHub, id, ms = 2000) {
+  const until = Date.now() + ms;
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      if (agentHub.isBusy(id)) return resolve();
+      if (Date.now() > until) return reject(new Error('agent never became busy'));
+      setTimeout(tick, 10);
+    };
+    tick();
+  });
+}
