@@ -112,6 +112,11 @@ function normalize(record) {
   // looking at it. Nothing has to be repaired and nothing is written back.
   if (record.members === undefined) record.members = [];
   if (record.hostPeerId === undefined) record.hostPeerId = null;
+  // Whether we have actually joined. A session we host is trivially joined —
+  // there was nobody to ask — and one somebody else runs is not, until the
+  // person here says so. Derived rather than defaulted to true, so an older
+  // record cannot read as an invitation nobody accepted.
+  if (record.accepted === undefined) record.accepted = !record.hostPeerId;
   // How loud this session's observers may be. Absent means the safe reading —
   // balanced, and never interrupting — which cleanObserver decides rather than
   // this line, so there is one place that opinion lives.
@@ -246,6 +251,9 @@ class SessionRegistry {
       turns: DEFAULT_TURNS,
       members: cleanMembers(members),
       hostPeerId,
+      // An invitation, not a room we are in. Nothing may be sent or received for
+      // this session until somebody here answers it — see answerInvite.
+      accepted: false,
       observer: cleanObserver(undefined),
       lastArrangement: null,
       createdAt: now,
@@ -269,6 +277,7 @@ class SessionRegistry {
     // roster, so a caller that changed nothing writes back what it read and this
     // stays a plain assignment rather than a second set of merge rules.
     if (patch.members !== undefined) record.members = cleanMembers(patch.members);
+    if (patch.accepted !== undefined) record.accepted = patch.accepted === true;
     if (patch.hostPeerId !== undefined) {
       record.hostPeerId = typeof patch.hostPeerId === 'string' && patch.hostPeerId ? patch.hostPeerId : null;
     }

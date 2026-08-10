@@ -48,6 +48,7 @@ export default function ChatPane({
   // whenever nothing is asking, which is nearly always.
   floor = null,
   onFloorAction,
+  onAnswerInvite,
   messages,
   typing,
   awaiting,
@@ -754,6 +755,26 @@ export default function ChatPane({
           />
         )}
       </div>
+
+      {/* An invitation to somebody else's session, waiting to be answered.
+          Above the composer with the rest of the things that are decisions, and
+          it replaces the composer rather than sitting beside it: there is
+          nothing to type into a room you have not joined. */}
+      {isSession && peer.hostPeerId && peer.accepted === false && (
+        <div className="invite-bar" role="status">
+          <span className="invite-bar-text">
+            <strong>{peer.name}</strong> — you have been invited to this session.
+          </span>
+          <span className="invite-bar-acts">
+            <button type="button" className="floor-act" onClick={() => onAnswerInvite(peer.id, true)}>
+              Join
+            </button>
+            <button type="button" className="floor-act quiet" onClick={() => onAnswerInvite(peer.id, false)}>
+              Decline
+            </button>
+          </span>
+        </div>
+      )}
 
       {/* An observer asking for the floor. Directly above the composer, because
           it is a decision and the composer is where decisions are made in this

@@ -2967,3 +2967,78 @@ test('declining an invitation leaves nothing behind', async (t) => {
     'and the host is told so rather than left waiting'
   );
 });
+
+test('an invitation reaches the other window, not just the other disk', async (t) => {
+  // The bug this pins: the guest's record was written and nothing published it,
+  // so the session existed on disk and the window never drew it. Every
+  // publishSessions() in ipc.js followed a local action; a change arriving over
+  // the wire needs telling exactly as much as one somebody clicked.
+  const A = makeNode('tell-host', await freePort());
+  const B = makeNode('tell-guest', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+  await connect(B, A);
+  const idB = B.getIdentity().id;
+
+  const session = A.call('lanchat:createSession', { title: 'come and look' });
+  A.call('lanchat:inviteToSession', { id: session.id, peerId: idB });
+
+  // The window is told, rather than the guest having to restart to find out.
+  const told = await waitFor(
+    () => B.events.filter((e) => e.type === 'sessions').pop(),
+    5000,
+    "B's window to be told about the session"
+  );
+  const drawn = (told.payload || []).find((s) => s.id === session.id);
+  assert.ok(drawn, 'the invitation is in the list the window renders from');
+  assert.equal(drawn.hostPeerId, A.getIdentity().id, 'and it knows whose room it is');
+  assert.equal(drawn.accepted, false, 'and that it has not been joined yet');
+});
+
+test('a guest cannot speak into a room it has not joined', async (t) => {
+  const A = makeNode('quiet-host', await freePort());
+  const B = makeNode('quiet-guest', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+  await connect(B, A);
+  const idB = B.getIdentity().id;
+
+  const session = A.call('lanchat:createSession', { title: 'not yours yet' });
+  A.call('lanchat:inviteToSession', { id: session.id, peerId: idB });
+  await waitFor(
+    () => B.call('lanchat:listSessions').some((s) => s.id === session.id),
+    5000,
+    'the invitation'
+  );
+
+  // An invitation is not a key from this side either. The words come back rather
+  // than being written into a room nobody has agreed to be in.
+  const said = B.call('lanchat:sendChat', { peerId: session.id, text: 'hello?' });
+  assert.equal(said.rejected, true);
+  assert.match(said.notice.text, /Join this session first/);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(A.store.read(session.id).length, 0, 'and nothing reached the host');
+
+  // Joining changes exactly that.
+  B.call('lanchat:answerSessionInvite', { id: session.id, accepted: true });
+  await waitFor(
+    () => B.call('lanchat:listSessions').find((s) => s.id === session.id).accepted === true,
+    5000,
+    'the join to land'
+  );
+  B.call('lanchat:sendChat', { peerId: session.id, text: 'hello now' });
+  await waitFor(() => A.store.read(session.id).length > 0, 5000, 'the message to reach the host');
+  assert.equal(A.store.read(session.id)[0].text, 'hello now');
+});

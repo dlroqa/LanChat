@@ -7558,6 +7558,32 @@ code.path {
   background-color: var(--surface-hover);
 }
 
+/* ---- an invitation waiting to be answered -----------------------------------
+   Somebody else's session, offered. It sits where the composer's decisions sit
+   and reads as an offer rather than an alert: being asked into a room is not a
+   warning. */
+.invite-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 14px 6px;
+  padding: 8px 11px;
+  border: 1px solid color-mix(in srgb, var(--primary) 40%, var(--border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface));
+}
+.invite-bar-text {
+  min-width: 0;
+  font-size: 13px;
+  color: var(--fg);
+}
+.invite-bar-acts {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
 /* Below this there is no room for three panels. The side panel goes — and the
    grid must lose its third track with it, or the panel would be a third item
    with only two columns to sit in and would be auto-placed into a second row. */

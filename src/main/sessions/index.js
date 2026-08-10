@@ -593,6 +593,12 @@ function createSessions({
     // the sentence, turning every word typed in a shared room into an error
     // about agents the person never expected to have.
     if (isGuest(record)) {
+      // Not joined yet. An invitation is not a key from this side either: until
+      // it is answered there is no room to speak into, and the words are handed
+      // back rather than written somewhere nobody will read them.
+      if (record.accepted !== true) {
+        return refuse(sessionId, text, docs, 'Join this session first — it belongs to somebody else.');
+      }
       const quotedForRoom = contextRecord(context);
       const mine = {
         id: crypto.randomUUID(),
@@ -1219,7 +1225,11 @@ function createSessions({
       sessions.remove(sessionId);
       return true;
     }
-    sessions.update(sessionId, { members: setState(record, record.hostPeerId, 'joined') });
+    sessions.update(sessionId, {
+      accepted: true,
+      members: setState(record, record.hostPeerId, 'joined'),
+    });
+    if (bus) bus.emit('session-room', { sessionId });
     return true;
   }
 

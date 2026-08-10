@@ -355,6 +355,22 @@ function createIpc({
   // shares with every other answer is where it ends up — appended to the session
   // and rendered as a message with a speaker — so that is done here, once,
   // beside the other writers rather than inside sessions.
+  // A room changed because somebody else did something.
+  //
+  // Every other publishSessions() in this file follows a local action, which is
+  // why these were missing and why an invitation arrived on disk and nowhere
+  // else: the record was written, and the window that had to draw it was never
+  // told. A change that arrives over the wire needs telling exactly as much as
+  // one somebody clicked.
+  bus.on('session-invited', () => publishSessions());
+  bus.on('session-room', () => publishSessions());
+  bus.on('session-synced', ({ sessionId }) => {
+    publishSessions();
+    // The transcript arrived with it, so the thread has to be re-read rather
+    // than left showing the empty room somebody just walked into.
+    emit('history', { peerId: sessionId, messages: store.read(sessionId) });
+  });
+
   bus.on('session-said', ({ sessionId, message }) => {
     if (!sessions.isSessionId(sessionId) || !message) return;
     store.append(sessionId, message);

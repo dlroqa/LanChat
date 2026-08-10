@@ -1030,6 +1030,17 @@ export default function App() {
         case 'sessions':
           setSessions(payload || []);
           break;
+        // A whole thread, handed over at once.
+        //
+        // Only a shared session produces one: joining a room means being given
+        // what was said before you arrived, and that arrives as a transcript
+        // rather than as messages. A thread is otherwise read once and kept, so
+        // without this a guest who had the session open while the sync landed
+        // would go on looking at the empty room they had just walked into.
+        case 'history':
+          setMessages((m) => ({ ...m, [payload.peerId]: payload.messages || [] }));
+          loadedPeers.current.add(payload.peerId);
+          break;
         // Where sessions are filed changed — a folder was made, named, deleted,
         // moved, or something was put in one. Published with the list above
         // every time, because a folder holds session ids and so the two are one
@@ -1461,6 +1472,7 @@ export default function App() {
         members: record.members || [],
         observer: record.observer || null,
         hostPeerId: record.hostPeerId || null,
+        accepted: record.accepted !== false,
       };
     }
     const live = peers.find((p) => p.id === selectedId);
@@ -1758,6 +1770,16 @@ export default function App() {
     () => peers.filter((p) => p.kind !== 'agent' && p.kind !== 'session' && p.online),
     [peers]
   );
+
+  // Answering an invitation to somebody else's session.
+  //
+  // Nothing is updated here: main writes the answer, tells the host, and
+  // republishes the list — declining removes the record entirely, which is why
+  // this cannot patch state locally and hope.
+  async function answerInvite(id, accepted) {
+    await api.answerSessionInvite(id, accepted);
+    if (!accepted && selectedId === id) setSelectedId(null);
+  }
 
   // Taking a card off the shelf.
   //
@@ -2532,6 +2554,7 @@ export default function App() {
             onAskIdea={askAboutIdea}
             floor={floors[selectedId] || null}
             onFloorAction={answerFloor}
+            onAnswerInvite={answerInvite}
             onStopRound={stopSessionRound}
             onPauseRound={pauseSessionRound}
             onResumeRound={resumeSessionRound}
