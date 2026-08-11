@@ -50,6 +50,10 @@ export default function AgentPicker({
   peers = [],
   members = [],
   observer = null,
+  // Who, of the people in the room, may put a question to the agents in it:
+  // `nobody`, `room`, or `chosen`. One rule with three settings rather than
+  // three switches — see room.js in main, which is the authority on it.
+  asking = 'nobody',
   // A session somebody else runs. Every control is read-only in one: the host
   // owns the mode, the counsel and the roster, and a guest changing them locally
   // would be a second source of truth for a conversation with one authority.
@@ -312,6 +316,54 @@ export default function AgentPicker({
       .map((m) => ({ id: m.peerId, name: m.name, online: false })),
   ];
 
+  // Who may spend these agents.
+  //
+  // Radios rather than checkboxes because it really is one choice: the three
+  // settings are one rule, and a room where "anyone" and "the people I tick"
+  // could both be on would be a room with two answers to the same question.
+  //
+  // Above the roster rather than below it, because the last setting is about the
+  // ticks on those rows: a control that makes ticks appear has to come before
+  // the things it makes appear, or the ticks are a surprise.
+  //
+  // The notes say what it costs. "Anyone in the room" is a sentence about
+  // permission; "they can put questions to your agents" is the thing somebody
+  // actually needs to know before choosing it.
+  const askRow = (value, name, note) => (
+    <li role="none" key={value}>
+      <button
+        type="button"
+        role="menuitemradio"
+        aria-checked={asking === value}
+        className={`agent-pick agent-mode ${asking === value ? 'on' : ''}`}
+        disabled={guest}
+        onClick={() => onChange({ asking: value })}
+        onKeyDown={(e) => keys(e, () => onChange({ asking: value }))}
+        title={guest ? 'Only the person who started this session decides who may ask.' : ''}
+      >
+        <span className="agent-tick" aria-hidden="true">
+          {asking === value ? <Dot size={13} /> : null}
+        </span>
+        <span className="agent-pick-text">
+          <span className="agent-pick-name">{name}</span>
+          <span className="agent-pick-note">{note}</span>
+        </span>
+      </button>
+    </li>
+  );
+
+  const askingSection = (
+    <>
+      <li role="none" className="agent-menu-rule" />
+      <li role="none" className="agent-menu-head" aria-hidden="true">
+        Who may ask the agents
+      </li>
+      {askRow('nobody', 'Only me', 'anything the others say is chat, and stays chat')}
+      {askRow('room', 'Anyone in the room', 'they can put questions to your agents')}
+      {askRow('chosen', 'The people I tick', 'the rest are heard, and ask nobody')}
+    </>
+  );
+
   const peopleSection = (
     <>
       <li role="none" className="agent-menu-rule" />
@@ -322,8 +374,39 @@ export default function AgentPicker({
       {roster.map((peer) => {
         const member = members.find((m) => m.peerId === peer.id) || null;
         const here = Boolean(member && member.state === 'joined');
+        const who = peer.name || peer.hostname || 'this person';
+        // The second thing a row can carry, and only under the one policy that
+        // reads it: whether this person in particular may ask. Beside the row
+        // rather than inside it — the row is already a button, and a button
+        // inside a button is markup no browser agrees about.
+        const askPill =
+          asking === 'chosen' && here ? (
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={member.ask === true}
+              className={`agent-ask ${member.ask === true ? 'on' : ''}`}
+              disabled={guest}
+              onClick={() => onChange({ ask: peer.id, mayAsk: !member.ask })}
+              onKeyDown={(e) => keys(e, () => onChange({ ask: peer.id, mayAsk: !member.ask }))}
+              aria-label={`Let ${who} ask the agents`}
+              title={
+                guest
+                  ? 'Only the person who started this session decides who may ask.'
+                  : `Whether ${who} may put a question to the agents`
+              }
+            >
+              {/* Ticked and not ticked differ by a mark as well as a colour: the
+                  state is what this control is for, and colour alone is not a
+                  state anybody can be told about. */}
+              <span className="agent-ask-tick" aria-hidden="true">
+                {member.ask === true ? <Check size={11} /> : null}
+              </span>
+              Ask
+            </button>
+          ) : null;
         return (
-          <li key={peer.id} role="none">
+          <li key={peer.id} role="none" className={askPill ? 'agent-person' : undefined}>
             <button
               type="button"
               role="menuitemcheckbox"
@@ -349,6 +432,7 @@ export default function AgentPicker({
                 </span>
               </span>
             </button>
+            {askPill}
           </li>
         );
       })}
@@ -448,6 +532,7 @@ export default function AgentPicker({
               one person asking some agents a question, and a roster on it would
               be an invitation to a conversation that does not have a shape for
               more than one person to be in. */}
+          {ROOM_MODES.has(mode) ? askingSection : null}
           {ROOM_MODES.has(mode) ? peopleSection : null}
         </ul>
       )}

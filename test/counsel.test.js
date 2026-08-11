@@ -197,6 +197,17 @@ test('the header, the sidebar and the composer say the same thing about the same
   assert.match(copy.askPlaceholder(guest), /^Say something to the room…/);
   assert.doesNotMatch(copy.askPlaceholder(guest), /Tessie|Hermes/, 'and never promises them an answer');
   assert.match(copy.askPlaceholder({ ...guest, discussing: true }), /^Say something to the room…/);
+
+  // Unless the host has said this room may ask. Then the box says what typing
+  // now does, and names the host's cast doing it — the sentence is the same one
+  // the host reads, because from here on it means the same thing.
+  const allowed = { ...guest, mayAsk: true };
+  assert.match(copy.askPlaceholder(allowed), /^Ask Tessie and Hermes…/);
+  assert.match(copy.askPlaceholder({ ...allowed, mode: 'dialogue' }), /^Give Tessie and Hermes/);
+  // A permission with nobody to spend it on is still a room to talk in. The
+  // host's cast is empty until they tell us who is in it, and a box promising a
+  // question to nobody would be worse than one promising nothing.
+  assert.match(copy.askPlaceholder({ ...allowed, names: [] }), /^Say something to the room…/);
 });
 
 test('the thinking line names who is thinking, and who is still to be asked', () => {
@@ -505,4 +516,44 @@ test('mounted in a browser: pressing a person invites them rather than changing 
   // Who is in a room and who a session asks are two different decisions, and the
   // patch says which one was made — App routes on exactly this.
   assert.deepEqual(result.steps.invited.patch, { invite: 'p-macpro', inviting: true });
+});
+
+test('mounted in a browser: the tick that lets one person ask is inside the card and pressable', async () => {
+  const result = await longMenu();
+  if (result.skipped) {
+    console.log(`# skipped browser checks: ${result.skipped}`);
+    return;
+  }
+  const a = result.steps.asking;
+
+  // One rule, three settings, and the room's is the one marked.
+  assert.deepEqual(
+    a.settings.map((s) => [s.name, s.checked]),
+    [
+      ['Only me', 'false'],
+      ['Anyone in the room', 'false'],
+      ['The people I tick', 'true'],
+    ],
+    'the three settings are offered as the single choice they are'
+  );
+  // A control that makes ticks appear has to come before the things it makes
+  // appear, or the ticks are a surprise.
+  assert.equal(a.beforeRoster, true, 'the rule sits above the rows whose ticks it governs');
+
+  // The pill goes on a row that was already tight — a name that can be long, in
+  // a card 300px wide. Measured, because "looks fine on my screen" is how the
+  // last overflow in this menu shipped.
+  assert.deepEqual(a.overflow, [], 'nothing paints outside the menu now there is a pill on the rows');
+  assert.equal(a.ticked.pill, true, 'somebody in the room has a tick beside their name');
+  assert.equal(a.ticked.checked, 'true', 'and it says which way it is set');
+  assert.equal(a.ticked.label, 'Let Zima ask the agents', 'named, for anybody who cannot see the row');
+  assert.equal(a.ticked.inside, true, 'inside the card it belongs to');
+  assert.equal(a.ticked.reachable, true, 'and pressable where it is drawn');
+  assert.equal(a.unticked.checked, 'false');
+  assert.equal(a.unticked.reachable, true);
+  // Somebody who was asked and never answered is not in the room, and a
+  // permission beside their name would be one nobody is there to use.
+  assert.equal(a.invited.pill, false, 'an unanswered invitation carries no tick');
+  // And the row itself still works: a pill beside a button must not cover it.
+  for (const row of a.reachableRows) assert.equal(row.hit, true, `${row.name}'s row is still pressable`);
 });

@@ -7553,6 +7553,61 @@ code.path {
   font-weight: 400;
 }
 
+/* A person in the room, with the one thing that can be said about them besides
+   being here: whether they may ask. Two controls on one line, so the row is a
+   flex container and the name still takes whatever the pill leaves. */
+.agent-person {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The tick that lets one person ask.
+   Deliberately a pill with a word in it rather than a bare checkbox: it sits
+   beside a row that is already a checkbox meaning something else, and two
+   identical boxes on one line would be two ticks with no way to tell which is
+   which. Off is outlined and dim, on is the accent — and a mark appears in it,
+   because a state carried by colour alone is a state somebody cannot see. */
+.agent-ask {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  margin-right: 5px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.agent-ask:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--fg);
+}
+.agent-ask.on {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  color: var(--fg);
+}
+.agent-ask:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+/* The box the mark goes in, drawn at a fixed width whether or not there is a
+   mark in it — a pill that changed size on being ticked would move the row it
+   is in. */
+.agent-ask-tick {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 11px;
+  color: var(--primary);
+}
+
 /* The scrollbar. Shown rather than hidden: this menu can now be taller than it
    is, and a scroll region with no visible bar is one people do not know they
    can scroll. Narrow and dim, because it is a hint and not furniture. */

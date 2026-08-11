@@ -45,6 +45,25 @@ function cleanState(state) {
   return STATES.includes(state) ? state : 'invited';
 }
 
+// Who, of the people in a room, may put a question to the agents in it.
+//
+// One rule with three settings rather than three switches, and that is the whole
+// design decision: asking somebody else's agent spends their machine, their API
+// budget and their turn queue, so there has to be exactly one place that says
+// who may do it. Two flags — "let the room ask" beside "let these people ask" —
+// would be two authorities with a precedence nobody wrote down.
+//
+// `nobody` is the default and it is what every room did before this existed: a
+// member's words are chat, the host's are the questions. `room` is anybody who
+// has actually joined. `chosen` is the same list narrowed by hand, member by
+// member, and it is the only setting that reads `member.ask`.
+const ASKING = ['nobody', 'room', 'chosen'];
+const DEFAULT_ASKING = 'nobody';
+
+function cleanAsking(asking) {
+  return ASKING.includes(asking) ? asking : DEFAULT_ASKING;
+}
+
 // The people in a session, cleaned.
 //
 // Peer ids only, nothing blank, nobody twice, and the order kept — a roster is
@@ -63,6 +82,12 @@ function cleanMembers(members) {
       peerId,
       name: typeof raw.name === 'string' && raw.name ? raw.name : null,
       state: cleanState(raw.state),
+      // Whether this person in particular may ask the agents. Read only when the
+      // room's policy is `chosen`, and carried whatever the policy is: somebody
+      // ticked while the room was open to everybody keeps their tick when it is
+      // narrowed again, which is the difference between a setting and a mode
+      // that forgets what you told it.
+      ask: raw.ask === true,
       at: Number.isFinite(Number(raw.at)) ? Number(raw.at) : 0,
     });
   }
@@ -108,11 +133,11 @@ function memberOf(record, peerId) {
   return members(record).find((m) => m.peerId === peerId) || null;
 }
 
-// ---- the three permissions ----
+// ---- the four permissions ----
 //
-// Deliberately three functions rather than one `can(action)`: each has a
-// different answer for the host, and a single switch statement is where the
-// three quietly grow a shared default that nobody meant.
+// Deliberately four functions rather than one `can(action)`: each has a
+// different answer for the host, and a single switch statement is where they
+// quietly grow a shared default that nobody meant.
 
 // Whether a peer's words may be written into this session.
 //
@@ -142,6 +167,33 @@ function maySetup(record, peerId) {
   return peerId == null;
 }
 
+// Whether a peer's words may be put to this session's agents, rather than only
+// written down and passed round.
+//
+// The narrower half of mayPost, and it is deliberately a second question rather
+// than a stricter answer to the first: everybody present may say something, and
+// saying something is not the same act as spending somebody else's agent on it.
+// A room where the two were one permission would have to choose between a silent
+// guest and a guest who can run up a bill.
+//
+// `peerId == null` is us, at this keyboard, in a session we host — always true,
+// because the whole policy is about what the host lets other people do and the
+// host was never asking permission. A guest's copy answers false to everybody
+// including itself: what a guest may do is the host's answer to this question,
+// and it arrives on a frame (`record.mayAsk`) rather than being worked out from
+// a roster this machine does not own.
+function mayAsk(record, peerId) {
+  if (!record) return false;
+  if (isGuest(record)) return false;
+  if (peerId == null) return true;
+  const member = memberOf(record, peerId);
+  if (!member || !PRESENT.has(member.state)) return false;
+  const policy = cleanAsking(record.asking);
+  if (policy === 'room') return true;
+  if (policy === 'chosen') return member.ask === true;
+  return false;
+}
+
 // Whether we may act on a `session-sync` or `session-state` from this peer.
 //
 // Only from the host of a session we actually joined. A peer that is merely
@@ -167,6 +219,19 @@ function invite(record, peerId, name = null, at = Date.now()) {
     return list.map((m) => (m.peerId === peerId ? { ...m, state: 'invited', at } : m));
   }
   return [...list, { peerId, name: name || null, state: 'invited', at }];
+}
+
+// Ticking one person as somebody who may ask.
+//
+// Only meaningful under the `chosen` policy, and deliberately still allowed
+// under the other two: a host narrowing the room from `room` to `chosen` should
+// find the ticks they made earlier still there rather than an empty list. It is
+// a fact about a person, and the policy decides whether the fact is consulted.
+//
+// Somebody who is not on the roster is not ticked into being on it — an unknown
+// peer id comes back as the list unchanged, so the caller writes nothing.
+function setAsk(record, peerId, ask) {
+  return members(record).map((m) => (m.peerId === peerId ? { ...m, ask: ask === true } : m));
 }
 
 function setState(record, peerId, state, at = Date.now()) {
@@ -215,7 +280,10 @@ function audience(record, except = null) {
 
 module.exports = {
   STATES,
+  ASKING,
+  DEFAULT_ASKING,
   cleanState,
+  cleanAsking,
   cleanMembers,
   isHost,
   isGuest,
@@ -224,9 +292,11 @@ module.exports = {
   present,
   memberOf,
   mayPost,
+  mayAsk,
   maySetup,
   mayDirect,
   invite,
+  setAsk,
   setState,
   accept,
   decline,

@@ -97,6 +97,7 @@ const card = () => {
     agentNames: counsel.map((a) => a.name),
     members: record.members || [],
     observer: record.observer || null,
+    asking: record.asking || 'nobody',
     agentId: counsel[0] ? counsel[0].id : null,
     agentName: counsel[0] ? counsel[0].name : null,
   };
@@ -419,6 +420,73 @@ function state() {
   // asserting the half-written question survived each interaction, and inviting
   // somebody is an interaction the composer must live through too.
   steps.invited = { ...state(), patch: patches[before] || null };
+
+  // ---- who may ask ----
+  //
+  // The rule the menu grew last: three settings, and under the third a tick on
+  // each person's own row. Both are laid out beside things that were already
+  // tight — a pill on a row whose name can be long, in a card 300px wide — so
+  // what is measured here is the part no test of the markup can see: that
+  // nothing escapes the card, and that every one of it can be pressed.
+  chip().click();
+  await wait(120);
+  record = {
+    ...record,
+    asking: 'chosen',
+    members: [
+      { peerId: 'p-zima', name: 'Zima', state: 'joined', ask: true },
+      { peerId: 'p-macpro', name: 'MacPro', state: 'joined', ask: false },
+      { peerId: 'p-macmini', name: 'Macmini', state: 'invited', ask: false },
+    ],
+  };
+  draw();
+  await wait(160);
+  const pill = (name) => {
+    const row = [...menu().querySelectorAll('.agent-person')].find(
+      (li) => (li.querySelector('.agent-pick-name') || {}).textContent === name
+    );
+    if (!row) return { found: false };
+    const btn = row.querySelector('.agent-ask');
+    if (!btn) return { found: true, pill: false };
+    btn.scrollIntoView({ block: 'nearest' });
+    const r = btn.getBoundingClientRect();
+    const box = menu().getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return {
+      found: true,
+      pill: true,
+      checked: btn.getAttribute('aria-checked'),
+      label: btn.getAttribute('aria-label'),
+      // Inside the card it belongs to, and hittable where it is drawn.
+      inside: r.right <= box.right + 1 && r.left >= box.left - 1,
+      reachable: Boolean(hit && btn.contains(hit)),
+      height: Math.round(r.height),
+    };
+  };
+  steps.asking = {
+    ...state(),
+    settings: modes()
+      .map((r) => ({
+        name: r.querySelector('.agent-pick-name').textContent,
+        checked: r.getAttribute('aria-checked'),
+      }))
+      .filter((r) => ['Only me', 'Anyone in the room', 'The people I tick'].includes(r.name)),
+    // Above the rows whose ticks it governs: a control that makes ticks appear
+    // has to come before the things it makes appear.
+    beforeRoster: (() => {
+      const all = [...menu().children];
+      const rule = all.findIndex((li) => li.textContent === 'The people I tick');
+      const person = all.findIndex((li) => li.classList.contains('agent-person'));
+      return rule > -1 && person > rule;
+    })(),
+    overflow: overflowing(),
+    ticked: pill('Zima'),
+    unticked: pill('MacPro'),
+    // Somebody who was asked and never answered is not in the room, and a tick
+    // beside their name would offer a permission to a person who is not there.
+    invited: pill('Macmini'),
+    reachableRows: ['Zima', 'MacPro'].map((n) => ({ name: n, ...reachable(n) })),
+  };
 
   const pre = document.createElement('pre');
   pre.id = 'result';

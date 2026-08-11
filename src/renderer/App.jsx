@@ -1496,6 +1496,14 @@ export default function App() {
         observer: record.observer || null,
         hostPeerId: record.hostPeerId || null,
         accepted: record.accepted !== false,
+        // Who in this room may ask the agents, and — in a room somebody else
+        // runs — whether that includes us. Two fields because two machines
+        // write them: the policy is the host's setting, and `mayAsk` is the
+        // host's answer about this peer, filed as it arrives. A guest that
+        // worked the second one out from the first would be applying a rule to
+        // a roster it does not own.
+        asking: record.asking || 'nobody',
+        mayAsk: record.mayAsk === true,
       };
     }
     const live = peers.find((p) => p.id === selectedId);
@@ -1791,6 +1799,15 @@ export default function App() {
       // disagree about who is in the room.
       if (patch.inviting) await api.inviteToSession(id, patch.invite);
       else await api.removeFromSession(id, patch.invite);
+      return;
+    }
+    // Nor is ticking one person as somebody who may ask. Same menu, same
+    // onChange, and separated here for the same reason: it is a fact about a
+    // member rather than about the counsel, and main publishes the whole list
+    // after it — the policy the tick is read under travels the other way, with
+    // the counsel, because that is what it is a fact about.
+    if (patch && patch.ask) {
+      await api.setMemberAsk(id, patch.ask, patch.mayAsk === true);
       return;
     }
     const record = await api.setSessionCounsel(id, patch);

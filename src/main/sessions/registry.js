@@ -5,7 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { cleanTurns, DEFAULT_TURNS } = require('./dialogue.js');
 const { cleanObserver } = require('./observer.js');
-const { cleanMembers } = require('./room.js');
+const { cleanMembers, cleanAsking, DEFAULT_ASKING } = require('./room.js');
 
 // Persistent list of sessions, stored as plain JSON in the Electron userData
 // dir — its own file rather than config.json, for the same reason agents.json is
@@ -143,6 +143,15 @@ function normalize(record) {
   // looking at it. Nothing has to be repaired and nothing is written back.
   if (record.members === undefined) record.members = [];
   if (record.hostPeerId === undefined) record.hostPeerId = null;
+  // Who in the room may ask the agents. Absent on everything written before this
+  // build, and absent reads as `nobody` — which is exactly what those rooms did.
+  // Cleaned rather than defaulted so a value nobody recognises degrades to the
+  // quiet setting rather than to whatever it happens to spell.
+  record.asking = cleanAsking(record.asking);
+  // And the host's answer for us, on a room somebody else runs. Never decided
+  // here: it arrives with the room's settings and is filed as told — see mayAsk
+  // in room.js for why a guest does not work this out for itself.
+  if (record.mayAsk === undefined) record.mayAsk = false;
   // Whether we have actually joined. A session we host is trivially joined —
   // there was nobody to ask — and one somebody else runs is not, until the
   // person here says so. Derived rather than defaulted to true, so an older
@@ -213,7 +222,7 @@ class SessionRegistry {
     return this.records.find((r) => r.id === id) || null;
   }
 
-  create({ title, agentId, agentIds, allAgents, mode, turns, members, hostPeerId, observer } = {}) {
+  create({ title, agentId, agentIds, allAgents, mode, turns, members, hostPeerId, observer, asking } = {}) {
     const now = Date.now();
     const list = agentIds ? cleanIds(agentIds) : cleanIds(agentId ? [agentId] : []);
     const record = {
@@ -248,6 +257,9 @@ class SessionRegistry {
       // Whose room it is. Null means ours — see isHost in room.js for why the
       // absence rather than a flag is the right way round.
       hostPeerId: typeof hostPeerId === 'string' && hostPeerId ? hostPeerId : null,
+      // Who in the room may put a question to the agents. Nobody, unless the
+      // person whose agents they are says otherwise.
+      asking: cleanAsking(asking),
       // How loud the observers may be, and whether they may interrupt at all.
       // Off, unless somebody says otherwise, and cleanObserver owns that.
       observer: cleanObserver(observer),
@@ -295,6 +307,13 @@ class SessionRegistry {
       turns: DEFAULT_TURNS,
       members: cleanMembers(members),
       hostPeerId,
+      // A guest holds no policy of its own: whose room it is decides who may ask
+      // in it. The field is here so every record has one shape, and `mayAsk`
+      // below is the only half of it a guest ever reads.
+      asking: DEFAULT_ASKING,
+      // Whether the host lets us ask their agents. False until they say
+      // otherwise, which they do with the room's settings the moment we join.
+      mayAsk: false,
       // An invitation, not a room we are in. Nothing may be sent or received for
       // this session until somebody here answers it — see answerInvite.
       accepted: false,
@@ -322,6 +341,14 @@ class SessionRegistry {
     // stays a plain assignment rather than a second set of merge rules.
     if (patch.members !== undefined) record.members = cleanMembers(patch.members);
     if (patch.accepted !== undefined) record.accepted = patch.accepted === true;
+    // The room's one rule about who may ask, and — on a guest's copy — the
+    // host's answer to it for us. Kept as two fields rather than one, because
+    // they are written by different machines: `asking` is the host's setting and
+    // `mayAsk` is what the host worked out from it about this peer. A guest that
+    // stored the policy and applied it locally would be a second reading of a
+    // roster it does not have.
+    if (patch.asking !== undefined) record.asking = cleanAsking(patch.asking);
+    if (patch.mayAsk !== undefined) record.mayAsk = patch.mayAsk === true;
     if (patch.hostPeerId !== undefined) {
       record.hostPeerId = typeof patch.hostPeerId === 'string' && patch.hostPeerId ? patch.hostPeerId : null;
     }

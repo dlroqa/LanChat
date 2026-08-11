@@ -14,9 +14,11 @@ const {
   isGuest,
   memberOf,
   mayPost,
+  mayAsk,
   maySetup,
   mayDirect,
   invite,
+  setAsk,
   setState,
   accept,
   decline,
@@ -210,7 +212,7 @@ function createSessions({
   // definition — the whole point of the setting is that the membership is not
   // fixed — and a best effort is the right amount for a field that only matters
   // to a version of the app this person may never run again.
-  function setCounsel(id, { agentIds, allAgents, mode, turns, observer } = {}) {
+  function setCounsel(id, { agentIds, allAgents, mode, turns, observer, asking } = {}) {
     // The host decides what a session is. A guest's copy is a view of theirs —
     // see maySetup in room.js — and a guest that could set its own mode would be
     // a second authority over a room it does not run, disagreeing with the one
@@ -226,11 +228,33 @@ function createSessions({
     // Merged rather than replaced in the registry — see update() there — so the
     // picker changing the level cannot silently switch interrupting back off.
     if (observer !== undefined) patch.observer = observer;
+    // Who in the room may ask these agents anything. Part of the counsel because
+    // it is a fact about the counsel rather than about the roster: it says what
+    // this list of agents may be spent on, and it comes through the same
+    // host-only door every other answer to "what is this session" does.
+    if (asking !== undefined) patch.asking = asking;
     if (allAgents === true) patch.agentId = askable().find((a) => a.ready)?.id || null;
     const updated = sessions.update(id, patch);
     // Everybody in the room is looking at this session too, and they are looking
     // at their own copy of its settings. Told here, at the one door every change
     // to a counsel comes through.
+    announce(id);
+    return updated;
+  }
+
+  // Ticking one person as somebody who may ask.
+  //
+  // Its own door rather than a field on setCounsel, because it is about one
+  // member and not about the session: a patch that carried both would have to
+  // decide what a roster change and a policy change mean when they arrive
+  // together. Host-only through the same maySetup that guards the rest, and it
+  // announces for the reason above — under the `chosen` policy this changes what
+  // one person's composer is allowed to promise, and they have to be told.
+  function setMemberAsk(id, peerId, ask) {
+    const record = get(id);
+    if (!record || !maySetup(record, null) || !peerId) return null;
+    if (!memberOf(record, peerId)) return null;
+    const updated = sessions.update(id, { members: setAsk(record, peerId, ask) });
     announce(id);
     return updated;
   }
@@ -580,6 +604,68 @@ function createSessions({
     };
   }
 
+  // A member of the room said something, written down and passed on.
+  //
+  // The first thing that happens to a member's sentence and, when they may not
+  // ask, the only thing. It is deliberately ahead of every refusal below it:
+  // what somebody in a room types is chat first and a question second, so it is
+  // in the transcript and on everybody's screen before anything decides whether
+  // the agents are allowed to hear it. The host's own words go the other way
+  // round — refused before they are written, because there is a composer at this
+  // end to hand them back to.
+  //
+  // The id and the moment come from the sender, so one sentence has one id in
+  // every copy of the room; the name does not — attribution is the host's, taken
+  // from the identity the socket was proved on rather than from a field on the
+  // frame.
+  function heard(sessionId, text, from) {
+    const message = {
+      id: from.id || crypto.randomUUID(),
+      peerId: sessionId,
+      direction: 'in',
+      kind: 'text',
+      text,
+      ts: Number.isFinite(from.ts) ? from.ts : Date.now(),
+      speaker: from.name,
+    };
+    store.append(sessionId, message);
+    if (bus) bus.emit('session-said', { sessionId, message });
+    sessions.touch(sessionId);
+    // On to the rest of the room, minus whoever said it — see share() for why
+    // one door does all the relaying.
+    share(sessionId, message, { except: from.peerId });
+    return message;
+  }
+
+  // Somebody in the room spoke, as an observed session counts it.
+  //
+  // The clock every seam is measured against, and the sweep that drops ideas
+  // about a conversation the room has since moved past. One function for the
+  // person at this keyboard and for a member of the room, because an observer
+  // watches the room rather than the keyboard: a session where a guest's turn
+  // did not move the clock would hold its ideas against a conversation that had
+  // gone on without them.
+  function noteHuman(sessionId, text) {
+    const state = watchStateFor(sessionId);
+    // When the person last spoke, and how much they said — the debounce is
+    // longer after one line than after a paragraph, because somebody who has
+    // just sent one line is usually still typing the next.
+    state.lastHumanAt = Date.now();
+    state.lastHumanText = text;
+    state.humanTurns = (state.humanTurns || 0) + 1;
+    const fresh = state.shelf.filter(
+      (c) =>
+        !expired(
+          { targetPlanVersion: c.planVersion, createdAt: c.createdAt },
+          { planVersion: state.frame.version, humanTurnsSince: state.humanTurns - c.atTurn }
+        )
+    );
+    if (fresh.length !== state.shelf.length) {
+      state.shelf = fresh;
+      publishWatch(sessionId, state);
+    }
+  }
+
   // Asks this session's counsel — one agent or several, ours or ones peers
   // shared.
   //
@@ -592,12 +678,49 @@ function createSessions({
   // typed one sentence, and a transcript that repeated it once per agent would be
   // claiming they asked three times; it would also have the session count three
   // commits for one piece of work, and put the same documents on three bubbles.
-  function send(sessionId, text, { prompt, docs = [], context = null } = {}) {
+  //
+  // `from` is somebody else in the room saying it rather than the person at this
+  // keyboard: `{ peerId, name, id, ts }`, filled in by onRoomChat once the
+  // sender has been proved and found on the roster. One door for both, so a
+  // member's sentence gets the same relay, the same mentions and the same
+  // observer as ours — the two orderings that differ are marked below.
+  function send(sessionId, text, { prompt, docs = [], context = null, from = null } = {}) {
     // get() rather than the registry's, so a session in the Trash refuses a
     // question exactly the way one that was never here does — see the note on
     // get() for why that rule lives in one place.
     const record = get(sessionId);
     if (!record) return refuse(sessionId, text, docs, 'That session no longer exists.');
+
+    // ---- somebody else's sentence ----
+    //
+    // Only a host has members, and only a host relays: a guest that reached here
+    // with a `from` would be acting as an authority over a room it does not run.
+    // Refused rather than written, and silently — there is nobody at this end to
+    // tell.
+    if (from && !isHost(record)) return null;
+    // Written and passed round the room before anything below can refuse it.
+    const said = from ? heard(sessionId, text, from) : null;
+    // What a refusal is for each of them. A member gets null: their words are
+    // already in the transcript and on every screen, there is no composer here
+    // to refill, and a sentence about our transport trouble sent back to
+    // somebody who cannot act on it is noise. Everything from here down refuses
+    // through this rather than through refuse() directly.
+    const deny = (reason) => (from ? null : refuse(sessionId, text, docs, reason));
+
+    // Whether the room lets this person put a question to the agents at all.
+    //
+    // Above the round check and above the counsel, because it decides which of
+    // two things the sentence just written was: a question, or a remark. A
+    // remark still moves an observed session — that is the whole of what
+    // observing is, and it has never depended on any permission — so the watch
+    // is kicked here before we go quiet.
+    if (from && !mayAsk(record, from.peerId)) {
+      if (record.mode === OBSERVER_MODE) {
+        noteHuman(sessionId, text);
+        Promise.resolve(watch(sessionId)).catch(() => {});
+      }
+      return null;
+    }
 
     // One round at a time. Two questions in flight at once would interleave two
     // sets of answers in one conversation with nothing to say which belonged to
@@ -612,8 +735,8 @@ function createSessions({
       // it still matters — so words typed into a live discussion join it instead
       // of being handed back with a refusal. Every other mode is one lap and is
       // over by the time a second question could sensibly be asked.
-      if (open.mode === 'dialogue') return interject(open, text, docs, context);
-      return refuse(sessionId, text, docs, 'The agents are still answering the last question asked here.');
+      if (open.mode === 'dialogue') return interject(open, text, docs, context, said);
+      return deny('The agents are still answering the last question asked here.');
     }
     if (open) closeRound(open);
 
@@ -656,7 +779,7 @@ function createSessions({
     // transcript nothing will ever answer, and the sentence says which of them
     // could not be reached and why — the difference between something to fix and
     // something to wait for.
-    if (targets.length === 0) return refuse(sessionId, text, docs, unreachableNotice(record, missed));
+    if (targets.length === 0) return deny(unreachableNotice(record, missed));
 
     // A discussion between one agent is not a discussion. Refused rather than
     // quietly run as a single question, because the two produce different
@@ -666,7 +789,7 @@ function createSessions({
     // Checked after the counsel is resolved and not before: whether there are
     // two agents to talk is a fact about this moment, not about the record.
     const dialogue = record.mode === 'dialogue';
-    if (dialogue && targets.length < 2) return refuse(sessionId, text, docs, soloNotice(targets, missed));
+    if (dialogue && targets.length < 2) return deny(soloNotice(targets, missed));
 
     // A cycle needs a room, for the same reason a discussion does: two of its
     // three parts are agents reading each other, and one agent has nobody to
@@ -674,7 +797,7 @@ function createSessions({
     // smaller thing, because somebody who chose this mode asked for a
     // conversation and would otherwise silently get a single answer.
     const human = record.mode === HUMAN_MODE;
-    if (human && targets.length < 2) return refuse(sessionId, text, docs, soloNotice(targets, missed));
+    if (human && targets.length < 2) return deny(soloNotice(targets, missed));
 
     // ---- observing ----
     //
@@ -709,7 +832,11 @@ function createSessions({
     // that fails does not put the hole back.
     if (record.needsContext) sessions.update(sessionId, { needsContext: false });
 
-    const message = {
+    // The question this round is answering. A member's sentence is already one —
+    // it was written and relayed at the top, before any of the refusals above
+    // could have handed it back — so this is where the two paths meet rather
+    // than where they part.
+    const message = said || {
       id: crypto.randomUUID(),
       peerId: sessionId,
       direction: 'out',
@@ -719,16 +846,18 @@ function createSessions({
       ...(docs.length && { docs: docs.map((d) => ({ name: d.name, bytes: d.bytes })) }),
       ...(quoted && { context: quoted }),
     };
-    // Written down before anybody is asked, and in that order: a transport that
-    // answers immediately would otherwise have its reply filed above the question
-    // it was answering.
-    store.append(sessionId, message);
-    sessions.touch(sessionId);
+    if (!said) {
+      // Written down before anybody is asked, and in that order: a transport that
+      // answers immediately would otherwise have its reply filed above the question
+      // it was answering.
+      store.append(sessionId, message);
+      sessions.touch(sessionId);
 
-    // The host's own words, passed on to the room — through the same door
-    // everything else said here goes through, so what the room is shown cannot
-    // depend on which writer wrote it.
-    share(sessionId, message);
+      // The host's own words, passed on to the room — through the same door
+      // everything else said here goes through, so what the room is shown cannot
+      // depend on which writer wrote it.
+      share(sessionId, message);
+    }
 
     // Said, and nobody asked anything.
     //
@@ -753,29 +882,11 @@ function createSessions({
     // Speaking unasked waits for a way to consult an agent silently; staying
     // quiet does not, and staying quiet is the behaviour that makes an observed
     // session worth having.
-    if (observing) {
-      // When the person last spoke, and how much they said — the debounce is
-      // longer after one line than after a paragraph, because somebody who has
-      // just sent one line is usually still typing the next.
-      const state = watchStateFor(sessionId);
-      state.lastHumanAt = Date.now();
-      state.lastHumanText = text;
-      state.humanTurns = (state.humanTurns || 0) + 1;
-      // Ideas raised about a conversation the room has since moved past. Swept
-      // here, when the person speaks, because that is the event that moves it —
-      // a card is stale relative to what has been said, not to the clock alone.
-      const fresh = state.shelf.filter(
-        (c) =>
-          !expired(
-            { targetPlanVersion: c.planVersion, createdAt: c.createdAt },
-            { planVersion: state.frame.version, humanTurnsSince: state.humanTurns - c.atTurn }
-          )
-      );
-      if (fresh.length !== state.shelf.length) {
-        state.shelf = fresh;
-        publishWatch(sessionId, state);
-      }
-    }
+    // Somebody spoke: the seam clock moves, and ideas about a conversation the
+    // room has since moved past are swept. Both live in noteHuman, which is also
+    // what a member's remark goes through when they may not ask — see the gate
+    // at the top of this function.
+    if (observing) noteHuman(sessionId, text);
     if (observing && named.length === 0) {
       // Started and not awaited. The sentence is already accepted and written
       // down; whether an observer eventually has something to say about it is a
@@ -1256,14 +1367,29 @@ function createSessions({
       mode: record.mode,
       turns: record.turns,
       observer: record.observer,
+      // The rule about who may ask, as the room's setting. Sent so a guest can
+      // say what kind of room it is in; never applied there — what *this* peer
+      // may do arrives beside it, worked out here. See mayAsk in room.js.
+      asking: record.asking,
       counsel: targets.map((t) => ({ id: t.agentId, name: t.name })),
     };
   }
 
+  // Told to each peer separately, rather than to the room at once.
+  //
+  // Everything in the settings is the same sentence for everybody except one
+  // field, and that field is the point of sending them: whether *you* may ask.
+  // Under the `chosen` policy the room holds two different answers at the same
+  // moment, so a single broadcast frame would have to leave out the one thing a
+  // member's composer needs — and a composer that cannot tell whether an answer
+  // is coming is a composer that promises one either way.
   function announce(sessionId) {
     const record = get(sessionId);
     if (!record || !isHost(record) || !shared(record)) return false;
-    tellRoom(record, { type: 'session-state', sessionId, ...roomState(record) });
+    const state = roomState(record);
+    for (const peerId of audience(record)) {
+      tell(peerId, { type: 'session-state', sessionId, ...state, mayAsk: mayAsk(record, peerId) });
+    }
     return true;
   }
 
@@ -1273,7 +1399,10 @@ function createSessions({
   // the authorization, exactly as it is for a transcript — and it writes settings
   // rather than words: nothing here can start a run, and the counsel it carries
   // is filed as a label. A peer that is merely online cannot reach this.
-  function onRoomState(fromPeerId, { sessionId, title, mode, turns, observer, counsel } = {}) {
+  function onRoomState(
+    fromPeerId,
+    { sessionId, title, mode, turns, observer, counsel, asking, mayAsk: mine } = {}
+  ) {
     const record = sessions.get(sessionId);
     if (!mayDirect(record, fromPeerId)) return;
     sessions.update(sessionId, {
@@ -1281,6 +1410,12 @@ function createSessions({
       ...(mode !== undefined && { mode }),
       ...(turns !== undefined && { turns }),
       ...(observer !== undefined && { observer }),
+      ...(asking !== undefined && { asking }),
+      // Written on every settings frame rather than only when it is there, so a
+      // permission is taken away as readily as it is given: a host that stopped
+      // sending it — an older build, or one where the answer went back to no —
+      // leaves this false rather than leaving the last yes standing.
+      mayAsk: mine === true,
       roomCounsel: Array.isArray(counsel) ? counsel : [],
     });
     if (bus) bus.emit('session-room', { sessionId });
@@ -1556,46 +1691,49 @@ function createSessions({
     if (!record || typeof text !== 'string' || !text.trim()) return;
     if (!mayPost(record, fromPeerId)) return;
 
-    const identity = hub && hub.identities.get(fromPeerId);
-    const said = {
-      id: id || crypto.randomUUID(),
-      peerId: sessionId,
-      direction: 'in',
-      kind: 'text',
-      text,
-      ts: Number.isFinite(ts) ? ts : Date.now(),
-      // Who said it. On the host that is the peer who sent it; on a guest the
-      // host has already stamped it, and their word for who spoke is the one
-      // that counts.
-      speaker: speaker || (identity && (identity.name || identity.hostname)) || 'Someone',
-      // And which voice in the room it was — from the host only. Kept apart from
-      // `agentId` all the way to the bubble: this names nothing on this machine
-      // and can start nothing here — it exists so a discussion between four
-      // agents reads as four colours on every screen watching it, rather than as
-      // one wall of incoming text on all but the host's.
-      //
-      // A member's own words never carry one. Attribution in a room is the
-      // host's to decide, and a guest that could label its sentence with a voice
-      // would be a guest that could have it passed on as somebody else's.
-      ...(isGuest(record) && typeof speakerId === 'string' && speakerId && { speakerId }),
-    };
-    if (bus) bus.emit('session-said', { sessionId, message: said });
-    sessions.touch(sessionId);
-
-    // The host is the only one that relays. A guest re-broadcasting would put
-    // the same sentence round the room twice.
-    if (isHost(record)) {
-      share(sessionId, said, { except: fromPeerId });
-      // An observed room watches everybody in it, not only whoever is at this
-      // keyboard — which is the whole reason a session can have people in it.
-      if (record.mode === OBSERVER_MODE) {
-        const state = watchStateFor(sessionId);
-        state.lastHumanAt = Date.now();
-        state.lastHumanText = text;
-        state.humanTurns = (state.humanTurns || 0) + 1;
-        Promise.resolve(watch(sessionId)).catch(() => {});
-      }
+    // The host relaying the room to us. Written down as it arrives and no
+    // further: a guest runs no rounds, asks nobody and re-broadcasts nothing.
+    if (isGuest(record)) {
+      const said = {
+        id: id || crypto.randomUUID(),
+        peerId: sessionId,
+        direction: 'in',
+        kind: 'text',
+        text,
+        ts: Number.isFinite(ts) ? ts : Date.now(),
+        // Who said it, as the host stamped it. Their word for who spoke is the
+        // one that counts — everything in the room passed through them.
+        speaker: speaker || 'Someone',
+        // And which voice in the room it was. Kept apart from `agentId` all the
+        // way to the bubble: this names nothing on this machine and can start
+        // nothing here — it exists so a discussion between four agents reads as
+        // four colours on every screen watching it, rather than as one wall of
+        // incoming text on all but the host's.
+        ...(typeof speakerId === 'string' && speakerId && { speakerId }),
+      };
+      store.append(sessionId, said);
+      if (bus) bus.emit('session-said', { sessionId, message: said });
+      sessions.touch(sessionId);
+      return;
     }
+
+    // A member of our room. Down the same door our own words go through, which
+    // is what gives their sentence the relay, the mentions, the observer and —
+    // if the room lets them — the agents. Whether it is a question or a remark
+    // is decided in there, by mayAsk, and never here.
+    //
+    // Named from the identity the socket was proved on rather than from the
+    // frame. Attribution in a room is the host's to decide: a member who could
+    // label their own sentence could have it passed round as somebody else's.
+    const identity = hub && hub.identities.get(fromPeerId);
+    send(sessionId, text, {
+      from: {
+        peerId: fromPeerId,
+        name: (identity && (identity.name || identity.hostname)) || 'Someone',
+        id,
+        ts,
+      },
+    });
   }
 
   // ---- watching ----
@@ -1974,6 +2112,11 @@ function createSessions({
       speaker: floor.observerName,
       agentId: floor.observerId,
     };
+    // Filed here, beside every other writer of a session's transcript. It used
+    // to be done by whoever handled the event in ipc.js, which made this the one
+    // sentence in the app whose place on disk depended on a listener being
+    // wired — sessions writes, and the window is told afterwards.
+    store.append(sessionId, message);
     if (bus) bus.emit('session-said', { sessionId, message });
     sessions.touch(sessionId);
     // An unasked turn is still a turn in the conversation. Relayed here rather
@@ -2429,9 +2572,14 @@ function createSessions({
   //
   // It does not spend a turn. The budget counts what the agents say; a person
   // saying "not that" has not used one of their replies up.
-  function interject(round, text, docs, context) {
-    const quoted = contextRecord(context);
-    const message = {
+  //
+  // `existing` is a sentence that is already in the transcript and already round
+  // the room: a member's, written by heard() before send() knew whether it was a
+  // question. Passed in rather than re-made, because writing it here as well is
+  // how one sentence becomes two bubbles and two turns in the discussion.
+  function interject(round, text, docs, context, existing = null) {
+    const quoted = existing ? null : contextRecord(context);
+    const message = existing || {
       id: crypto.randomUUID(),
       peerId: round.sessionId,
       direction: 'out',
@@ -2441,13 +2589,15 @@ function createSessions({
       ...(docs.length && { docs: docs.map((d) => ({ name: d.name, bytes: d.bytes })) }),
       ...(quoted && { context: quoted }),
     };
-    store.append(round.sessionId, message);
-    sessions.touch(round.sessionId);
-    // Said into a discussion the whole room is watching, so the whole room is
-    // told. A person cutting in with "not that" is the one moment in a dialogue
-    // where the reason it changed course lives in a single sentence, and a copy
-    // of the room without it reads as agents changing their minds unprompted.
-    share(round.sessionId, message);
+    if (!existing) {
+      store.append(round.sessionId, message);
+      sessions.touch(round.sessionId);
+      // Said into a discussion the whole room is watching, so the whole room is
+      // told. A person cutting in with "not that" is the one moment in a dialogue
+      // where the reason it changed course lives in a single sentence, and a copy
+      // of the room without it reads as agents changing their minds unprompted.
+      share(round.sessionId, message);
+    }
 
     // Documents handed over mid-discussion join the ones the round was started
     // with, so every turn from here on carries them. An attachment shown to the
@@ -2542,6 +2692,7 @@ function createSessions({
     placeSession,
     setAgent,
     setCounsel,
+    setMemberAsk,
     listTrash,
     trash,
     restore,

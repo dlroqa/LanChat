@@ -534,6 +534,7 @@ export default function ChatPane({
                 peers={roomPeers}
                 members={peer.members || []}
                 observer={peer.observer || null}
+                asking={peer.asking || 'nobody'}
                 guest={Boolean(peer.hostPeerId)}
                 onChange={(patch) => onSetCounsel(peer.id, patch)}
               />
@@ -903,6 +904,11 @@ export default function ChatPane({
                 discussing,
                 held,
                 guest: guestRoom,
+                // Whether this room lets us ask its agents, as the host told
+                // us. Only ever the host's answer — see the note on the two
+                // fields in App.jsx — so the box promises an answer exactly
+                // when one is actually coming.
+                mayAsk: peer.mayAsk === true,
               })
             : isAgent
               ? 'Ask the agent…  (Enter to send, Shift+Enter for newline)'

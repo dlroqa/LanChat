@@ -10,6 +10,9 @@ const {
   shared,
   present,
   mayPost,
+  mayAsk,
+  cleanAsking,
+  setAsk,
   maySetup,
   mayDirect,
   invite,
@@ -85,6 +88,80 @@ test('a guest takes words from the host and from nobody else', () => {
   // members one at a time.
   assert.equal(mayPost(JOINED, 'p-host'), true);
   assert.equal(mayPost(JOINED, 'p-zima'), false);
+});
+
+// ---------------------------------------------------------------- who may ask
+
+// The narrower half of mayPost, and a second question rather than a stricter
+// answer to the first: everybody present may say something, and saying something
+// is not the same act as spending somebody else's agent on it.
+
+const asking = (policy, ask = false) => ({
+  id: 'session:1',
+  asking: policy,
+  members: [
+    { peerId: 'p-zima', state: 'joined', ask },
+    { peerId: 'p-serv', state: 'invited', ask: true },
+    { peerId: 'p-past', state: 'left', ask: true },
+  ],
+});
+
+test('a room that was never told is a room where nobody but the host asks', () => {
+  assert.equal(cleanAsking(undefined), 'nobody');
+  // A setting nobody recognises — an older record, or a frame from a build that
+  // spells it differently — degrades to the quiet one rather than to itself.
+  assert.equal(cleanAsking('everyone'), 'nobody');
+  assert.equal(mayAsk(asking('nobody'), 'p-zima'), false);
+});
+
+test('the host asks whatever the room’s policy is', () => {
+  // The policy is about what other people may do. The host was never asking
+  // permission, and a setting that could lock them out of their own agents
+  // would be a setting nobody could undo.
+  for (const policy of ['nobody', 'room', 'chosen']) {
+    assert.equal(mayAsk(asking(policy), null), true, `the host must ask under ${policy}`);
+  }
+});
+
+test('a room thrown open lets anybody in it ask, and only anybody in it', () => {
+  assert.equal(mayAsk(asking('room'), 'p-zima'), true);
+  // An invitation is not a key here either, and somebody who has gone is gone.
+  assert.equal(mayAsk(asking('room'), 'p-serv'), false);
+  assert.equal(mayAsk(asking('room'), 'p-past'), false);
+  assert.equal(mayAsk(asking('room'), 'p-stranger'), false);
+  assert.equal(mayAsk(null, 'p-zima'), false);
+});
+
+test('a narrowed room asks for the tick, and honours it', () => {
+  assert.equal(mayAsk(asking('chosen'), 'p-zima'), false);
+  assert.equal(mayAsk(asking('chosen', true), 'p-zima'), true);
+  // Ticked, and no longer here. The tick is not what makes somebody a member.
+  assert.equal(mayAsk(asking('chosen'), 'p-past'), false);
+});
+
+test('a guest works none of this out for itself', () => {
+  // What a guest may do is the host's answer, and it arrives on a frame. A copy
+  // that applied the policy to its own roster would be a second reading of a
+  // list it does not own — so it answers false to everybody, itself included.
+  assert.equal(mayAsk({ ...asking('room'), hostPeerId: 'p-host' }, null), false);
+  assert.equal(mayAsk({ ...asking('room'), hostPeerId: 'p-host' }, 'p-zima'), false);
+});
+
+test('a tick is a fact about a person, and outlives the policy it was made under', () => {
+  const ticked = setAsk(asking('room'), 'p-zima', true);
+  assert.equal(ticked.find((m) => m.peerId === 'p-zima').ask, true);
+  assert.equal(
+    mayAsk({ ...asking('chosen'), members: ticked }, 'p-zima'),
+    true,
+    'narrowing a room that was open keeps who was already trusted in it'
+  );
+  // Ticking somebody who is not on the roster does not put them on it.
+  assert.deepEqual(
+    setAsk(asking('chosen'), 'p-stranger', true).map((m) => m.peerId),
+    ['p-zima', 'p-serv', 'p-past']
+  );
+  // And a tick is a tick, not a string that happens to be truthy.
+  assert.equal(cleanMembers([{ peerId: 'p-a', ask: 'yes' }])[0].ask, false);
 });
 
 // -------------------------------------------------------------- who may change

@@ -543,6 +543,15 @@ accept. Whoever started the session runs it: everyone's words go there, that mac
 agents, and it tells everybody what happened — which is what keeps one order and one transcript.
 Somebody joining part-way through is given what was already said.
 
+**Who may ask the agents** is one setting with three answers, in the same menu. *Only me* is how a
+room starts: what everybody else says is chat, and stays chat. *Anyone in the room* lets any member
+put a question to your agents — the same question you would have asked, with the same answer going
+back to every screen. *The people I tick* is the middle ground, and the tick is on the person's own
+row. Asking spends your machine and your API budget, which is why it is off until you say
+otherwise, and why turning it back off takes effect on the next thing anybody says. Nobody is
+silenced by it either way: a member who may not ask is still heard by the room, still read by an
+observer, and still part of the conversation.
+
 ### Letting agents talk
 
 **Between themselves** is the only mode that keeps going after the first lap. One agent answers,

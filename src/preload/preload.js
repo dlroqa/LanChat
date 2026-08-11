@@ -62,6 +62,9 @@ contextBridge.exposeInMainWorld('lanchat', {
   inviteToSession: (id, peerId) => invoke('lanchat:inviteToSession', { id, peerId }),
   removeFromSession: (id, peerId) => invoke('lanchat:removeFromSession', { id, peerId }),
   answerSessionInvite: (id, accepted) => invoke('lanchat:answerSessionInvite', { id, accepted }),
+  // One person in the room ticked, or un-ticked, as somebody who may ask this
+  // session's agents. Only read while the room's policy is "the people I tick".
+  setMemberAsk: (id, peerId, ask) => invoke('lanchat:setMemberAsk', { id, peerId, ask }),
   setSessionAgent: (id, agentId) => invoke('lanchat:setSessionAgent', { id, agentId }),
   askableAgents: () => invoke('lanchat:askableAgents'),
   sessionRound: (id) => invoke('lanchat:sessionRound', { id }),

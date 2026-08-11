@@ -3273,18 +3273,19 @@ test('a guest is heard by the whole room, and hears all of it back', async (t) =
   }
 });
 
-// What a guest cannot do, pinned so that it is a decision rather than a
-// discovery.
+// What a guest may do, and who decides — pinned so that it is a decision rather
+// than a discovery.
 //
-// A member's words are written down and passed round the room; they do not start
-// a round. The host's agents answer the host's questions. That is not an
-// oversight in the relay — it is the one thing in a shared session that spends
-// somebody else's machine, their API budget and their turn queue, and nothing in
-// this app lets a peer do that without the owner saying so.
+// By default a member's words are written down and passed round the room; they
+// do not start a round. The host's agents answer the host's questions. That is
+// not an oversight in the relay — it is the one thing in a shared session that
+// spends somebody else's machine, their API budget and their turn queue, and
+// nothing in this app lets a peer do that until the owner says so.
 //
-// Two halves, and the second is what makes the first mean anything: the agent
-// here is perfectly capable of answering, and does, the moment the host asks.
-test('a guest’s words reach the room but do not put the host’s agents to work', async (t) => {
+// Three acts. The silence, the control that proves the agent could have answered
+// and simply was not asked, and then the host saying so — after which the same
+// guest, the same agent and the same session produce an answer.
+test('a guest’s words are chat until the host says they may ask', async (t) => {
   const A = makeNode('host-quiet', await freePort());
   const B = makeNode('guest-quiet', await freePort());
   await A.server.start();
@@ -3336,6 +3337,244 @@ test('a guest’s words reach the room but do not put the host’s agents to wor
     'the host’s question to be answered'
   );
   assert.ok(A.log.length > asked, 'so the silence above was the rule, not a broken agent');
+
+  // And the host says otherwise. One setting, on the session rather than on the
+  // person, because that is what it is about: what this counsel may be spent on.
+  A.call('lanchat:setSessionCounsel', { id: session.id, asking: 'room' });
+  await waitFor(
+    () => B.call('lanchat:listSessions').find((s) => s.id === session.id).mayAsk === true,
+    5000,
+    'the guest to be told they may ask'
+  );
+
+  const before = A.store.read(session.id).filter((m) => m.speaker === 'Hermes').length;
+  B.call('lanchat:sendChat', { peerId: session.id, text: 'and where should the key live?' });
+  await waitFor(
+    () => A.store.read(session.id).filter((m) => m.speaker === 'Hermes').length > before,
+    5000,
+    'the guest’s question to be answered'
+  );
+  await waitFor(
+    () => B.store.read(session.id).some((m) => m.speaker === 'Hermes'),
+    5000,
+    'and the answer to reach the guest that asked'
+  );
+  assert.equal(
+    A.store.read(session.id).filter((m) => m.text === 'and where should the key live?').length,
+    1,
+    'their question is written down once, not once as chat and again as a question'
+  );
+  assert.equal(
+    B.store.read(session.id).filter((m) => m.text === 'and where should the key live?').length,
+    1,
+    'and nobody hears their own sentence twice for having asked it'
+  );
+
+  // Taken back, on the same door. A permission that could only be given would be
+  // a decision nobody could change their mind about.
+  A.call('lanchat:setSessionCounsel', { id: session.id, asking: 'nobody' });
+  await waitFor(
+    () => B.call('lanchat:listSessions').find((s) => s.id === session.id).mayAsk === false,
+    5000,
+    'the guest to be told it is off again'
+  );
+  const after = A.log.length;
+  B.call('lanchat:sendChat', { peerId: session.id, text: 'and the spare?' });
+  await waitFor(
+    () => A.store.read(session.id).some((m) => m.text === 'and the spare?'),
+    5000,
+    'their words to be written down'
+  );
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(A.log.length, after, 'and no agent was asked anything once it was taken back');
+});
+
+// The third setting: a room where some of the people in it may ask and the rest
+// are simply heard. Two guests, one tick, and the difference between them is the
+// whole of what the setting is for.
+test('under “the people I tick”, only the ticked one puts the agents to work', async (t) => {
+  const A = makeNode('host-ticks', await freePort());
+  const B = makeNode('guest-ticked', await freePort());
+  const C = makeNode('guest-unticked', await freePort());
+  await A.server.start();
+  await B.server.start();
+  await C.server.start();
+  t.after(() => {
+    for (const n of [A, B, C]) {
+      n.hub.close();
+      n.server.stop();
+    }
+  });
+  await connect(B, A);
+  await connect(C, A);
+  const idB = B.getIdentity().id;
+  const idC = C.getIdentity().id;
+
+  const { agent: hermes } = await A.agentHub.add({ name: 'Hermes', kind: 'http', config: {} });
+  const session = A.call('lanchat:createSession', { title: 'who holds the key' });
+  A.call('lanchat:setSessionCounsel', { id: session.id, agentIds: [hermes.id] });
+  for (const [node, id] of [
+    [B, idB],
+    [C, idC],
+  ]) {
+    A.call('lanchat:inviteToSession', { id: session.id, peerId: id });
+    await waitFor(
+      () => node.call('lanchat:listSessions').some((s) => s.id === session.id),
+      5000,
+      'the invitation'
+    );
+    node.call('lanchat:answerSessionInvite', { id: session.id, accepted: true });
+  }
+  await waitFor(
+    () =>
+      (A.call('lanchat:listSessions').find((x) => x.id === session.id).members || []).filter(
+        (m) => m.state === 'joined'
+      ).length === 2,
+    5000,
+    'both of them in the room'
+  );
+
+  A.call('lanchat:setSessionCounsel', { id: session.id, asking: 'chosen' });
+  A.call('lanchat:setMemberAsk', { id: session.id, peerId: idB, ask: true });
+
+  // Each end is told about itself and nothing else. Two people in one room hold
+  // two different answers to "may I ask", which is why the settings are sent to
+  // each peer separately rather than broadcast.
+  await waitFor(
+    () => B.call('lanchat:listSessions').find((s) => s.id === session.id).mayAsk === true,
+    5000,
+    'the ticked guest to be told they may ask'
+  );
+  assert.equal(
+    C.call('lanchat:listSessions').find((s) => s.id === session.id).mayAsk,
+    false,
+    'and the other to be told nothing of the sort'
+  );
+
+  const asked = A.log.length;
+  C.call('lanchat:sendChat', { peerId: session.id, text: 'can we just leave it unlocked?' });
+  await waitFor(
+    () => A.store.read(session.id).some((m) => m.text === 'can we just leave it unlocked?'),
+    5000,
+    'the unticked guest to be heard'
+  );
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(A.log.length, asked, 'and to have asked nobody anything');
+
+  B.call('lanchat:sendChat', { peerId: session.id, text: 'Hermes, where should the key live?' });
+  await waitFor(
+    () => A.store.read(session.id).some((m) => m.speaker === 'Hermes'),
+    5000,
+    'the ticked guest’s question to be answered'
+  );
+  // Everybody in the room reads the answer, including the person who may not
+  // ask: being unable to ask is not being shut out of the conversation.
+  for (const node of [B, C]) {
+    await waitFor(
+      () => node.store.read(session.id).some((m) => m.speaker === 'Hermes'),
+      5000,
+      'the answer to reach every screen'
+    );
+  }
+
+  // And the tick comes off again.
+  A.call('lanchat:setMemberAsk', { id: session.id, peerId: idB, ask: false });
+  await waitFor(
+    () => B.call('lanchat:listSessions').find((s) => s.id === session.id).mayAsk === false,
+    5000,
+    'the guest to be told the tick came off'
+  );
+  const after = A.log.length;
+  B.call('lanchat:sendChat', { peerId: session.id, text: 'and the spare key?' });
+  await waitFor(
+    () => A.store.read(session.id).some((m) => m.text === 'and the spare key?'),
+    5000,
+    'their words to be written down'
+  );
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(A.log.length, after, 'and nothing asked once the tick was gone');
+});
+
+// A member who may ask is a member who may cut in.
+//
+// The one path where a sentence is written before it is known to be a question:
+// it goes into the transcript and round the room the moment it arrives, and then
+// joins the discussion that was already running. The thing worth proving is that
+// it happens once — a sentence written by the relay and again by the round would
+// be two bubbles and two turns for one thing somebody said.
+test('a member who may ask can speak into a live discussion, once', async (t) => {
+  const A = makeNode('host-cutin', await freePort());
+  const B = makeNode('guest-cutin', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+  await connect(B, A);
+  const idB = B.getIdentity().id;
+
+  const agents = [];
+  for (const name of ['Hermes', 'Tessie']) {
+    const { agent } = await A.agentHub.add({ name, kind: 'http', config: {} });
+    agents.push(agent);
+  }
+  const session = A.call('lanchat:createSession', { title: 'what to call it' });
+  A.call('lanchat:setSessionCounsel', {
+    id: session.id,
+    agentIds: agents.map((a) => a.id),
+    mode: 'dialogue',
+    turns: 8,
+    asking: 'room',
+  });
+  A.call('lanchat:inviteToSession', { id: session.id, peerId: idB });
+  await waitFor(
+    () => B.call('lanchat:listSessions').some((s) => s.id === session.id),
+    5000,
+    'the invitation'
+  );
+  B.call('lanchat:answerSessionInvite', { id: session.id, accepted: true });
+  await waitFor(
+    () =>
+      (A.call('lanchat:listSessions').find((x) => x.id === session.id).members || []).some(
+        (m) => m.peerId === idB && m.state === 'joined'
+      ),
+    5000,
+    'the guest in the room'
+  );
+
+  // Held mid-turn, which is the only way to be inside a discussion.
+  A.call('lanchat:sendChat', { peerId: session.id, text: 'hold:now what shall we call it?' });
+  await waitFor(() => A.held.size > 0, 5000, 'the first agent to be asked');
+
+  const before = A.log.length;
+  B.call('lanchat:sendChat', { peerId: session.id, text: 'stop arguing about birds' });
+  await waitFor(
+    () => A.store.read(session.id).some((m) => m.text === 'stop arguing about birds'),
+    5000,
+    'the host to write it down'
+  );
+  assert.equal(
+    A.store.read(session.id).filter((m) => m.text === 'stop arguing about birds').length,
+    1,
+    'written once, however many things it turned out to be'
+  );
+  const said = A.store.read(session.id).find((m) => m.text === 'stop arguing about birds');
+  assert.equal(said.speaker, 'guest-cutin', 'named as the person who said it');
+  assert.equal(said.direction, 'in', 'and as something that came from somebody else');
+
+  // The next agent to speak is shown it, in the discussion it interrupted.
+  A.release('Hermes', 'I still say Beacon.');
+  await waitFor(() => A.log.length > before, 5000, 'the next turn to go out');
+  const toTessie = A.log[before];
+  assert.match(toTessie, /stop arguing about birds/, 'the next speaker was shown it');
+  assert.equal(
+    (toTessie.match(/stop arguing about birds/g) || []).length,
+    1,
+    'quoted once — a sentence written twice would be quoted twice'
+  );
 });
 
 test('a word said into a live discussion reaches the room too', async (t) => {

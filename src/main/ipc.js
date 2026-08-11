@@ -371,9 +371,16 @@ function createIpc({
     emit('history', { peerId: sessionId, messages: store.read(sessionId) });
   });
 
+  // Something was said in a session by somebody who is not at this keyboard: a
+  // member of the room, or an observer that was given the floor.
+  //
+  // Drawn here and nowhere else. It is already on disk by the time this runs —
+  // sessions writes its own transcript, the way it does for a question, an
+  // import and a sync — and this listener appending as well is how one sentence
+  // became two rows for anybody who wired the bus twice. One invariant: sessions
+  // writes, the window is told.
   bus.on('session-said', ({ sessionId, message }) => {
     if (!sessions.isSessionId(sessionId) || !message) return;
-    store.append(sessionId, message);
     emit('chat', message);
   });
 
@@ -1065,8 +1072,21 @@ function createIpc({
   // Who a session asks: a list of agents, or whoever is available, whether they
   // are asked all at once, one after another, or left to talk to each other —
   // and, for that last one, how many turns they get.
-  ipcMain.handle('lanchat:setSessionCounsel', (_e, { id, agentIds, allAgents, mode, turns, observer }) => {
-    const record = sessions.setCounsel(id, { agentIds, allAgents, mode, turns, observer });
+  ipcMain.handle(
+    'lanchat:setSessionCounsel',
+    (_e, { id, agentIds, allAgents, mode, turns, observer, asking }) => {
+      const record = sessions.setCounsel(id, { agentIds, allAgents, mode, turns, observer, asking });
+      if (record) publishSessions();
+      return record;
+    }
+  );
+
+  // Whether one particular person in the room may ask these agents anything.
+  // Only consulted while the room's policy is "the people I tick" — the policy
+  // itself is part of the counsel above, because it is a fact about what the
+  // agents may be spent on rather than about who is here.
+  ipcMain.handle('lanchat:setMemberAsk', (_e, { id, peerId, ask }) => {
+    const record = sessions.setMemberAsk(id, peerId, ask);
     if (record) publishSessions();
     return record;
   });
