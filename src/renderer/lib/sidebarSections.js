@@ -20,9 +20,61 @@ export const SECTIONS = [
 
 export const SECTION_IDS = SECTIONS.map((s) => s.id);
 
+// The fifth category, which is not one of the four.
+//
+// A room somebody else runs is not a session of yours filed among your own: it
+// arrived, somebody is waiting for an answer, and it stops existing when they
+// end it. So it is given a heading of its own that comes and goes with it,
+// pinned above the four rather than ordered among them.
+//
+// **Deliberately not in SECTIONS.** Everything that reads that array is about
+// the arrangement a person has made of the panel — the order they dragged it
+// into, the ones they pinned open, the scopes the search box offers — and none
+// of those can be true of a category that may not be there tomorrow. Keeping it
+// out means normalizeOrder() drops it from a saved order for free, and a config
+// file can never come back naming a category that no longer exists.
+export const SHARED = { id: 'shared', title: 'Shared with you' };
+
 export function sectionTitle(id) {
+  if (id === SHARED.id) return SHARED.title;
   const found = SECTIONS.find((s) => s.id === id);
   return found ? found.title : '';
+}
+
+// ---- rooms somebody else runs ----------------------------------------------
+//
+// A guest's copy of a shared session, and whether it is still live. Both are
+// decided here, next to sectionForThread(), because they are the same question
+// that function answers — which heading a session belongs under — and answering
+// it in two places is how the two would come to disagree.
+
+// Whose room it is. A session with a host is one we were invited into; one
+// without is our own.
+export function isGuestRoom(session) {
+  return Boolean(session && session.hostPeerId);
+}
+
+// A room that has ended: the host has taken us out of it, or gone.
+//
+// The record stays — it holds a real conversation, and a peer saying so is not
+// grounds for deleting somebody's transcript — but it is no longer live, so it
+// leaves the pinned category and goes back to being an ordinary session, filed.
+// `left` and `revoked` are both endings; see room.js, which writes them.
+export function roomEnded(session) {
+  if (!isGuestRoom(session)) return false;
+  const host = (session.members || []).find((m) => m && m.peerId === session.hostPeerId);
+  return host ? host.state === 'left' || host.state === 'revoked' : false;
+}
+
+// The two halves of the session list, split by the one rule above. An ended room
+// is in `ownSessions` on purpose: it is history now, and history lives under
+// Sessions with everything else.
+export function liveGuestRooms(sessions) {
+  return (sessions || []).filter((s) => isGuestRoom(s) && !roomEnded(s));
+}
+
+export function ownSessions(sessions) {
+  return (sessions || []).filter((s) => !isGuestRoom(s) || roomEnded(s));
 }
 
 // A saved order, made safe to render from.
@@ -92,6 +144,9 @@ export function scopeOptions(order) {
 export function searchFields(id, item, platformLabel = () => '') {
   if (!item) return [];
   switch (id) {
+    // A room somebody else runs is searched the way a session is, because it is
+    // one: the only thing written on the row is the title its host gave it.
+    case 'shared':
     case 'sessions':
       return [{ field: 'name', text: item.title }];
     case 'agents':
@@ -150,8 +205,14 @@ export function searchSection(id, items, q, platformLabel) {
 // expanded whatever else is collapsed. Sessions are checked first: a session id
 // and a peer id come from different registries and could in principle collide,
 // and the session list is the one the app selected from.
+//
+// A live room somebody else runs answers `shared` rather than `sessions` — it is
+// drawn under the pinned heading, and a category that shut while the
+// conversation inside it was open would be the panel losing track of where you
+// are. An ended one is back under Sessions and says so.
 export function sectionForThread(id, { sessions = [], peers = [] } = {}) {
   if (!id) return null;
+  if (liveGuestRooms(sessions).some((s) => s.id === id)) return SHARED.id;
   if (sessions.some((s) => s.id === id)) return 'sessions';
   const peer = peers.find((p) => p.id === id);
   if (!peer) return null;

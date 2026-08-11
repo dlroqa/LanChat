@@ -1504,6 +1504,79 @@ input:focus-visible {
   color: var(--fg-faint);
 }
 
+/* ---- the category that arrives ------------------------------------------
+   A room somebody else runs gets a heading of its own, above the four, for as
+   long as it is live. It is the only category in the panel that was not put
+   there by the person reading it, which is why it looks slightly different: no
+   grip and no lock, because there is no order to move it in and nothing to keep
+   open once the room has ended.
+
+   The title takes the grip's place rather than sliding into it, so the four
+   words in this column still start on the same vertical line. 6px of padding
+   plus a 22px grip plus the 4px gap is 32px. */
+.sb-section.pinned .sb-head {
+  padding-left: 32px;
+}
+
+/* The heading, as the way in. The other four are opened by a pointer resting on
+   them; this one is also a button, because a category that appeared on its own
+   is one you reach for on purpose — and a thing you reach for with a mouse has
+   to be reachable with a keyboard.
+   Nothing here about how it looks: the base `button` rule already strips the
+   border, the background and the colour, and `button:focus-visible` already
+   gives it the same ring every other control in the app has. What is left is
+   the box it occupies — the slot the title had — and the type it must not
+   shrink to. */
+.sb-head-btn {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+}
+
+/* Making room for itself.
+   The four below it have to move down, and a heading that appeared in a single
+   frame would move them out from under a pointer already on its way somewhere.
+   So the track opens from nothing over 200ms — the same `0fr → 1fr` grid the
+   category bodies use, and the same reason: a height cannot be animated to
+   `auto`, and measuring one in JavaScript would go stale the moment another
+   invitation arrived.
+
+   The words do the rest. Opacity and transform only, one element, ease-out
+   because it is arriving. */
+.sb-pop {
+  display: grid;
+  grid-template-rows: 1fr;
+  animation: sb-pop 200ms ease-out;
+}
+.sb-pop-inner {
+  overflow: hidden;
+  min-height: 0;
+  animation: sb-pop-in 260ms ease-out;
+}
+@keyframes sb-pop {
+  from {
+    grid-template-rows: 0fr;
+  }
+}
+@keyframes sb-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No arrival, just arrived. The heading is there, at full height, saying the
+     same thing — nothing in it depended on having seen it appear. */
+  .sb-pop,
+  .sb-pop-inner {
+    animation: none;
+  }
+}
+
 /* Where a dragged category would land. Drawn on the heading rather than between
    two of them so it is visible whichever category is being carried past. */
 .sb-section.drop-before .sb-head {

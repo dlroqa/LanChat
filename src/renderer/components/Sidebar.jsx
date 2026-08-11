@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Avatar from './Avatar.jsx';
 import QueueBadge from './QueueBadge.jsx';
 import SidebarSection from './SidebarSection.jsx';
@@ -9,8 +9,11 @@ import { formatShortDate, platformLabel } from '../lib/util.js';
 import { sessionCounsel, sessionSubLine } from '../lib/counselCopy.js';
 import {
   SCOPE_ALL,
-  normalizeOrder,
+  SHARED,
+  liveGuestRooms,
   moveSection,
+  normalizeOrder,
+  ownSessions,
   searchPlaceholder,
   searchSection,
   sectionForThread,
@@ -154,6 +157,12 @@ export default function Sidebar({
   // which is why it stops exactly when the message is read and not a moment
   // before.
   const [hovered, setHovered] = useState(null);
+  // Whether the reader has said, about the pinned category, out loud. `null` is
+  // "follow the pointer, like everything else"; true and false are a click, and
+  // a click has to win — otherwise clicking a heading you are still pointing at
+  // to shut it would do nothing at all. It goes back to null when the pointer
+  // leaves, so the next hover behaves the way the other four do.
+  const [sharedOpen, setSharedOpen] = useState(null);
   const [drag, setDrag] = useState({ id: null, overId: null, before: false });
   // A session or a folder being carried inside the Sessions list.
   //
@@ -186,6 +195,20 @@ export default function Sidebar({
     [selectedId, sessions, peers]
   );
 
+  // The two halves of the session list. A room somebody else runs, while it is
+  // live, is drawn under its own heading above everything — not filed among the
+  // sessions you started, where the only thing marking it was a pulse. When it
+  // ends it comes back here, which is why `own` is what the Sessions category is
+  // given rather than `sessions`.
+  const rooms = useMemo(() => liveGuestRooms(sessions), [sessions]);
+  const own = useMemo(() => ownSessions(sessions), [sessions]);
+
+  // Nothing to have an opinion about once the last room has gone. Left set, a
+  // click from a fortnight ago would decide how the next invitation arrives.
+  useEffect(() => {
+    if (!rooms.length) setSharedOpen(null);
+  }, [rooms.length]);
+
   // What each category has to show, and what it matched on.
   //
   // A category the search is not aimed at is not searched: pointing the box at
@@ -195,17 +218,24 @@ export default function Sidebar({
   // Tailnet devices are in here now. They used to be the one list the box could
   // not touch — it filtered the three above them and left the machines below
   // untouched, which read as a search that had stopped working halfway down.
+  //
+  // The pinned category is searched by whatever the Sessions scope is asking,
+  // because that is what it holds and there is no chip for it: it is not in the
+  // scope menu, since a scope saved in the config that pointed at a category
+  // which had since ended would be a filter nobody could clear.
   const hits = useMemo(() => {
     const qFor = (id) => (!scoped || scope === id ? q : '');
     return {
-      sessions: searchSection('sessions', sessions, qFor('sessions'), platformLabel),
+      shared: searchSection('shared', rooms, qFor('sessions'), platformLabel),
+      sessions: searchSection('sessions', own, qFor('sessions'), platformLabel),
       agents: searchSection('agents', allAgents, qFor('agents'), platformLabel),
       people: searchSection('people', allPeople, qFor('people'), platformLabel),
       tailnet: searchSection('tailnet', noApp, qFor('tailnet'), platformLabel),
     };
-  }, [sessions, allAgents, allPeople, noApp, q, scope, scoped]);
+  }, [rooms, own, allAgents, allPeople, noApp, q, scope, scoped]);
 
   const shownCount = {
+    shared: hits.shared.length,
     sessions: hits.sessions.length,
     agents: hits.agents.length,
     people: hits.people.length,
@@ -219,14 +249,20 @@ export default function Sidebar({
   // composer of a session you had no reason to open. So it is fed into the same
   // signal the unread count is, and the row flashes the way a summoned agent
   // does — the two mean the same thing to a reader.
+  //
+  // Only rooms that are still live can be waiting for an answer: a room whose
+  // host ended it is a transcript now, and a heading flashing about a Join
+  // button that would reach nobody would be the panel asking for something it
+  // cannot deliver.
   const invitations = useMemo(() => {
     const out = {};
-    for (const s of sessions || []) if (s.hostPeerId && s.accepted === false) out[s.id] = true;
+    for (const s of rooms) if (s.accepted === false) out[s.id] = true;
     return out;
-  }, [sessions]);
+  }, [rooms]);
 
   const signals = {
-    sessions: sectionSignal(sessions, unread, { ...summoned, ...invitations }),
+    shared: sectionSignal(rooms, unread, invitations),
+    sessions: sectionSignal(own, unread, summoned),
     agents: sectionSignal(allAgents, unread, summoned),
     people: sectionSignal(allPeople, unread, summoned),
     tailnet: { count: 0, alert: false },
@@ -247,20 +283,47 @@ export default function Sidebar({
   // thing being worked on with it: the hover timer is 220ms, which is easily
   // reached by a pointer on its way to a drop target or a hand on its way to the
   // keyboard, and there is nothing to drop onto in a category that has shut.
-  const isExpanded = (id) =>
-    !drag.id &&
-    ((id === 'sessions' && (Boolean(sdrag.kind) || Boolean(renaming))) ||
+  //
+  // The pinned category answers a different question, because it is opened by a
+  // different act. It cannot be locked and it cannot be scoped, so what is left
+  // is: a search that found something in it, then what the reader said, then the
+  // pointer and the conversation they have open. A click wins over the pointer
+  // deliberately — see `sharedOpen`.
+  const isExpanded = (id) => {
+    if (drag.id) return false;
+    if (id === SHARED.id) {
+      if (searching && shownCount.shared > 0) return true;
+      if (sharedOpen !== null) return sharedOpen;
+      return hovered === id || id === activeSection;
+    }
+    return (
+      (id === 'sessions' && (Boolean(sdrag.kind) || Boolean(renaming))) ||
       hovered === id ||
       (scoped
         ? id === scope
-        : locked.includes(id) || id === activeSection || (searching && shownCount[id] > 0)));
+        : locked.includes(id) || id === activeSection || (searching && shownCount[id] > 0))
+    );
+  };
 
   // The categories the search is not about, said quietly. A flashing one is
   // never quietened: something arrived for you, and a filter you applied to the
   // panel does not get to decide you should not hear about it.
-  const isQuiet = (id) => scoped && id !== scope && !signals[id].alert;
+  //
+  // Aiming the box at Sessions does not quieten the rooms above them: the same
+  // words are being asked of both lists, so telling the reader one of the two
+  // answers is beside the point would be a lie about what was searched.
+  const isQuiet = (id) =>
+    scoped && id !== scope && !(id === SHARED.id && scope === 'sessions') && !signals[id].alert;
 
-  const onHover = (id, open) => setHovered((h) => (open ? id : h === id ? null : h));
+  const onHover = (id, open) => {
+    // A pointer leaving takes the click with it. What is left is a category
+    // behaving like the other four again, which is what somebody who has walked
+    // away from it expects to come back to.
+    if (id === SHARED.id && !open) setSharedOpen(null);
+    setHovered((h) => (open ? id : h === id ? null : h));
+  };
+
+  const toggleShared = () => setSharedOpen(!isExpanded(SHARED.id));
 
   const toggleLock = (id) =>
     onSectionPrefs({ sidebarLocked: locked.includes(id) ? locked.filter((x) => x !== id) : [...locked, id] });
@@ -452,7 +515,12 @@ export default function Sidebar({
   // `folderId` is the folder this row is being drawn inside, or null for a loose
   // one. It decides two things and nothing else: whether the row is a drop
   // target for another session, and where a drop lands.
-  const sessionRow = (s, folderId = null) => {
+  //
+  // `fixed` is for the rows that are not in the Sessions list at all — a live
+  // room somebody else runs, drawn under its own heading. Filing one is not
+  // refused so much as meaningless: it is not in the list a folder draws from,
+  // so a drop would file something that then failed to appear where it was put.
+  const sessionRow = (s, folderId = null, { fixed = false } = {}) => {
     // A room another machine runs asks their agents, so the line under it names
     // theirs: resolving it against this machine's roster answers "no agent yet"
     // about a session with three of them in it.
@@ -481,9 +549,9 @@ export default function Sidebar({
           invitations[s.id] ? 'invited' : ''
         } ${edge}`}
         onClick={() => onSelect(s.id)}
-        draggable
-        onDragStart={sessionDragStart(s.id)}
-        onDragEnd={clearSdrag}
+        draggable={!fixed}
+        onDragStart={fixed ? undefined : sessionDragStart(s.id)}
+        onDragEnd={fixed ? undefined : clearSdrag}
         // Only a row inside a folder is a place to insert. A loose row has no
         // order to insert into — the loose list sorts itself — so the region
         // around it takes the drop instead.
@@ -708,6 +776,12 @@ export default function Sidebar({
       return <div className="empty-hint">Nothing here matches “{q.trim()}”.</div>;
     }
     switch (id) {
+      // No folders and no dragging in here: there is nothing to arrange. It is
+      // the rooms that are open right now, drawn by the same row as any other
+      // session — which already knows how to say whose agents a room asks and
+      // that an invitation is waiting.
+      case SHARED.id:
+        return rows.map((h) => sessionRow(h.item, null, { fixed: true }));
       case 'sessions':
         return sessionsBody(rows);
       case 'agents':
@@ -839,6 +913,39 @@ export default function Sidebar({
       </div>
 
       <div className="peer-list">
+        {/* Above everything, and only while there is one. A room somebody else
+            runs is the one thing in this panel that arrived rather than being
+            put here, so it is not filed among the four a person has arranged —
+            it appears on top, says so, and goes when the room does.
+
+            Held back while a category is being carried: the four headings are a
+            short list to drop into, and one more appearing under the pointer
+            would move every target in it. It arrives the moment the drag ends. */}
+        {rooms.length > 0 && !drag.id && (
+          // Two elements around it for the same reason .sb-body has two: a
+          // category arriving has to make room for itself, and a height cannot
+          // be animated to `auto`. The outer is the track being opened from
+          // nothing, the inner is what is clipped while it opens.
+          <div className="sb-pop">
+            <div className="sb-pop-inner">
+              <SidebarSection
+                key={SHARED.id}
+                id={SHARED.id}
+                title={sectionTitle(SHARED.id)}
+                pinned
+                expanded={isExpanded(SHARED.id)}
+                quiet={isQuiet(SHARED.id)}
+                flashing={!isExpanded(SHARED.id) && signals.shared.alert}
+                count={signals.shared.count}
+                alert={signals.shared.alert}
+                onHover={onHover}
+                onToggle={toggleShared}
+              >
+                {sectionBody(SHARED.id)}
+              </SidebarSection>
+            </div>
+          </div>
+        )}
         {order.map((id) => (
           <SidebarSection
             key={id}

@@ -87,7 +87,11 @@ const FRAMES = ${JSON.stringify(FRAMES)};
 // A roster with one of everything the panel can draw: a session, two agents —
 // one of them summoned and never opened — five people, and a tailnet device that
 // is online without the app.
-const sessions = [
+// Reassigned rather than mutated when a room arrives, the way App.jsx gets a
+// whole new list every time main publishes the sessions. A push would leave the
+// array identity unchanged, and the panel's memos read exactly that.
+// (No backticks in here: this whole page is a template literal.)
+let sessions = [
   { id: 's1', title: 'why the turn moved', agentId: 'a1' },
   { id: 's2', title: 'kangkong', agentId: 'a1' },
   { id: 's3', title: 'the third one', agentId: 'a1' },
@@ -233,7 +237,18 @@ function state() {
       titleAnimation: ts.animationName,
       titleImage: ts.backgroundImage === 'none' ? 'none' : 'gradient',
       titleClip: ts.webkitBackgroundClip || ts.backgroundClip,
-      lockPressed: el.querySelector('.sb-lock').getAttribute('aria-pressed'),
+      // The pinned category has neither grip nor lock — there is no order to
+      // move it in and nothing to keep open once the room has ended — so these
+      // read null rather than throwing. For the four they are exactly what they
+      // always were.
+      pinned: el.classList.contains('pinned'),
+      headBtn: Boolean(el.querySelector('.sb-head-btn')),
+      headExpanded: (el.querySelector('.sb-head-btn') || { getAttribute: () => null }).getAttribute(
+        'aria-expanded'
+      ),
+      lockPressed: (el.querySelector('.sb-lock') || { getAttribute: () => null }).getAttribute(
+        'aria-pressed'
+      ),
       // The grip, the lock and the roster's buttons are out of the way until
       // the category is being dealt with. :hover cannot be checked from here —
       // a dispatched mouseover moves no real pointer, so the pseudo-class never
@@ -250,10 +265,17 @@ function state() {
           image: cs.backgroundImage === 'none' ? 'none' : 'gradient',
         };
       })(),
-      gripOpacity: Number(getComputedStyle(el.querySelector('.sb-grip')).opacity),
-      lockOpacity: Number(getComputedStyle(el.querySelector('.sb-lock')).opacity),
+      gripOpacity: el.querySelector('.sb-grip')
+        ? Number(getComputedStyle(el.querySelector('.sb-grip')).opacity)
+        : null,
+      lockOpacity: el.querySelector('.sb-lock')
+        ? Number(getComputedStyle(el.querySelector('.sb-lock')).opacity)
+        : null,
       actionsOpacity: Number(getComputedStyle(el.querySelector('.sb-actions')).opacity),
       actions: el.querySelectorAll('.sb-actions .icon-btn').length,
+      rowTitles: [...el.querySelectorAll('.sb-body-inner .peer .name-text')].map((n) => n.textContent),
+      rowsDraggable: [...el.querySelectorAll('.sb-body-inner .peer.session')].map((r) => r.draggable),
+      rowSubs: [...el.querySelectorAll('.sb-body-inner .peer .sub')].map((n) => n.textContent),
     };
   }
   // The Sessions list, as folders and what is left over. rowsShown above now
@@ -516,6 +538,50 @@ async function walk() {
   steps.searched.matches = [...document.querySelectorAll('.sb-section.open .sb-body-inner .peer .name-text')].map(
     (n) => n.textContent
   );
+
+  // A room somebody else runs, arriving. Nothing is clicked to make this happen:
+  // the invitation lands in the list the panel is given, exactly as it does when
+  // it comes off a socket, and a category that was not there a moment ago has to
+  // appear on its own — at the top, lit, above an arrangement of four the reader
+  // made themselves.
+  setValue.call(box, '');
+  box.dispatchEvent(new Event('input', { bubbles: true }));
+  await wait(REST);
+  let room = {
+    id: 'r1',
+    title: 'kitchen wiring',
+    hostPeerId: 'p1',
+    accepted: false,
+    members: [{ peerId: 'p1', state: 'joined' }],
+    roomCounsel: [{ id: 'ax', name: 'Mac' }],
+  };
+  const roomIs = (patch) => {
+    room = { ...room, ...patch };
+    sessions = sessions.some((s) => s.id === room.id)
+      ? sessions.map((s) => (s.id === room.id ? room : s))
+      : [...sessions, room];
+  };
+  roomIs({});
+  await settle();
+  steps.roomArrived = state();
+
+  // Opened by a click, which is the whole difference between this heading and
+  // the four: they are opened by a pointer resting on them on its way past.
+  document.querySelector('.sb-section[data-section="shared"] .sb-head-btn').click();
+  await wait(REST);
+  steps.roomOpened = state();
+
+  // Answering it stops the flash, the same way reading a message does. The
+  // category stays: the room is still live, and still not one of yours.
+  roomIs({ accepted: true });
+  await settle();
+  steps.roomAnswered = state();
+
+  // And the host ends it. The heading goes with the room, and the conversation
+  // comes back as an ordinary session.
+  roomIs({ members: [{ peerId: 'p1', state: 'left' }] });
+  await settle();
+  steps.roomEnded = state();
 
   return steps;
 }

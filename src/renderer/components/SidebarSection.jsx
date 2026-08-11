@@ -33,7 +33,14 @@ export default function SidebarSection({
   actions = null,
   dropEdge = null, // 'before' | 'after' | null
   dragging = false, // a category is being dragged somewhere in the panel
+  // A category that is not one of the arrangeable ones: it sits where it is put,
+  // for as long as it has a reason to exist. No grip and no lock, because there
+  // is no order to move it in and nothing to keep open once it is gone — and its
+  // title is a button, because a category that appears on its own is one you
+  // reach for deliberately rather than one you happen to be passing.
+  pinned = false,
   onHover,
+  onToggle,
   onToggleLock,
   onMove,
   onDragStart,
@@ -105,6 +112,7 @@ export default function SidebarSection({
     locked ? 'locked' : '',
     quiet ? 'quiet' : '',
     flashing ? 'flash' : '',
+    pinned ? 'pinned' : '',
     dropEdge ? `drop-${dropEdge}` : '',
   ]
     .filter(Boolean)
@@ -118,21 +126,44 @@ export default function SidebarSection({
       onMouseLeave={leave}
       onFocus={focus}
       onBlur={blur}
-      onDragOver={onDragOver}
-      onDrop={onDrop}
+      onDragOver={pinned ? undefined : onDragOver}
+      onDrop={pinned ? undefined : onDrop}
     >
-      <div className="sb-head" draggable onDragStart={onDragStart} onDragEnd={onDragEnd}>
-        <button
-          type="button"
-          className="sb-grip"
-          onKeyDown={gripKeys}
-          title={`Reorder ${title} — drag, or use the arrow keys`}
-          aria-label={`Reorder ${title}. Use the up and down arrow keys to move it.`}
-        >
-          <Grip size={14} />
-        </button>
+      <div
+        className="sb-head"
+        draggable={!pinned}
+        onDragStart={pinned ? undefined : onDragStart}
+        onDragEnd={pinned ? undefined : onDragEnd}
+      >
+        {!pinned && (
+          <button
+            type="button"
+            className="sb-grip"
+            onKeyDown={gripKeys}
+            title={`Reorder ${title} — drag, or use the arrow keys`}
+            aria-label={`Reorder ${title}. Use the up and down arrow keys to move it.`}
+          >
+            <Grip size={14} />
+          </button>
+        )}
 
-        <span className="sb-title">{title}</span>
+        {/* The title, and on a pinned category the way in as well. The other four
+            are opened by pointing at them, which is a thing a pointer does on its
+            way somewhere; this one arrives on its own and is asked for, so it
+            answers a click — and therefore a keyboard — as well as a hover. */}
+        {pinned ? (
+          <button
+            type="button"
+            className="sb-head-btn"
+            aria-expanded={Boolean(expanded)}
+            onClick={() => onToggle && onToggle(id)}
+            title={expanded ? `Close ${title}` : `Open ${title}`}
+          >
+            <span className="sb-title">{title}</span>
+          </button>
+        ) : (
+          <span className="sb-title">{title}</span>
+        )}
 
         {/* What the heading has to say while it is shut. The pill is the same
             one the rows use, because it is the same fact — and it is the reason
@@ -147,16 +178,18 @@ export default function SidebarSection({
 
         <span className="sb-actions">{actions}</span>
 
-        <button
-          type="button"
-          className="sb-lock"
-          aria-pressed={Boolean(locked)}
-          onClick={() => onToggleLock(id)}
-          title={locked ? `${title} stays open — click to unlock` : `Keep ${title} open`}
-          aria-label={locked ? `Unlock ${title}` : `Keep ${title} open`}
-        >
-          {locked ? <Lock size={14} /> : <Unlock size={14} />}
-        </button>
+        {!pinned && (
+          <button
+            type="button"
+            className="sb-lock"
+            aria-pressed={Boolean(locked)}
+            onClick={() => onToggleLock(id)}
+            title={locked ? `${title} stays open — click to unlock` : `Keep ${title} open`}
+            aria-label={locked ? `Unlock ${title}` : `Keep ${title} open`}
+          >
+            {locked ? <Lock size={14} /> : <Unlock size={14} />}
+          </button>
+        )}
       </div>
 
       {/* Two elements, not one: the outer is the grid track being animated from

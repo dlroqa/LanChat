@@ -17,6 +17,7 @@ const {
   SECTIONS,
   SECTION_IDS,
   SCOPE_ALL,
+  SHARED,
   sectionTitle,
   normalizeOrder,
   moveSection,
@@ -27,11 +28,27 @@ const {
   searchFields,
   matchIn,
   searchSection,
+  isGuestRoom,
+  roomEnded,
+  liveGuestRooms,
+  ownSessions,
 } = new Function(
   `${fs.readFileSync(path.join(SRC, 'lib', 'sidebarSections.js'), 'utf8').replace(/^export\s+/gm, '')}
-   return { SECTIONS, SECTION_IDS, SCOPE_ALL, sectionTitle, normalizeOrder, moveSection, sectionForThread,
-            sectionSignal, searchPlaceholder, scopeOptions, searchFields, matchIn, searchSection };`
+   return { SECTIONS, SECTION_IDS, SCOPE_ALL, SHARED, sectionTitle, normalizeOrder, moveSection, sectionForThread,
+            sectionSignal, searchPlaceholder, scopeOptions, searchFields, matchIn, searchSection,
+            isGuestRoom, roomEnded, liveGuestRooms, ownSessions };`
 )();
+
+// A room somebody else runs, as the panel is given it: whose it is, and who is
+// in it. `members` is the host's own row on the guest's copy — the thing that
+// says whether the room is still live.
+const room = (id, state = 'joined', extra = {}) => ({
+  id,
+  title: `their ${id}`,
+  hostPeerId: 'p-host',
+  members: [{ peerId: 'p-host', state }],
+  ...extra,
+});
 
 // The one the renderer passes in. Kept as a stub rather than loaded from
 // util.js: what is being pinned here is that the label is searched at all, not
@@ -131,6 +148,81 @@ test('the category holding the open conversation is the one that stays open', ()
   assert.equal(sectionForThread('gone', { sessions, peers }), null);
   assert.equal(sectionForThread(null, { sessions, peers }), null);
   assert.equal(sectionForThread('s1'), null, 'with nothing to look in, nothing is claimed');
+
+  // A live room somebody else runs is under its own heading, not under Sessions
+  // — otherwise the category the conversation is *not* in would be the one held
+  // open while you read it.
+  const live = [...sessions, room('r1')];
+  assert.equal(sectionForThread('r1', { sessions: live, peers }), SHARED.id);
+  assert.equal(sectionForThread('s1', { sessions: live, peers }), 'sessions');
+
+  // And once it has ended it is an ordinary session again, filed with the rest.
+  const done = [...sessions, room('r1', 'left')];
+  assert.equal(sectionForThread('r1', { sessions: done, peers }), 'sessions');
+});
+
+test('the fifth category is not one of the four', () => {
+  // It has a title, so headings and aria labels read properly...
+  assert.equal(SHARED.id, 'shared');
+  assert.equal(sectionTitle(SHARED.id), 'Shared with you');
+
+  // ...and it is nowhere in the arrangement a person has made of the panel. A
+  // category that may not exist tomorrow cannot hold a saved position, a lock,
+  // or a search scope — and a config file naming it must not be able to bring it
+  // back.
+  assert.equal(SECTION_IDS.includes(SHARED.id), false);
+  assert.equal(
+    SECTIONS.some((s) => s.id === SHARED.id),
+    false
+  );
+  assert.equal(normalizeOrder([SHARED.id]).includes(SHARED.id), false);
+  assert.deepEqual(normalizeOrder([SHARED.id, 'people']), ['people', 'sessions', 'agents', 'tailnet']);
+  assert.equal(
+    scopeOptions(DEFAULT_ORDER).some((o) => o.id === SHARED.id),
+    false,
+    'it is not offered as a search scope'
+  );
+
+  // It is searched the way sessions are, because the row says the same thing.
+  assert.deepEqual(searchFields(SHARED.id, { title: 'their room' }), [{ field: 'name', text: 'their room' }]);
+  assert.deepEqual(matchIn(SHARED.id, { title: 'their room' }, 'ROOM'), {
+    field: 'name',
+    text: 'their room',
+  });
+});
+
+test('a room is live until the host ends it, and then it is history', () => {
+  const mine = { id: 's1', title: 'mine' };
+  const live = room('r1');
+  const left = room('r2', 'left');
+  const revoked = room('r3', 'revoked');
+  const invited = room('r4', 'joined', { accepted: false });
+  const all = [mine, live, left, revoked, invited];
+
+  assert.equal(isGuestRoom(live), true);
+  assert.equal(isGuestRoom(mine), false);
+  assert.equal(isGuestRoom(null), false);
+
+  // Both endings count, and neither is a thing a session of your own can be.
+  assert.equal(roomEnded(live), false);
+  assert.equal(roomEnded(left), true);
+  assert.equal(roomEnded(revoked), true);
+  assert.equal(roomEnded(mine), false);
+  // A room whose roster has not arrived yet is not an ended one: silence about
+  // the host is not the host leaving.
+  assert.equal(roomEnded({ id: 'r5', hostPeerId: 'p-host' }), false);
+
+  // The split is total: every session is in exactly one of the two lists.
+  assert.deepEqual(
+    liveGuestRooms(all).map((s) => s.id),
+    ['r1', 'r4']
+  );
+  assert.deepEqual(
+    ownSessions(all).map((s) => s.id),
+    ['s1', 'r2', 'r3']
+  );
+  assert.deepEqual(liveGuestRooms([]), []);
+  assert.deepEqual(ownSessions(), []);
 });
 
 test('a shut heading counts what is behind it, and says when there is nothing to count', () => {
@@ -282,10 +374,11 @@ test('the panel renders the categories from the saved order and nothing else', (
   // nobody must not take the flashing off a category with an unread message in
   // it, because the search is about what is on screen and the flash is about
   // what has arrived.
-  // Sessions carry one more thing that is waiting: an invitation nobody has
-  // answered. It joins the summons rather than getting a signal of its own,
-  // because to a reader they are the same fact — something here wants an answer.
-  assert.match(sidebar, /sectionSignal\(sessions, unread, \{ \.\.\.summoned, \.\.\.invitations \}\)/);
+  // The two halves of the session list, each answering for itself: the rooms
+  // somebody else runs, above, where an unanswered invitation is the thing
+  // waiting — and this machine's own sessions below, where it never can be.
+  assert.match(sidebar, /sectionSignal\(rooms, unread, invitations\)/);
+  assert.match(sidebar, /sectionSignal\(own, unread, summoned\)/);
   assert.match(sidebar, /sectionSignal\(allAgents, unread, summoned\)/);
   assert.match(sidebar, /sectionSignal\(allPeople, unread, summoned\)/);
 });

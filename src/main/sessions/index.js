@@ -18,6 +18,7 @@ const {
   maySetup,
   mayDirect,
   invite,
+  members: roomMembers,
   setAsk,
   setState,
   accept,
@@ -99,6 +100,11 @@ const { PEER_MIN_INTERVAL_MS } = require('../agents/index.js');
 // is checked when somebody tries to ask again, which is the only moment it
 // matters. A transport that hangs must not be able to lock a workspace shut.
 const ROUND_IDLE_MS = 10 * 60 * 1000;
+
+// Where a room somebody else ran goes once it has ended. An ordinary folder with
+// an ordinary name, made on first need — see archiveRoom() below for why it is
+// found by that name rather than by an id written down somewhere.
+const SHARED_FOLDER_NAME = 'Shared Sessions';
 
 function createSessions({
   userDataDir,
@@ -197,6 +203,27 @@ function createSessions({
   function placeSession(id, { folderId = null, index = null } = {}) {
     if (folderId && !get(id)) return false;
     return folders.place(id, { folderId, index });
+  }
+
+  // A room that has ended, put where it can be found again.
+  //
+  // While it was live it had a heading of its own in the panel, above the
+  // sessions of this machine's own making. That heading goes with the room, so
+  // without this the conversation would come back as one more loose row in a
+  // list sorted by when things were last used — which is where a transcript
+  // somebody else ran is hardest to find later.
+  //
+  // The folder is made on first need and reused after, found by its name rather
+  // than by an id kept somewhere: it is an ordinary folder, so it can be
+  // renamed, emptied or deleted like any other, and a person who has done that
+  // gets a new one rather than an error. A room already filed by hand is left
+  // exactly where it was put — being ended is not a reason to overrule somebody's
+  // tidying.
+  function archiveRoom(id) {
+    if (!id || folders.folderOf(id)) return false;
+    const existing = folders.list().find((f) => f.name === SHARED_FOLDER_NAME);
+    const folder = existing || folders.create({ name: SHARED_FOLDER_NAME });
+    return folder ? folders.place(id, { folderId: folder.id }) : false;
   }
 
   function setAgent(id, agentId) {
@@ -524,12 +551,48 @@ function createSessions({
   // have nowhere to arrive: the round is in memory, the window has stopped
   // showing the session, and an open round left behind would keep a workspace
   // nobody can see marked as busy until it went stale.
+  //
+  // A shared one is closed as well as put away. Deleting a room used to tell
+  // nobody: every guest kept a conversation that looked live, with an open
+  // composer, sending sentences to a host that would silently drop them. So the
+  // room is ended the way taking one person out ends it for them — the same
+  // `session-leave` frame, sent to everybody holding a copy, which every build
+  // that has ever understood rooms already knows how to handle.
+  //
+  // They are marked revoked here too, rather than only being told. A restore
+  // brings back the transcript, not the room: the people in it have been told it
+  // is over, and a roster that still claimed they were present would be this
+  // machine believing something it had itself contradicted.
   function trash(id) {
     const record = sessions.get(id);
     if (!record || record.deletedAt) return false;
     const open = rounds.get(id);
     if (open) closeRound(open);
+    closeRoom(record);
     return Boolean(sessions.trash(id));
+  }
+
+  // Ending a hosted room for everybody holding a copy of it. Nothing on a
+  // guest's side, and nothing at all if this was never shared or is somebody
+  // else's room to end.
+  //
+  // Everybody *invited*, not everybody present — which is why this does not use
+  // audience(). That list is for relaying what was said, and somebody who has
+  // not accepted yet is deliberately not in it. But they are holding an
+  // invitation to a room that is about to stop existing, and an invitation
+  // nobody can accept is the worst of the two things this could leave behind.
+  function closeRoom(record) {
+    if (!record || !isHost(record) || !shared(record)) return false;
+    const holders = roomMembers(record)
+      .filter((m) => m.state === 'joined' || m.state === 'invited')
+      .map((m) => m.peerId);
+    let members = record.members;
+    for (const peerId of holders) {
+      tell(peerId, { type: 'session-leave', sessionId: record.id });
+      members = revoke({ ...record, members }, peerId);
+    }
+    if (holders.length) sessions.update(record.id, { members });
+    return true;
   }
 
   function restore(id) {
@@ -1672,7 +1735,20 @@ function createSessions({
     if (!record) return;
     if (isGuest(record)) {
       if (fromPeerId !== record.hostPeerId) return;
+      // An invitation withdrawn before it was answered leaves nothing behind,
+      // so nothing is kept. There is no transcript to protect: a guest who has
+      // not accepted is not in the audience — see present() in room.js — so
+      // nothing was ever relayed or synced into this record. The record goes the
+      // same way a declined one does, rather than sitting in the panel offering
+      // a Join button for a room that has stopped existing.
+      if (record.accepted !== true) {
+        sessions.remove(sessionId);
+        if (bus) bus.emit('session-room', { sessionId });
+        return;
+      }
       sessions.update(sessionId, { members: setState(record, fromPeerId, 'left') });
+      // It stops being a room and becomes a transcript, so it is filed as one.
+      archiveRoom(sessionId);
     } else {
       if (!memberOf(record, fromPeerId)) return;
       sessions.update(sessionId, { members: leave(record, fromPeerId) });

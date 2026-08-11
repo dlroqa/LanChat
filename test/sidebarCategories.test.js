@@ -231,6 +231,75 @@ test('mounted in a browser: pointing, pinning, dragging, and a title that keeps 
   assert.equal(result.reduced.titleImage, 'gradient', 'but the title stays lit');
   assert.equal(result.reduced.badge, '3', 'and the count is still there to be read');
   assert.ok(result.reduced.contrast.worst >= 4.5, `held still it measures ${result.reduced.contrast.worst}`);
+
+  // ---- the category that arrives -----------------------------------------
+  // A room somebody else runs, while it is live. Nothing was clicked to bring
+  // this heading into being: the invitation arrived in the list the panel is
+  // given, and a fifth category appeared on its own.
+  assert.equal(s.roomArrived.order[0], 'shared', 'it should arrive above everything');
+  assert.deepEqual(
+    s.roomArrived.order.slice(1),
+    s.searched.order,
+    'and leave the four the reader arranged exactly as they were'
+  );
+
+  const arrived = shown(s.roomArrived, 'shared');
+  assert.equal(arrived.open, false, 'it arrives shut, like any other heading');
+  assert.equal(arrived.flashing, true, 'and lit, because somebody is waiting for an answer');
+  assert.equal(arrived.titleAnimation, 'sb-prism', 'with the same prism the other four use');
+  assert.equal(arrived.titleImage, 'gradient');
+  assert.equal(arrived.dot, true, 'an invitation raises no unread count, so the dot carries it');
+
+  // It is pinned: no grip and no lock, because there is no order to move it in
+  // and nothing to keep open once the room has ended.
+  assert.equal(arrived.pinned, true);
+  assert.equal(arrived.gripOpacity, null, 'a category that comes and goes has no place to be moved to');
+  assert.equal(arrived.lockOpacity, null, 'and nothing to be kept open');
+  assert.equal(arrived.headBtn, true, 'its heading is the way in');
+  assert.equal(arrived.headExpanded, 'false');
+
+  // And the room has left the Sessions list, which is the whole point: it is no
+  // longer one row among the sessions this machine started.
+  assert.equal(
+    s.roomArrived.sessionRowsShown.includes('r1'),
+    false,
+    'a live room should not also be drawn under Sessions'
+  );
+
+  // Opened by a click. The other four cannot be: they open when a pointer rests
+  // on them, and a heading that only answers a hover is a heading a keyboard
+  // cannot reach.
+  assert.equal(open(s.roomOpened, 'shared'), true, 'clicking the heading should open it');
+  assert.equal(shown(s.roomOpened, 'shared').headExpanded, 'true');
+  assert.deepEqual(
+    shown(s.roomOpened, 'shared').rowTitles,
+    ['kitchen wiring'],
+    'and show the title its host gave it'
+  );
+  assert.deepEqual(shown(s.roomOpened, 'shared').rowSubs, ['Invitation · waiting for you']);
+  // And it cannot be filed while it is live. It is not in the list a folder
+  // draws from, so a drop would put it somewhere it then failed to appear.
+  assert.deepEqual(
+    shown(s.roomOpened, 'shared').rowsDraggable,
+    [false],
+    'a live room is not a row to be carried about'
+  );
+
+  // Answering stops the flash and nothing else: the room is still live, and
+  // still not one of yours.
+  assert.equal(shown(s.roomAnswered, 'shared').flashing, false, 'an answered invitation stops waiting');
+  assert.equal(s.roomAnswered.order[0], 'shared', 'but the room is still somebody else’s');
+  assert.deepEqual(shown(s.roomAnswered, 'shared').rowTitles, ['kitchen wiring']);
+
+  // Ended by the host: the heading goes with the room, and the conversation
+  // comes back as an ordinary session rather than disappearing with it.
+  assert.equal(s.roomEnded.order.includes('shared'), false, 'the category goes when the room does');
+  assert.deepEqual(s.roomEnded.order, s.searched.order, 'leaving the four as they were');
+  assert.equal(
+    s.roomEnded.sessionRowsShown.includes('r1'),
+    true,
+    'and the transcript is back under Sessions, where history lives'
+  );
 });
 
 // Folders of sessions, driven the way somebody would drive them: a session

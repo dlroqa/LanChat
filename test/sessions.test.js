@@ -3849,3 +3849,180 @@ test('a guest cannot speak into a room it has not joined', async (t) => {
   await waitFor(() => A.store.read(session.id).length > 0, 5000, 'the message to reach the host');
   assert.equal(A.store.read(session.id)[0].text, 'hello now');
 });
+
+// ---------------------------------------------------------------------------
+// The end of a room, over a real socket.
+//
+// A room that ends is the other half of a room that starts, and until now only
+// one of the two crossed the wire: taking one person out told them, and deleting
+// the whole session told nobody at all. Every guest kept a conversation that
+// looked live — open composer, full roster — and went on sending sentences to a
+// host that dropped them without a word. So this is proved between two nodes for
+// the same reason sharing is: it is the part that moves between computers.
+
+test('deleting a shared session ends it for the room, and files it as history', async (t) => {
+  const A = makeNode('ending-host', await freePort());
+  const B = makeNode('ending-guest', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+  await connect(B, A);
+  const idA = A.getIdentity().id;
+  const idB = B.getIdentity().id;
+
+  const session = A.call('lanchat:createSession', { title: 'while it lasted' });
+  A.call('lanchat:inviteToSession', { id: session.id, peerId: idB });
+  await waitFor(
+    () => B.call('lanchat:listSessions').some((s) => s.id === session.id),
+    5000,
+    'the invitation'
+  );
+  B.call('lanchat:answerSessionInvite', { id: session.id, accepted: true });
+  await waitFor(
+    () =>
+      (A.call('lanchat:listSessions').find((x) => x.id === session.id).members || []).some(
+        (m) => m.peerId === idB && m.state === 'joined'
+      ),
+    5000,
+    'the host to record the acceptance'
+  );
+  B.call('lanchat:sendChat', { peerId: session.id, text: 'worth keeping' });
+  await waitFor(() => A.store.read(session.id).length > 0, 5000, 'a sentence in the room');
+
+  // The host deletes it. Nothing else happens on the guest's side — no click, no
+  // restart.
+  assert.equal(A.call('lanchat:deleteSession', { id: session.id }).ok, true);
+
+  const ended = await waitFor(
+    () => {
+      const drawn = B.call('lanchat:listSessions').find((s) => s.id === session.id);
+      const host = ((drawn && drawn.members) || []).find((m) => m.peerId === idA);
+      return host && host.state === 'left' ? drawn : false;
+    },
+    5000,
+    'the guest to be told the room has ended'
+  );
+
+  // The conversation is not deleted — it was ours to read as much as theirs —
+  // but it stops being a room, and it is filed where a transcript can be found
+  // again rather than left loose in a list sorted by recency.
+  assert.equal(ended.hostPeerId, idA, 'it still knows whose room it was');
+  assert.equal(B.store.read(session.id).length > 0, true, 'and still holds what was said in it');
+  const folder = B.call('lanchat:listFolders').find((f) => f.name === 'Shared Sessions');
+  assert.ok(folder, 'a folder for rooms that have ended');
+  assert.deepEqual(folder.sessionIds, [session.id]);
+
+  // And the host does not go on believing the room is populated. A restore
+  // brings back the transcript, not the people.
+  const kept = A.call('lanchat:listTrash').find((s) => s.id === session.id);
+  assert.ok(kept, 'the host still has it in the Trash');
+  assert.equal(
+    (kept.members || []).find((m) => m.peerId === idB).state,
+    'revoked',
+    'the roster agrees with what the guest was told'
+  );
+});
+
+test('an invitation withdrawn before it is answered leaves nothing behind', async (t) => {
+  const A = makeNode('withdraw-host', await freePort());
+  const B = makeNode('withdraw-guest', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+  await connect(B, A);
+  const idB = B.getIdentity().id;
+
+  const session = A.call('lanchat:createSession', { title: 'never mind' });
+  A.call('lanchat:inviteToSession', { id: session.id, peerId: idB });
+  await waitFor(
+    () => B.call('lanchat:listSessions').some((s) => s.id === session.id),
+    5000,
+    'the invitation'
+  );
+
+  // Somebody who never accepted is told too, although they were never in the
+  // audience: an invitation is the one thing they *can* still act on, and a Join
+  // button that reaches nobody is worse than no button at all.
+  A.call('lanchat:deleteSession', { id: session.id });
+  await waitFor(
+    () => !B.call('lanchat:listSessions').some((s) => s.id === session.id),
+    5000,
+    'the withdrawn invitation to go'
+  );
+
+  // Nothing is lost by that: a guest who has not joined is not in the audience,
+  // so nothing was ever relayed or synced into it.
+  assert.equal(B.store.read(session.id).length, 0);
+  assert.equal(
+    B.call('lanchat:listFolders').some((f) => f.name === 'Shared Sessions'),
+    false,
+    'and no folder is made for a room that never held anything'
+  );
+});
+
+test('a room ended by having been taken out of it is filed the same way', async (t) => {
+  const A = makeNode('evict-host', await freePort());
+  const B = makeNode('evict-guest', await freePort());
+  await A.server.start();
+  await B.server.start();
+  t.after(() => {
+    A.hub.close();
+    B.hub.close();
+    A.server.stop();
+    B.server.stop();
+  });
+  await connect(B, A);
+  const idA = A.getIdentity().id;
+  const idB = B.getIdentity().id;
+
+  const session = A.call('lanchat:createSession', { title: 'for a while' });
+  A.call('lanchat:inviteToSession', { id: session.id, peerId: idB });
+  await waitFor(
+    () => B.call('lanchat:listSessions').some((s) => s.id === session.id),
+    5000,
+    'the invitation'
+  );
+  B.call('lanchat:answerSessionInvite', { id: session.id, accepted: true });
+  await waitFor(
+    () =>
+      (A.call('lanchat:listSessions').find((x) => x.id === session.id).members || []).some(
+        (m) => m.peerId === idB && m.state === 'joined'
+      ),
+    5000,
+    'the acceptance'
+  );
+
+  // A room the guest has filed somewhere themselves stays where they put it.
+  // Being ended is not grounds for overruling somebody's tidying.
+  const mine = B.call('lanchat:createFolder', { name: 'Weather' });
+  B.call('lanchat:placeSession', { id: session.id, folderId: mine.id });
+
+  A.call('lanchat:removeFromSession', { id: session.id, peerId: idB });
+  await waitFor(
+    () => {
+      const drawn = B.call('lanchat:listSessions').find((s) => s.id === session.id);
+      const host = ((drawn && drawn.members) || []).find((m) => m.peerId === idA);
+      return host && host.state === 'left';
+    },
+    5000,
+    'the guest to be told'
+  );
+
+  const folders = B.call('lanchat:listFolders');
+  assert.equal(
+    folders.some((f) => f.name === 'Shared Sessions'),
+    false,
+    'no second home for a session that already had one'
+  );
+  assert.deepEqual(folders.find((f) => f.id === mine.id).sessionIds, [session.id]);
+});
