@@ -13,6 +13,10 @@ import { MediaItem, MediaAttachments, RemoteImages, Progress } from './MessageMe
 // says so. They are two views of one fact rather than two facts.
 const ERROR_TTL_S = 10;
 
+// And how long a turn with nothing in it gets. Shorter, for the same reason it
+// is shorter in App.jsx: there is nothing in it to read.
+const EMPTY_TURN_TTL_S = 4;
+
 // previewUrl builds a localhost URL the main-process server streams the file from.
 export default function MessageBubble({
   msg,
@@ -137,10 +141,12 @@ export default function MessageBubble({
   // A run that failed. Never written down, and on its way out from the moment it
   // arrives: `dissolving` is App.jsx saying the count has reached zero.
   const errored = !out && msg.error === true;
-  // A summon line or a greeting an older build left in an agent thread. Written
-  // down at the time, so unlike an error this one really is being deleted — but
-  // it leaves the same way, and by the same clock.
+  // A summon line or a greeting an older build left in an agent thread, or an
+  // agent turn with nothing in it. Written down at the time, so unlike an error
+  // these really are being deleted — but they leave the same way, and the only
+  // thing that differs is the word for what is going and how long it gets.
   const leftover = msg.erasing === true;
+  const empty = leftover && msg.eraseKind === 'empty';
   const dissolving = msg.dissolving === true;
   // Either kind of message on its way out. The row layout, the caption slot and
   // the disintegration are shared; only the wording differs.
@@ -171,7 +177,7 @@ export default function MessageBubble({
   // Counted here rather than passed in, so the sentence and the bubble it sits
   // under read the same clock. Stops at the moment the bubble starts to go —
   // "in 0s" under something already coming apart is a promise about the past.
-  const left = useCountdown(ERROR_TTL_S, going && !dissolving);
+  const left = useCountdown(empty ? EMPTY_TURN_TTL_S : ERROR_TTL_S, going && !dissolving);
 
   return (
     <div
@@ -355,7 +361,7 @@ export default function MessageBubble({
           always alone, so it always carries its own. */}
       {going && (errored || msg.eraseLast) && (
         <div className="bubble-erase" role="status" aria-live="polite">
-          {`Erasing ${errored ? 'error' : 'summon'} to maintain clean context conversation` +
+          {`Erasing ${errored ? 'error' : empty ? 'empty turn' : 'summon'} to maintain clean context conversation` +
             (dissolving ? '' : ` in ${left}s`)}
         </div>
       )}

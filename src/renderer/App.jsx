@@ -34,6 +34,7 @@ import NewGroupCallModal from './components/NewGroupCallModal.jsx';
 import { GroupCallManager } from './lib/groupCall.js';
 import { listDevices, labelFor } from './lib/devices.js';
 import { isSessionThread, isThinkingThread } from './lib/sessionIds.js';
+import { isEmptyTurn, findEmptyTurns } from './lib/emptyTurn.js';
 import { useFileDrag } from './lib/useFileDrag.js';
 import { isAgentThread } from './lib/agentPhrase.js';
 import { commitCount } from './lib/sessionStanding.js';
@@ -77,6 +78,21 @@ const ERROR_TTL_MS = 10000;
 // the error on screen forever — the one outcome this whole feature exists to
 // prevent.
 const DISSOLVE_MS = 620;
+
+// How long a turn with nothing in it stays before it erases itself.
+//
+// The short one, because there is nothing in it to read. An agent that has
+// nothing to add is told to say so — "nothing further." at the end of a
+// discussion, the single word NOTHING to the observer — and both are stored
+// exactly as said. Four seconds is long enough to see that an agent answered and
+// that its answer was nothing, which is the only information the bubble carries;
+// after that it is a line of noise in the transcript, in the export, and in the
+// context every question below it is asked with.
+//
+// Only a bubble that is *nothing but* that. A real answer ending on the closing
+// line keeps every word of it — see lib/emptyTurn.js, which is where that
+// distinction is made and pinned.
+const EMPTY_TURN_TTL_MS = 4000;
 
 // One shared empty list for threads with nothing attached, so the composer is
 // not handed a brand-new array on every render of a conversation.
@@ -304,6 +320,14 @@ export default function App() {
   // Once per thread: the countdown is a thing you watch happen, not something to
   // start again every time you come back to the conversation.
   const erasedThreads = useRef(new Set());
+  // Every message currently counting down towards being erased, by id.
+  //
+  // Kept by message rather than by thread because the empty turns are found in
+  // three places — as they arrive, when a thread is opened, and when a room's
+  // backlog replaces one wholesale — and any of them can see a bubble another
+  // has already started. An id in here is one somebody is already watching go:
+  // starting its clock again would stand the countdown still.
+  const erasing = useRef(new Set());
 
   configRef.current = config;
   selectedRef.current = selectedId;
@@ -738,8 +762,110 @@ export default function App() {
         delete noticeTimers.current[msg.id];
         removeMessage(peerId, msg.id);
       }, NOTICE_TTL_MS);
+      return;
+    }
+    // An agent answering that it has nothing to add. Written down like any other
+    // answer, because at the moment it arrives it is one — somebody asked, and
+    // this is what came back. Four seconds later it is only clutter, so it goes
+    // the way the rest of the clutter goes, off the disk as well as off the
+    // screen. A bubble with anything else in it is never touched.
+    if (isEmptyTurn(msg, { isSession: isSessionThread(peerId) })) {
+      erase(peerId, [msg], { ttl: EMPTY_TURN_TTL_MS, kind: 'empty' });
     }
   }
+
+  // The one way a message leaves a thread on a clock.
+  //
+  // Shown once so nothing disappears behind your back, counted down where you
+  // can see it, then it comes apart and leaves the disk. Written once here
+  // because there are now three callers with three different reasons and one
+  // behaviour — a summon line an older build left, a turn with nothing in it, and
+  // whatever the next one turns out to be.
+  //
+  // One caption for the batch rather than one per bubble: four summons leave four
+  // greetings, and four lines all saying the same thing would be its own kind of
+  // clutter. `eraseLast` marks the one that carries it.
+  //
+  // First of the three, and held still with an empty dependency list, because
+  // everything it reaches for already is: two refs, a state setter, the preload
+  // bridge and two constants. Both of those matter. The two below name it as a
+  // dependency, so it has to exist by the time they are declared; and the effect
+  // that loads a thread's history depends on them in turn, so an identity that
+  // changed every render would turn one history load per thread into one per
+  // render.
+  const erase = useCallback((thread, found, { ttl, kind }) => {
+    const ids = (found || []).map((m) => m.id).filter((id) => id && !erasing.current.has(id));
+    if (!ids.length) return;
+    for (const id of ids) erasing.current.add(id);
+    const last = ids[ids.length - 1];
+    setMessages((prev) => ({
+      ...prev,
+      [thread]: (prev[thread] || []).map((m) =>
+        ids.includes(m.id) ? { ...m, erasing: true, eraseKind: kind, eraseLast: m.id === last } : m
+      ),
+    }));
+    const key = `erase:${thread}:${ids[0]}`;
+    noticeTimers.current[key] = setTimeout(() => {
+      setMessages((prev) => ({
+        ...prev,
+        [thread]: (prev[thread] || []).map((m) => (ids.includes(m.id) ? { ...m, dissolving: true } : m)),
+      }));
+      noticeTimers.current[key] = setTimeout(
+        () => {
+          delete noticeTimers.current[key];
+          for (const id of ids) erasing.current.delete(id);
+          // Off the disk and out of the window together. If the app closes in
+          // between, the next open finds them again and counts them down again —
+          // which is the right failure: nothing is lost, and nothing is deleted
+          // that was not seen going.
+          api.purgeMessages(thread, ids);
+          setMessages((prev) => ({
+            ...prev,
+            [thread]: (prev[thread] || []).filter((m) => !ids.includes(m.id)),
+          }));
+        },
+        prefersReducedMotion() ? 0 : DISSOLVE_MS
+      );
+    }, ttl);
+  }, []);
+
+  // Machinery an older build wrote into an agent thread, taken back out.
+  //
+  // The same treatment a failed run gets, because it is the same idea and the app
+  // now has one way of saying it: shown once so nothing disappears behind your
+  // back, counted down where you can see it, then it comes apart and leaves the
+  // disk. One countdown for the batch rather than one per bubble — four summons
+  // leave four greetings, and four captions saying the same thing would be its
+  // own kind of clutter.
+  //
+  // Held still like `erase` above it, and for the same reason: the effect that
+  // loads a thread's history depends on this, so an identity that changed every
+  // render would turn one history load per thread into one per render.
+  const eraseSummonLeftovers = useCallback(
+    (thread, hist) => {
+      if (erasedThreads.current.has(thread)) return;
+      erasedThreads.current.add(thread);
+      erase(thread, findSummonLeftovers(hist), { ttl: ERROR_TTL_MS, kind: 'summon' });
+    },
+    [erase]
+  );
+
+  // Turns with nothing in them, in a room's history.
+  //
+  // The same sweep as the one that runs on each message as it arrives, for the
+  // ones that were already on disk: left by a window closed mid-countdown, or by
+  // the backlog a guest is handed when they join a room somebody else has been
+  // talking in for an hour, or by a build older than any of this. Safe to call
+  // as often as it likes — `erase` skips anything already going.
+  const eraseEmptyTurns = useCallback(
+    (thread, hist) => {
+      erase(thread, findEmptyTurns(hist, { isSession: isSessionThread(thread) }), {
+        ttl: EMPTY_TURN_TTL_MS,
+        kind: 'empty',
+      });
+    },
+    [erase]
+  );
 
   // --- Initial load ---
   useEffect(() => {
@@ -785,6 +911,11 @@ export default function App() {
 
   // --- Event stream from main ---
   useEffect(() => {
+    // Read here rather than in the cleanup below: a ref is a box, and a cleanup
+    // that opens the box on its way out is opening whichever one is there then.
+    // This one never changes, but saying so in the code is what makes that a
+    // fact rather than an assumption.
+    const counting = erasing.current;
     const off = api.onEvent((evt) => {
       const { type, payload } = evt;
       switch (type) {
@@ -1048,6 +1179,12 @@ export default function App() {
         case 'history':
           setMessages((m) => ({ ...m, [payload.peerId]: payload.messages || [] }));
           loadedPeers.current.add(payload.peerId);
+          // An hour of somebody else's room can arrive in one go, and the empty
+          // turns in it are as much clutter here as they were there. The sweep
+          // that runs on a thread being opened has already run for this one — the
+          // guest had it open to press Join — so it is asked again for the
+          // transcript that has just replaced what it looked at.
+          eraseEmptyTurns(payload.peerId, payload.messages || []);
           break;
         // Where sessions are filed changed — a folder was made, named, deleted,
         // moved, or something was put in one. Published with the list above
@@ -1210,6 +1347,10 @@ export default function App() {
       off();
       for (const timer of Object.values(noticeTimers.current)) clearTimeout(timer);
       noticeTimers.current = {};
+      // The ids those timers were counting down are no longer counting down.
+      // Kept in step with the timers themselves, so nothing is left marked as
+      // going by a clock that has been stopped.
+      counting.clear();
     };
     // Subscribed once, for the life of the window. The handlers reach state
     // through setters and refs rather than closing over it, so there is nothing
@@ -1246,6 +1387,9 @@ export default function App() {
       // offered the way errors are — there is nothing in them to read and decide
       // about — so they are shown once, counted down in the open, and gone.
       if (isAgentThread(thread)) eraseSummonLeftovers(thread, hist);
+      // And the turns with nothing in them that were already on disk. Same
+      // treatment, same clock, for the ones that arrived while nobody was here.
+      eraseEmptyTurns(thread, hist);
       // Errors an older version kept. Only in sessions — the commit correction
       // that goes with removing them has nowhere to live on any other thread —
       // and only once per session per run, so declining is not asked again every
@@ -1255,7 +1399,11 @@ export default function App() {
       const found = findKeptErrors(hist);
       if (found.length) setSweep({ threadId: thread, ids: found.map((m) => m.id) });
     });
-  }, [selectedId]);
+    // The two sweeps are in here because they are held still — see the
+    // useCallbacks they are declared with. Listing them is honest and costs
+    // nothing: their identities do not change, so this still runs once, when the
+    // thread on screen does.
+  }, [selectedId, eraseSummonLeftovers, eraseEmptyTurns]);
 
   // A question this session already has out, for a window that missed it being
   // asked.
@@ -1282,51 +1430,6 @@ export default function App() {
     // about a round the window is already being told about.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
-
-  // Machinery an older build wrote into an agent thread, taken back out.
-  //
-  // The same treatment a failed run gets, because it is the same idea and the app
-  // now has one way of saying it: shown once so nothing disappears behind your
-  // back, counted down where you can see it, then it comes apart and leaves the
-  // disk. One countdown for the batch rather than one per bubble — four summons
-  // leave four greetings, and four captions saying the same thing would be its
-  // own kind of clutter.
-  function eraseSummonLeftovers(thread, hist) {
-    if (erasedThreads.current.has(thread)) return;
-    erasedThreads.current.add(thread);
-    const found = findSummonLeftovers(hist);
-    if (!found.length) return;
-    const ids = found.map((m) => m.id);
-    const last = ids[ids.length - 1];
-    setMessages((prev) => ({
-      ...prev,
-      [thread]: (prev[thread] || []).map((m) =>
-        ids.includes(m.id) ? { ...m, erasing: true, eraseLast: m.id === last } : m
-      ),
-    }));
-    const key = `erase:${thread}`;
-    noticeTimers.current[key] = setTimeout(() => {
-      setMessages((prev) => ({
-        ...prev,
-        [thread]: (prev[thread] || []).map((m) => (ids.includes(m.id) ? { ...m, dissolving: true } : m)),
-      }));
-      noticeTimers.current[key] = setTimeout(
-        () => {
-          delete noticeTimers.current[key];
-          // Off the disk and out of the window together. If the app closes in
-          // between, the next open finds them again and counts them down again —
-          // which is the right failure: nothing is lost, and nothing is deleted
-          // that was not seen going.
-          api.purgeMessages(thread, ids);
-          setMessages((prev) => ({
-            ...prev,
-            [thread]: (prev[thread] || []).filter((m) => !ids.includes(m.id)),
-          }));
-        },
-        prefersReducedMotion() ? 0 : DISSOLVE_MS
-      );
-    }, ERROR_TTL_MS);
-  }
 
   // Removing them. Both halves happen together or neither does: main takes the
   // messages out of the file and the same number off what the session claims to
