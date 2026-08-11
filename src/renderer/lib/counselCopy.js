@@ -80,9 +80,16 @@ export function sessionSubLine({ allAgents, names, available } = {}) {
 // What the composer invites you to do. In relay mode it says the order, because
 // the order is the whole difference between the two modes and choosing it in a
 // menu that is shut by the time you type is otherwise invisible.
-export function askPlaceholder({ allAgents, names, mode, discussing, held } = {}) {
+export function askPlaceholder({ allAgents, names, mode, discussing, held, guest } = {}) {
   const keys = '  (Enter to send, Shift+Enter for newline)';
   const list = (names || []).filter(Boolean);
+  // A room somebody else hosts, and the first branch of the three because it is
+  // the only one that changes what typing *does*. The agents in it are the
+  // host's: the words go to the room, the people in it read them, and the agents
+  // are not asked. Naming them here — "Give Hermes and Tessie something to
+  // discuss" — would be this box promising an answer that is not coming, which
+  // is worse than saying nothing.
+  if (guest) return `Say something to the room…${keys}`;
   // A discussion already under way is the one case where typing does something
   // other than ask a new question: the words join the discussion, and the next
   // agent to speak is shown them. Said here because a box that looks like it

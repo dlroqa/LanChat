@@ -487,6 +487,12 @@ function createIpc({
           };
           if (!answer.notice) store.append(from, answer);
           emit('chat', answer);
+          // And to everybody else in the room, if this session is one. An agent
+          // answers into a shared conversation, not into the transcript of
+          // whoever happens to own it — see share() in sessions/index.js, which
+          // decides what may be passed on and drops everything that is only true
+          // of this machine.
+          sessions.share(from, answer);
           // The mark a failed question keeps is no longer this message's to make.
           // One agent failing says nothing about whether a question three of them
           // were asked went unanswered, so the round decides at the end — see
@@ -570,6 +576,17 @@ function createIpc({
       }
       case 'session-chat': {
         sessions.onRoomChat(from, msg);
+        break;
+      }
+      // What the room is, and what its agents are doing. Both are the host's to
+      // say and nobody else's — mayDirect inside sessions is what holds that,
+      // exactly as it does for a transcript.
+      case 'session-state': {
+        sessions.onRoomState(from, msg);
+        break;
+      }
+      case 'session-round': {
+        sessions.onRoomRound(from, msg);
         break;
       }
       case 'session-leave': {
@@ -686,6 +703,11 @@ function createIpc({
           break;
         }
         if (stored) emit('chat', stored);
+        // A peer's agent answering a room of ours is passed on exactly as one of
+        // ours is: the room is the host's to relay, and where the agent happens
+        // to run is not something the other members should be able to tell from
+        // whether they were shown the answer.
+        if (stored && isSessionId(stored.peerId)) sessions.share(stored.peerId, stored);
         // An answer from somebody else's agent ends its slot in the round exactly
         // as one of ours does. Queue chatter does not — being told where we stand
         // in a stranger's queue is not the run ending.

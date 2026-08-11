@@ -188,6 +188,15 @@ test('the header, the sidebar and the composer say the same thing about the same
     'Session · all agents (none here yet)'
   );
   assert.match(copy.askPlaceholder(all), /^Ask all agents…/);
+
+  // A room somebody else hosts. The agents named on the card are theirs — the
+  // words go to the room and the agents are not asked — so the box must not
+  // offer to ask them. It beats every other branch, including a discussion in
+  // progress: whose agents they are does not change while one is running.
+  const guest = { ...two, guest: true };
+  assert.match(copy.askPlaceholder(guest), /^Say something to the room…/);
+  assert.doesNotMatch(copy.askPlaceholder(guest), /Tessie|Hermes/, 'and never promises them an answer');
+  assert.match(copy.askPlaceholder({ ...guest, discussing: true }), /^Say something to the room…/);
 });
 
 test('the thinking line names who is thinking, and who is still to be asked', () => {

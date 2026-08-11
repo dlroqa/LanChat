@@ -27,6 +27,18 @@ const DEFAULT_TITLE = 'New Session';
 // the sidebar row and the header stay one line.
 const MAX_TITLE = 80;
 
+// The host's cast, bounded — see `roomCounsel` in update() for what it is.
+//
+// It is the one list here that arrives from another machine, so it is bounded
+// the way the title is rather than trusted the way `agentIds` can be: those are
+// this machine's own ids. Twelve is the size of the colour ring in the window,
+// so a counsel past it is already sharing colours; thirty-two leaves room for a
+// larger room than anybody has and still refuses a list that is a payload rather
+// than a cast. The names are cut to a chip's worth for the same reason a title
+// is — a sidebar row is one line.
+const MAX_ROOM_COUNSEL = 32;
+const MAX_ROOM_NAME = 60;
+
 // How a session puts a question to more than one agent: all at once, one after
 // another with each shown what has been said so far, or talking to each other
 // until they are done.
@@ -87,6 +99,25 @@ function cleanIds(ids) {
   return out;
 }
 
+// The host's cast, as it arrives from the host.
+//
+// A name and, beside it, the id the host colours that voice by — carried only so
+// two windows watching one discussion give one agent one colour. Nothing without
+// a name is kept: an entry this window cannot draw is not a member of a cast, it
+// is a hole in a list somebody has to render. The id is optional and may be
+// null, because a name is the part that has to be there.
+function cleanRoomCounsel(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const entry of list.slice(0, MAX_ROOM_COUNSEL)) {
+    if (!entry || typeof entry.name !== 'string') continue;
+    const name = entry.name.replace(/\s+/g, ' ').trim().slice(0, MAX_ROOM_NAME);
+    if (!name) continue;
+    out.push({ id: typeof entry.id === 'string' && entry.id ? entry.id : null, name });
+  }
+  return out;
+}
+
 function cleanMode(mode) {
   return MODES.includes(mode) ? mode : DEFAULT_MODE;
 }
@@ -124,6 +155,14 @@ function normalize(record) {
   // Which shuffle the last question in this session ran. Nothing before this
   // build had one, and null simply means the next roll is unconstrained.
   if (record.lastArrangement === undefined) record.lastArrangement = null;
+  // Who the host of a shared session asks. Empty on every record written before
+  // rooms carried their settings, and empty on every session we host — where the
+  // question is answered by `agentIds` instead. Established here so the field
+  // has one shape everywhere rather than being an array on the records that have
+  // been told and undefined on the rest. Cleaned rather than adopted: what is on
+  // disk got there from another machine, and a file is not more trustworthy than
+  // the frame that filled it.
+  record.roomCounsel = cleanRoomCounsel(record.roomCounsel);
   return record;
 }
 
@@ -247,6 +286,11 @@ class SessionRegistry {
       // for why one machine does all the asking.
       agentIds: [],
       allAgents: false,
+      // Who the host asks, once they tell us — see `roomCounsel` in update() and
+      // onRoomState in index.js. Empty until then rather than absent: a header
+      // reading a field that does not exist yet is how a list ends up with two
+      // shapes.
+      roomCounsel: [],
       mode: DEFAULT_MODE,
       turns: DEFAULT_TURNS,
       members: cleanMembers(members),
@@ -335,6 +379,19 @@ class SessionRegistry {
     // by then there is fresh context and the warning has nothing left to warn
     // about.
     if (patch.needsContext !== undefined) record.needsContext = Boolean(patch.needsContext);
+    // Who the host asks, as the host names them.
+    //
+    // Only ever set on a guest's copy, and never read as a counsel: these ids
+    // belong to another machine and nothing here can ask them anything. They are
+    // display — the header of a shared session should say what the session is,
+    // and a room whose settings read differently on two screens is two rooms.
+    //
+    // Kept apart from `agentIds` for the reason speakerId is kept apart from
+    // agentId in sessions/index.js: the local namespace is local, and a list off
+    // the wire that landed in it would be a list this machine would try to use.
+    if (patch.roomCounsel !== undefined) {
+      record.roomCounsel = cleanRoomCounsel(patch.roomCounsel);
+    }
     record.updatedAt = Date.now();
     this.#save();
     return record;

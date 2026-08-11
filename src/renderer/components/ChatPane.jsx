@@ -173,14 +173,70 @@ export default function ChatPane({
   // pane that understood only the new field would answer an old card by disabling
   // its composer — which is to say, by deciding somebody had no agent because
   // they had exactly one.
+  // A room another machine runs. Nothing in it is this window's to change, and
+  // nothing in it is this window's to resolve either: its agents are the host's.
+  //
+  // Every read of the card here is optional-chained. This component is rendered
+  // with no thread selected — `peer` is null on the empty state — and a
+  // dependency array is evaluated on every render whatever the memo body says.
+  const guestRoom = isSession && Boolean(peer?.hostPeerId);
+
+  // Who the host asks, as the host named them. Names with an id beside them, so
+  // the chip, the menu, the placeholder and the colours all read the same list —
+  // and the id is the same string the host colours by, which is what makes one
+  // discussion look like one discussion on both screens.
+  const roomCast = useMemo(() => {
+    if (!guestRoom) return [];
+    const ids = peer.counselIds || [];
+    return (peer.agentNames || []).map((name, i) => ({ id: ids[i] || `voice:${name}`, name }));
+  }, [guestRoom, peer?.agentNames, peer?.counselIds]);
+
+  // An invitation nobody has answered. The one state in this window where the
+  // conversation is not the thing to look at.
+  const invited = guestRoom && peer.accepted === false;
+  const inviteFrom = useMemo(() => {
+    const host = (roomPeers || []).find((p) => p.id === peer?.hostPeerId);
+    return (host && (host.name || host.hostname)) || 'Someone';
+  }, [roomPeers, peer?.hostPeerId]);
+
   const counsel = useMemo(() => {
     if (!isSession) return [];
+    if (guestRoom) return roomCast;
     if (peer.allAgents) return agents;
     const ids = peer.agentIds || (peer.agentId ? [peer.agentId] : []);
     return ids.map((id) => agents.find((a) => a.id === id)).filter(Boolean);
-  }, [isSession, peer, agents]);
+  }, [isSession, guestRoom, roomCast, peer, agents]);
   const counselNamesList = counsel.map((a) => a.name);
   const thinkerName = isSession ? counselNamesList[0] || 'The agent' : peer?.name || 'The agent';
+
+  // Whether this conversation can be typed into, and whether a document may be
+  // staged against what is typed. Two questions, and a room is the one place
+  // they have different answers.
+  //
+  // A session with nobody to ask has nothing to ask; an agent that is off is the
+  // same case reached a different way. "Nobody" counts a session set to ask
+  // everybody when there is no everybody yet — the standing instruction is fine,
+  // there is simply no one here to carry it out. But a room is people as well as
+  // agents, so what closes the box there is not an empty counsel: it is an
+  // invitation nobody has answered yet.
+  //
+  // The paper is the other way round. A document staged in a session rides with
+  // the question to the agents; a guest's words go to the host and are relayed
+  // as text, and that path carries no attachments at all — see the guest branch
+  // of send() in main/sessions/index.js. Offering the button would be offering
+  // to send something that would be dropped on the way out, silently, after the
+  // chips had already been cleared.
+  //
+  // Both are worked out above the empty-thread return below, so both read the
+  // card the way everything else up here does — optional-chained. `peer` is null
+  // when no conversation is open, and a const at the top of a component is
+  // evaluated on that render too.
+  const composerShut = isSession
+    ? guestRoom
+      ? peer.accepted === false
+      : counsel.length === 0
+    : isAgent && !peer?.online;
+  const canAttach = isSession ? !guestRoom && counsel.length > 0 : peer?.online && !peer?.delegate;
 
   // A discussion, and whether it is standing still. Both read off the round main
   // publishes rather than worked out here — the round is the only thing that
@@ -199,10 +255,19 @@ export default function ChatPane({
   //
   // Only in a session. An agent's own thread is one agent's answers, and
   // colouring them says nothing that the thread does not already say.
+  //
+  // A room somebody else is hosting has no counsel here and never will — its
+  // agents are theirs — so its voices are known only from what they have said.
+  // `speakerId` is what the host relays instead of an agent id, and it is the
+  // same string on both machines, which is what makes one discussion read as the
+  // same four colours on every screen watching it.
   const palette = useMemo(() => {
     if (!isSession) return new Map();
     const ids = counsel.map((a) => a.id);
-    for (const m of messages) if (m.agentId && !ids.includes(m.agentId)) ids.push(m.agentId);
+    for (const m of messages) {
+      const voice = m.agentId || m.speakerId;
+      if (voice && !ids.includes(voice)) ids.push(voice);
+    }
     return paletteFor(ids);
   }, [isSession, counsel, messages]);
 
@@ -411,7 +476,11 @@ export default function ChatPane({
         <div className="meta">
           <div className="name">
             {isSession ? (
-              <SessionTitle title={peer.name} onRename={(title) => onRenameSession(peer.id, title)} />
+              <SessionTitle
+                title={peer.name}
+                guest={guestRoom}
+                onRename={(title) => onRenameSession(peer.id, title)}
+              />
             ) : (
               // In an element of its own, so a long name ellipsises instead of
               // squeezing what sits beside it out of the header.
@@ -446,11 +515,19 @@ export default function ChatPane({
             <div className="sub session-sub">
               <span>Session ·</span>
               <AgentPicker
-                agents={agents}
+                // A guest is shown the host's cast rather than this machine's:
+                // the settings of a shared session are one thing, and a header
+                // that read "choose agents…" beside a discussion between three
+                // of them was this window describing its own emptiness.
+                agents={guestRoom ? roomCast : agents}
                 // The same one-agent fallback the counsel above reads, so the
                 // ticks in the menu and the name on the chip can never come from
                 // two different readings of the same card.
-                agentIds={peer.agentIds || (peer.agentId ? [peer.agentId] : [])}
+                agentIds={
+                  guestRoom
+                    ? roomCast.map((a) => a.id)
+                    : peer.agentIds || (peer.agentId ? [peer.agentId] : [])
+                }
                 allAgents={Boolean(peer.allAgents)}
                 mode={peer.mode || 'parallel'}
                 turns={peer.turns}
@@ -585,6 +662,38 @@ export default function ChatPane({
             inputRef={findInput}
           />
         )}
+        {/* An invitation to somebody else's session, waiting to be answered.
+            In the middle of the conversation rather than tucked above the
+            composer, and drawn as a card that keeps flashing until it is
+            answered: an invitation is the one thing in this window that expires
+            if nobody notices it, and it was sitting in the quietest strip of the
+            screen. It is over the transcript rather than in it — the words of a
+            room you have not joined are not yours to scroll through yet. */}
+        {invited && (
+          <div className="invite-veil">
+            <div className="invite-card" role="alertdialog" aria-label="Session invitation">
+              <div className="invite-card-mark" aria-hidden="true">
+                <Sessions size={22} />
+              </div>
+              <div className="invite-card-text">
+                <strong>{peer.name}</strong>
+                <span>{inviteFrom} has invited you to this session.</span>
+              </div>
+              <div className="invite-card-acts">
+                <button type="button" className="floor-act" onClick={() => onAnswerInvite(peer.id, true)}>
+                  Join
+                </button>
+                <button
+                  type="button"
+                  className="floor-act quiet"
+                  onClick={() => onAnswerInvite(peer.id, false)}
+                >
+                  Decline
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         <div className="messages" ref={scrollRef} onScroll={onScroll}>
           {messages.map((m, i) => {
             const prev = messages[i - 1];
@@ -607,7 +716,7 @@ export default function ChatPane({
                 {newDay && <div className="day-sep">{formatDay(m.ts)}</div>}
                 <MessageBubble
                   msg={m}
-                  color={palette.get(m.agentId) || null}
+                  color={palette.get(m.agentId || m.speakerId) || null}
                   grouped={grouped}
                   previewUrl={previewUrl}
                   previewFallback={previewFallback}
@@ -756,26 +865,6 @@ export default function ChatPane({
         )}
       </div>
 
-      {/* An invitation to somebody else's session, waiting to be answered.
-          Above the composer with the rest of the things that are decisions, and
-          it replaces the composer rather than sitting beside it: there is
-          nothing to type into a room you have not joined. */}
-      {isSession && peer.hostPeerId && peer.accepted === false && (
-        <div className="invite-bar" role="status">
-          <span className="invite-bar-text">
-            <strong>{peer.name}</strong> — you have been invited to this session.
-          </span>
-          <span className="invite-bar-acts">
-            <button type="button" className="floor-act" onClick={() => onAnswerInvite(peer.id, true)}>
-              Join
-            </button>
-            <button type="button" className="floor-act quiet" onClick={() => onAnswerInvite(peer.id, false)}>
-              Decline
-            </button>
-          </span>
-        </div>
-      )}
-
       {/* An observer asking for the floor. Directly above the composer, because
           it is a decision and the composer is where decisions are made in this
           window — and below the transcript, because nothing it says has been
@@ -799,13 +888,11 @@ export default function ChatPane({
         onAttach={onAttach}
         onTyping={onTyping}
         onVoice={thinks || !peer.online ? undefined : onVoice}
-        // A session with nobody to ask has nothing to ask; an agent that is off
-        // is the same case reached a different way. "Nobody" counts a session set
-        // to ask everybody when there is no everybody yet — the standing
-        // instruction is fine, there is simply no one here to carry it out.
-        disabled={isSession ? counsel.length === 0 : isAgent && !peer.online}
+        // Both worked out above, where there is room to say why each is what it
+        // is — see composerShut and canAttach.
+        disabled={composerShut}
         offline={!isSession && !peer.online}
-        canAttach={isSession ? counsel.length > 0 : peer.online && !peer.delegate}
+        canAttach={canAttach}
         attachTitle={thinks ? 'Attach a document for the agent to read' : 'Send file, photo or video'}
         placeholder={
           isSession
@@ -815,6 +902,7 @@ export default function ChatPane({
                 mode: peer.mode,
                 discussing,
                 held,
+                guest: guestRoom,
               })
             : isAgent
               ? 'Ask the agent…  (Enter to send, Shift+Enter for newline)'

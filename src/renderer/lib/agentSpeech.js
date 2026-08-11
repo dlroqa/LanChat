@@ -1167,13 +1167,20 @@ export function useAgentSpeech({
   // A message as the player wants it. One conversion, used by the live path and
   // by both buttons, so what is spoken cannot depend on which one asked.
   const turnOf = (msg) => {
-    const mine = msg.direction === 'out' && !msg.agentId;
+    // Which voice this turn is. `agentId` on the machine that ran the agent;
+    // `speakerId` on everybody else's copy of a shared session, where the same
+    // string arrives as an attribution token and never as an agent this window
+    // has — see share() in main/sessions/index.js. Read here, once, so a room is
+    // read aloud in the same voices on every screen listening to it rather than
+    // in one voice on all but the host's.
+    const voiceId = msg.agentId || msg.speakerId || null;
+    const mine = msg.direction === 'out' && !voiceId;
     return {
       id: msg.id,
       text: msg.text,
       mine,
-      voice: voiceForTurn({ agentId: msg.agentId, mine }, dealt.voices, dealt.ring, dealt.userVoice),
-      localVoice: mine ? myLocalVoice : locals.get(msg.agentId) || myLocalVoice || null,
+      voice: voiceForTurn({ agentId: voiceId, mine }, dealt.voices, dealt.ring, dealt.userVoice),
+      localVoice: mine ? myLocalVoice : locals.get(voiceId) || myLocalVoice || null,
     };
   };
 

@@ -863,7 +863,15 @@ export default function App() {
           // the far end. The queue itself decides whether anything is spoken —
           // whether the setting is on, whether this session is a dialogue, and
           // whether this turn has been said already.
-          if (payload.direction === 'in' && payload.agentId && isSessionThread(payload.peerId)) {
+          // `speakerId` is the same fact on a guest's copy of a shared session:
+          // an agent's turn, relayed. Both are checked so a room is read aloud
+          // wherever it is being watched, not only on the machine whose agents
+          // are doing the talking.
+          if (
+            payload.direction === 'in' &&
+            (payload.agentId || payload.speakerId) &&
+            isSessionThread(payload.peerId)
+          ) {
             speechRef.current?.onTurn(payload);
           }
           // The finished reply supersedes the streamed preview. A session gets
@@ -1104,6 +1112,14 @@ export default function App() {
             }
             return { ...r, [payload.sessionId]: payload };
           });
+          // A round that is running is a wait, whoever started it. On this
+          // machine the composer armed it before the round existed; in a room
+          // somebody else hosts, this event is the only news that anything is
+          // happening — and a guest watching three agents answer in silence was
+          // watching a conversation it could not tell was under way.
+          if (payload.open) {
+            setAwaiting((a) => (a[payload.sessionId] ? a : { ...a, [payload.sessionId]: true }));
+          }
           if (!payload.open) {
             setAwaiting((a) => (a[payload.sessionId] ? { ...a, [payload.sessionId]: false } : a));
             setStreams((s) => (s[payload.sessionId] ? { ...s, [payload.sessionId]: {} } : s));
@@ -1434,6 +1450,13 @@ export default function App() {
       const counsel = record.allAgents
         ? askableAgents
         : (record.agentIds || []).map((id) => askableAgents.find((a) => a.id === id)).filter(Boolean);
+      // A room somebody else runs asks their agents, which are not in the list
+      // above and never will be — resolving it here would answer "nobody". What
+      // the host asks is carried on the record instead, as names, and the two are
+      // kept apart all the way to the card: `counsel` is who this machine can
+      // ask, `roomCounsel` is who the conversation has in it.
+      const room = Array.isArray(record.roomCounsel) ? record.roomCounsel : [];
+      const cast = record.hostPeerId ? room : counsel;
       return {
         id: record.id,
         kind: 'session',
@@ -1445,16 +1468,16 @@ export default function App() {
         // list, which for a session set to "all agents" is a single head id
         // rather than the cast — reading that where the resolved list was meant
         // is what left most agents without a voice in 0.8.8.
-        counselIds: counsel.map((a) => a.id),
+        counselIds: cast.map((a) => a.id).filter(Boolean),
         allAgents: Boolean(record.allAgents),
         mode: record.mode || 'parallel',
         // How many turns a discussion in this session gets. Carried even when
         // the mode is not `dialogue`, so switching to it does not show a stepper
         // with nothing in it while the record catches up.
         turns: record.turns,
-        agentNames: counsel.map((a) => a.name),
+        agentNames: cast.map((a) => a.name),
         agentId: counsel[0]?.id || null,
-        agentName: counsel[0]?.name || null,
+        agentName: cast[0]?.name || null,
         online: true,
         // This session lost questions it cannot put back — see sweepErrors in
         // sessions/index.js. Carried on the card so the pane can say so without
@@ -1581,12 +1604,27 @@ export default function App() {
     toast(`${item.name} could not be reached — its owner is offline.`, 'error');
   }
 
+  // A session another machine runs. Its agents belong to the host and so do its
+  // rounds; this window is in the room rather than driving it.
+  function isGuestRoom(id) {
+    if (!isSessionThread(id)) return false;
+    return Boolean(sessions.find((s) => s.id === id)?.hostPeerId);
+  }
+
   async function sendText(text) {
     if (!selectedId) return;
     // Asking an agent means waiting on it, and that is knowable here without a
     // round trip. Relying only on the owner's relay left the far side reading
     // "Ready" while it was plainly working.
-    if (isThinkingThread(selectedId)) setAwaiting((a) => ({ ...a, [selectedId]: true }));
+    //
+    // Except in a room somebody else is hosting, where nothing here is thinking:
+    // the words go to the host, its agents answer, and what comes back arrives
+    // as messages rather than as a round. Arming the wait there left a guest
+    // watching "The agent is thinking" for the rest of the session — a wait with
+    // nothing on this machine able to end it.
+    if (isThinkingThread(selectedId) && !isGuestRoom(selectedId)) {
+      setAwaiting((a) => ({ ...a, [selectedId]: true }));
+    }
     // Cleared before the round trip, so the chips go the moment Send is pressed
     // rather than lingering while a slow agent is reached. A refusal puts them
     // back below, alongside the words.

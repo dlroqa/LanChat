@@ -212,8 +212,21 @@ export default function Sidebar({
     tailnet: hits.tailnet.length,
   };
 
+  // An invitation nobody has answered is something waiting, exactly as an unread
+  // message is — and it was the one kind of waiting the sidebar could not say.
+  // A room you were asked into arrived silently: the row appeared, the heading
+  // stayed dark, and the only thing that ever mentioned it was a strip above the
+  // composer of a session you had no reason to open. So it is fed into the same
+  // signal the unread count is, and the row flashes the way a summoned agent
+  // does — the two mean the same thing to a reader.
+  const invitations = useMemo(() => {
+    const out = {};
+    for (const s of sessions || []) if (s.hostPeerId && s.accepted === false) out[s.id] = true;
+    return out;
+  }, [sessions]);
+
   const signals = {
-    sessions: sectionSignal(sessions, unread, summoned),
+    sessions: sectionSignal(sessions, unread, { ...summoned, ...invitations }),
     agents: sectionSignal(allAgents, unread, summoned),
     people: sectionSignal(allPeople, unread, summoned),
     tailnet: { count: 0, alert: false },
@@ -440,7 +453,12 @@ export default function Sidebar({
   // one. It decides two things and nothing else: whether the row is a drop
   // target for another session, and where a drop lands.
   const sessionRow = (s, folderId = null) => {
-    const names = sessionCounsel(s, askableAgents).map((a) => a.name);
+    // A room another machine runs asks their agents, so the line under it names
+    // theirs: resolving it against this machine's roster answers "no agent yet"
+    // about a session with three of them in it.
+    const names = s.hostPeerId
+      ? (s.roomCounsel || []).map((a) => a.name)
+      : sessionCounsel(s, askableAgents).map((a) => a.name);
     // The day the session was started, beside its name. Sessions are ordered by
     // when they were last used, so the list itself says nothing about age — and
     // every session begins life called "New Session", which makes the date the
@@ -459,7 +477,9 @@ export default function Sidebar({
         // Named in the DOM the way a category and a folder are, so the browser
         // harness can point at one row rather than counting its way to it.
         data-row={s.id}
-        className={`peer session ${s.id === selectedId ? 'active' : ''} ${edge}`}
+        className={`peer session ${s.id === selectedId ? 'active' : ''} ${
+          invitations[s.id] ? 'invited' : ''
+        } ${edge}`}
         onClick={() => onSelect(s.id)}
         draggable
         onDragStart={sessionDragStart(s.id)}
@@ -482,7 +502,11 @@ export default function Sidebar({
               </span>
             )}
           </div>
-          <div className="sub">{sessionSubLine({ allAgents: s.allAgents, names })}</div>
+          <div className="sub">
+            {invitations[s.id]
+              ? 'Invitation · waiting for you'
+              : sessionSubLine({ allAgents: s.allAgents, names })}
+          </div>
         </div>
         {unread[s.id] > 0 && <span className="unread-dot">{unread[s.id]}</span>}
       </div>

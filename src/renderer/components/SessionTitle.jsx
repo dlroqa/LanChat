@@ -8,7 +8,12 @@ import React, { useEffect, useRef, useState } from 'react';
 // Escape puts back what was there, and an empty title falls back to the default
 // rather than leaving a row with nothing to click on.
 
-export default function SessionTitle({ title, onRename }) {
+// `guest` is a session another machine runs. Its name is the host's, like every
+// other thing about it — main refuses a rename from this end (see rename() in
+// sessions/index.js), and a control that opened, took a new name and then
+// quietly put the old one back would be a worse way of saying so than not
+// opening at all.
+export default function SessionTitle({ title, onRename, guest = false }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title);
   const input = useRef(null);
@@ -40,7 +45,12 @@ export default function SessionTitle({ title, onRename }) {
 
   if (!editing) {
     return (
-      <button className="session-title" onClick={() => setEditing(true)} title="Rename this session">
+      <button
+        className="session-title"
+        onClick={() => !guest && setEditing(true)}
+        disabled={guest}
+        title={guest ? 'Only the person who started this session can rename it.' : 'Rename this session'}
+      >
         <span className="name-text">{title}</span>
       </button>
     );

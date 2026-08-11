@@ -1602,19 +1602,27 @@ input:focus-visible {
    deliberate and it is the reason the tag beside the name exists: the words say
    the same thing, so nothing depends on the animation being seen, or on it being
    running at all. */
-.peer.summoned {
+/* A session somebody has asked you into flashes the same way, because to a
+   reader it is the same fact: something here is waiting for you and will keep
+   waiting until you answer it. One look, one meaning — a second animation that
+   meant "waiting" slightly differently would be two things to learn. */
+.peer.summoned,
+.peer.invited {
   background: color-mix(in srgb, var(--primary) 14%, transparent);
   box-shadow: inset 2px 0 0 var(--primary);
   animation: peer-summoned 2s ease-in-out infinite;
 }
 /* Selected wins: once it is open the pulse has done its job, and the row must
-   read as the conversation you are in rather than as one still calling. */
+   read as the conversation you are in rather than as one still calling.
+   An invitation is the exception — opening it is not answering it, and the card
+   in the middle of the pane is still waiting for a Join or a Decline. */
 .peer.summoned.active {
   animation: none;
 }
 /* The subtitle carries the word, so it is not the muted grey the other subtitles
    are — it is the thing the row is saying. */
-.peer.summoned .sub {
+.peer.summoned .sub,
+.peer.invited .sub {
   color: var(--fg);
   font-weight: 600;
 }
@@ -1627,7 +1635,8 @@ input:focus-visible {
   /* The global switch already stops the animation. Left with the steady tint and
      the bar, so the row still stands out — a signal that exists only while it is
      moving is no signal at all for anybody who has turned motion off. */
-  .peer.summoned {
+  .peer.summoned,
+  .peer.invited {
     animation: none;
     background: color-mix(in srgb, var(--primary) 24%, transparent);
   }
@@ -1947,6 +1956,15 @@ input:focus-visible {
 }
 .session-title:hover {
   background: var(--surface-hover);
+}
+/* Somebody else's room. The name is still the name — full contrast, because it
+   is the title of the conversation you are reading — and only the affordance
+   goes: nothing lights under the pointer, because nothing happens if you press. */
+.session-title:disabled {
+  cursor: default;
+}
+.session-title:disabled:hover {
+  background: transparent;
 }
 .session-title-input {
   width: 100%;
@@ -7562,26 +7580,93 @@ code.path {
    Somebody else's session, offered. It sits where the composer's decisions sit
    and reads as an offer rather than an alert: being asked into a room is not a
    warning. */
-.invite-bar {
+/* ---------------- An invitation ----------------
+   In the middle of the conversation pane, over the top of it.
+
+   It used to be a strip above the composer, which is where this window puts
+   things you have already decided to look at — a queue notice, an observer
+   asking for the floor. An invitation is not one of those: nothing about the
+   session it names is readable until it is answered, and somebody who does not
+   notice it has, in effect, declined. So it takes the middle of the pane, the
+   one place in this layout that nothing else ever occupies.
+
+   The veil covers the transcript rather than pushing it aside. A room you have
+   not joined has nothing in it yet, and on the day it does — a sync arrives
+   before the answer — those are not your words to read yet either. */
+.invite-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin: 0 14px 6px;
-  padding: 8px 11px;
-  border: 1px solid color-mix(in srgb, var(--primary) 40%, var(--border));
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--primary) 10%, var(--surface));
+  justify-content: center;
+  padding: 20px;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  backdrop-filter: blur(2px);
 }
-.invite-bar-text {
-  min-width: 0;
-  font-size: 13px;
+/* The card keeps flashing until it is answered — the same two-second breath the
+   sidebar row is doing, so the row and the card read as one thing calling from
+   two places. It is the border and the glow that move, never the text: a
+   sentence that pulsed in and out would be a sentence you had to wait to read. */
+.invite-card {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  width: min(440px, 100%);
+  padding: 16px 18px;
+  border: 1px solid color-mix(in srgb, var(--primary) 55%, var(--border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+  box-shadow: 0 18px 40px color-mix(in srgb, var(--bg) 70%, transparent);
+  animation: invite-breathe 2s ease-in-out infinite;
+}
+@keyframes invite-breathe {
+  50% {
+    border-color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 26%, var(--surface));
+    box-shadow:
+      0 18px 40px color-mix(in srgb, var(--bg) 70%, transparent),
+      0 0 0 4px color-mix(in srgb, var(--primary) 22%, transparent);
+  }
+}
+.invite-card-mark {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--primary) 26%, transparent);
   color: var(--fg);
 }
-.invite-bar-acts {
+.invite-card-text {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.invite-card-text strong {
+  font-size: 15px;
+  color: var(--fg);
+}
+.invite-card-text span {
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.invite-card-acts {
   display: flex;
   flex: 0 0 auto;
   gap: 6px;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Held at the bright end rather than the dim one. With motion off the card is
+     the only thing saying an answer is wanted, so it says it at full strength. */
+  .invite-card {
+    animation: none;
+    border-color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 26%, var(--surface));
+  }
 }
 
 /* Below this there is no room for three panels. The side panel goes — and the

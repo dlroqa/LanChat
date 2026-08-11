@@ -145,8 +145,25 @@ function createSessions({
     return sessions.create(draft);
   }
 
+  // Renaming, and changing what a session is, are the host's.
+  //
+  // Not a new rule — maySetup has said so since rooms existed — but it was said
+  // about frames off the wire and never about this window, which could quietly
+  // rename somebody else's room on its own copy alone. Two people reading
+  // different names for one conversation is the smallest version of the thing
+  // sharing is supposed to prevent.
+  //
+  // Through get() rather than the registry's, which brings the trash rule with
+  // it: a session in the Trash refuses a rename the way it refuses a question,
+  // and for the same reason. Nothing reachable changes — the name is edited from
+  // the header of an open session, and a trashed one is not in the list — but
+  // the two doors now answer alike rather than by accident.
   function rename(id, title) {
-    return sessions.update(id, { title });
+    const record = get(id);
+    if (!record || !maySetup(record, null)) return null;
+    const updated = sessions.update(id, { title });
+    announce(id);
+    return updated;
   }
 
   // ------------------------------------------------------------------ folders
@@ -194,6 +211,12 @@ function createSessions({
   // fixed — and a best effort is the right amount for a field that only matters
   // to a version of the app this person may never run again.
   function setCounsel(id, { agentIds, allAgents, mode, turns, observer } = {}) {
+    // The host decides what a session is. A guest's copy is a view of theirs —
+    // see maySetup in room.js — and a guest that could set its own mode would be
+    // a second authority over a room it does not run, disagreeing with the one
+    // machine that actually asks the agents.
+    const current = get(id);
+    if (current && !maySetup(current, null)) return current;
     const patch = {};
     if (agentIds !== undefined) patch.agentIds = agentIds;
     if (allAgents !== undefined) patch.allAgents = allAgents;
@@ -204,7 +227,12 @@ function createSessions({
     // picker changing the level cannot silently switch interrupting back off.
     if (observer !== undefined) patch.observer = observer;
     if (allAgents === true) patch.agentId = askable().find((a) => a.ready)?.id || null;
-    return sessions.update(id, patch);
+    const updated = sessions.update(id, patch);
+    // Everybody in the room is looking at this session too, and they are looking
+    // at their own copy of its settings. Told here, at the one door every change
+    // to a counsel comes through.
+    announce(id);
+    return updated;
   }
 
   // Everyone this machine could put a question to, and whether they can take one
@@ -347,7 +375,11 @@ function createSessions({
   }
 
   function publish(round) {
-    if (bus) bus.emit('session-round', view(round));
+    const published = view(round);
+    if (bus) bus.emit('session-round', published);
+    // And to everybody else in the room. The window that owns the agents is not
+    // the only one waiting on them.
+    shareRound(round.sessionId, published);
   }
 
   // A round that nothing has happened in for a long time is over, whatever the
@@ -396,29 +428,33 @@ function createSessions({
       store.update(round.sessionId, round.messageId, { failed: true });
       round.failedRef = round.messageId;
     }
-    if (bus)
-      bus.emit('session-round', {
-        ...view(round),
-        failedRef: round.failedRef || null,
-        // Why the discussion stopped, in words, built here with every other
-        // sentence a session produces. Never stored: it is true about this round
-        // and noise above the next question, exactly like the missed notice.
-        ...(round.mode === 'dialogue' && {
-          endedNotice: endedNotice(round.ended, { turn: round.turn, cap: round.cap }),
-        }),
-        // A cycle that ran its three parts has its own sentence: it did not run
-        // out of budget and the agents did not run out of things to say, which
-        // are the only two endings dialogue.js knows how to describe. It simply
-        // had three parts and finished them. An ending of any other kind — the
-        // room emptying, somebody pressing Stop — keeps the words that ending
-        // already has.
-        ...(round.segments.length && {
-          endedNotice:
-            round.ended === CYCLED
-              ? cycleNotice(round.arrangement, { spoke: round.answers.length })
-              : endedNotice(round.ended, { turn: round.turn, cap: round.cap }),
-        }),
-      });
+    const closing = {
+      ...view(round),
+      failedRef: round.failedRef || null,
+      // Why the discussion stopped, in words, built here with every other
+      // sentence a session produces. Never stored: it is true about this round
+      // and noise above the next question, exactly like the missed notice.
+      ...(round.mode === 'dialogue' && {
+        endedNotice: endedNotice(round.ended, { turn: round.turn, cap: round.cap }),
+      }),
+      // A cycle that ran its three parts has its own sentence: it did not run
+      // out of budget and the agents did not run out of things to say, which
+      // are the only two endings dialogue.js knows how to describe. It simply
+      // had three parts and finished them. An ending of any other kind — the
+      // room emptying, somebody pressing Stop — keeps the words that ending
+      // already has.
+      ...(round.segments.length && {
+        endedNotice:
+          round.ended === CYCLED
+            ? cycleNotice(round.arrangement, { spoke: round.answers.length })
+            : endedNotice(round.ended, { turn: round.turn, cap: round.cap }),
+      }),
+    };
+    if (bus) bus.emit('session-round', closing);
+    // The room is told a round ended as surely as it was told one started. A
+    // guest that only ever heard the beginning would sit watching an indicator
+    // for agents that finished ten minutes ago.
+    shareRound(round.sessionId, closing);
   }
 
   // Sweeping the errors an older version wrote into this session.
@@ -689,19 +725,10 @@ function createSessions({
     store.append(sessionId, message);
     sessions.touch(sessionId);
 
-    // The host's own words, passed on to the room. Everything an agent says is
-    // relayed where it is written down; this is the one thing said here that
-    // nothing else would carry.
-    if (shared(record)) {
-      tellRoom(record, {
-        type: 'session-chat',
-        sessionId,
-        text,
-        speaker: identityName(),
-        id: message.id,
-        ts: message.ts,
-      });
-    }
+    // The host's own words, passed on to the room — through the same door
+    // everything else said here goes through, so what the room is shown cannot
+    // depend on which writer wrote it.
+    share(sessionId, message);
 
     // Said, and nobody asked anything.
     //
@@ -1158,6 +1185,195 @@ function createSessions({
     for (const peerId of audience(record, except)) tell(peerId, frame);
   }
 
+  // What a message written into a hosted session owes the room.
+  //
+  // The one place that turns something in our transcript into a frame for
+  // everybody else's, and every writer goes through it — the person typing, a
+  // word said into a live discussion, an agent answering, an observer that was
+  // given the floor, and a member's words being passed on. It was written after
+  // the room could only see the people in it: the relay existed for typed words
+  // alone, so an agent answered into a conversation that half the room was
+  // watching and never saw it happen. A room that shows one person's screen a
+  // different conversation from another's is not a room.
+  //
+  // Refuses on the two facts that decide it, in this order: only the host
+  // relays — a guest re-broadcasting would put the same sentence round the room
+  // twice — and a workspace with nobody in it has no room to tell.
+  //
+  // What is deliberately not sent: notices and errors. A queue position, a
+  // "nobody could be reached", an agent's run that failed — none of it is
+  // written down here either (see ipc.js, which stores neither), and it is all
+  // true only of this machine's attempt to ask. Somebody else's copy of the room
+  // showing our transport trouble would be noise about a thing they cannot act
+  // on.
+  function share(sessionId, message, { except = null } = {}) {
+    const record = get(sessionId);
+    if (!record || !isHost(record) || !shared(record)) return false;
+    if (!message || message.notice || message.error) return false;
+    if (message.kind !== 'text' || typeof message.text !== 'string' || !message.text) return false;
+    tellRoom(
+      record,
+      {
+        type: 'session-chat',
+        sessionId,
+        text: message.text,
+        // Whose words these are. Our own name for anything said at this
+        // keyboard; the agent's for an answer, which already carries it because
+        // a session may put one question to several.
+        speaker: message.speaker || identityName(),
+        // What the far side colours the bubble by, and nothing more.
+        //
+        // A separate field rather than `agentId` on purpose: an id off the wire
+        // must never land in the one namespace this app treats as local — see
+        // the guard in ipc.js — and the receiving window has no agent by this
+        // name to run, approve or answer. It is an attribution token, so two
+        // people watching one discussion see the same four voices in the same
+        // four colours.
+        ...(message.agentId && { speakerId: message.agentId }),
+        id: message.id,
+        ts: message.ts,
+      },
+      except
+    );
+    return true;
+  }
+
+  // What the room is, as the host has it.
+  //
+  // A session is not only its transcript: it is a title, a mode, a turn budget,
+  // an observer policy and a list of who gets asked, and every one of those
+  // changes what the conversation in it will be. A guest shown the words and not
+  // the settings is watching a discussion without being told it is one — so this
+  // is sent when somebody joins and whenever the host changes any of it.
+  //
+  // The counsel travels as names beside ids that are only ever a label on this
+  // wire: the far side cannot ask them and must never try. See `roomCounsel` in
+  // registry.js for where they land and why they are kept out of `agentIds`.
+  function roomState(record) {
+    const { targets } = resolveCounsel(record, { askable: askable() });
+    return {
+      title: record.title,
+      mode: record.mode,
+      turns: record.turns,
+      observer: record.observer,
+      counsel: targets.map((t) => ({ id: t.agentId, name: t.name })),
+    };
+  }
+
+  function announce(sessionId) {
+    const record = get(sessionId);
+    if (!record || !isHost(record) || !shared(record)) return false;
+    tellRoom(record, { type: 'session-state', sessionId, ...roomState(record) });
+    return true;
+  }
+
+  // The host's copy of a session changed under somebody else's hands.
+  //
+  // Only from the host of a room we actually joined — mayDirect is the whole of
+  // the authorization, exactly as it is for a transcript — and it writes settings
+  // rather than words: nothing here can start a run, and the counsel it carries
+  // is filed as a label. A peer that is merely online cannot reach this.
+  function onRoomState(fromPeerId, { sessionId, title, mode, turns, observer, counsel } = {}) {
+    const record = sessions.get(sessionId);
+    if (!mayDirect(record, fromPeerId)) return;
+    sessions.update(sessionId, {
+      ...(typeof title === 'string' && title && { title }),
+      ...(mode !== undefined && { mode }),
+      ...(turns !== undefined && { turns }),
+      ...(observer !== undefined && { observer }),
+      roomCounsel: Array.isArray(counsel) ? counsel : [],
+    });
+    if (bus) bus.emit('session-room', { sessionId });
+  }
+
+  // What the host's agents are doing, for the room to watch.
+  //
+  // The same view the host's own window draws its indicator from, minus the two
+  // fields that are instructions rather than facts: the id of the question being
+  // answered and the one that failed. Those are how a window marks a message on
+  // its own disk, and a frame off the wire does not get to reach into somebody
+  // else's transcript — everything left is a description of who is thinking.
+  //
+  // Sent as it changes rather than asked for, because the whole point is the
+  // moment: a guest watching a discussion should see whose turn it is while it
+  // is their turn, not be able to look it up afterwards.
+  function shareRound(sessionId, published) {
+    const record = get(sessionId);
+    if (!record || !isHost(record) || !shared(record)) return false;
+    const { messageId: _messageId, failedRef: _failedRef, ...rest } = published;
+    tellRoom(record, { type: 'session-round', sessionId, round: rest });
+    return true;
+  }
+
+  // The host telling the room what its agents are up to. Believed only from the
+  // host, and drawn rather than acted on: a guest has no round of its own to
+  // reconcile this with, which is exactly why it can be shown as it arrives.
+  // Taken apart field by field rather than spread, for the reason every other
+  // frame in this file is: what the host sends is what the host wrote, and the
+  // two fields the sender leaves out are exactly the two a hostile one would put
+  // back — `messageId` and `failedRef` are how a window marks a message on its
+  // own disk. Nothing that arrives here can name a message. What is left is a
+  // description of who is thinking, and it is only ever drawn.
+  const ROOM_ROUND_STRINGS = ['id', 'mode', 'ended', 'speaking', 'state', 'endedNotice'];
+  const ROOM_ROUND_NUMBERS = ['turn', 'cap'];
+  // Who took part, as `{ agentId, name }` — the window shows the names and uses
+  // the ids to correlate the id-only lists below against them.
+  const ROOM_ROUND_CASTS = ['asked', 'missed', 'next'];
+  // The same people named by id alone: who is thinking, who has answered, who
+  // dropped out.
+  const ROOM_ROUND_IDS = ['running', 'answered', 'failed', 'empty', 'left'];
+
+  // How much of any of it is kept. A round is a handful of agents and a sentence
+  // or two about how it ended; a hundred of either is not a fuller picture, it is
+  // a list somebody else decided this window should render. The same reasoning as
+  // the bound on the host's cast in registry.js, and the same shape of answer.
+  const MAX_ROUND_LIST = 32;
+  const MAX_ROUND_TEXT = 200;
+
+  const roundText = (s) =>
+    typeof s === 'string' ? s.replace(/\s+/g, ' ').trim().slice(0, MAX_ROUND_TEXT) : '';
+
+  function cleanRoomRound(round) {
+    const out = { open: round.open === true, paused: round.paused === true };
+    for (const key of ROOM_ROUND_STRINGS) {
+      const text = roundText(round[key]);
+      if (text) out[key] = text;
+    }
+    for (const key of ROOM_ROUND_NUMBERS) if (Number.isFinite(round[key])) out[key] = round[key];
+    for (const key of ROOM_ROUND_CASTS) {
+      if (!Array.isArray(round[key])) continue;
+      out[key] = round[key]
+        .slice(0, MAX_ROUND_LIST)
+        .filter((a) => a && typeof a.agentId === 'string')
+        .map((a) => ({ agentId: a.agentId, name: roundText(a.name) || 'an agent' }));
+    }
+    for (const key of ROOM_ROUND_IDS) {
+      if (!Array.isArray(round[key])) continue;
+      out[key] = round[key].slice(0, MAX_ROUND_LIST).filter((id) => typeof id === 'string' && id);
+    }
+    if (Array.isArray(round.notices)) {
+      out.notices = round.notices.slice(0, MAX_ROUND_LIST).map(roundText).filter(Boolean);
+    }
+    if (Number.isFinite(round.arrangement)) out.arrangement = round.arrangement;
+    // Which part of a cycle is running: a kind, and where it is in the run. Taken
+    // apart like everything else rather than adopted whole.
+    if (round.segment && typeof round.segment === 'object') {
+      out.segment = {
+        kind: roundText(round.segment.kind) || null,
+        index: Number.isFinite(round.segment.index) ? round.segment.index : 0,
+        of: Number.isFinite(round.segment.of) ? round.segment.of : 0,
+      };
+    }
+    return out;
+  }
+
+  function onRoomRound(fromPeerId, { sessionId, round } = {}) {
+    const record = sessions.get(sessionId);
+    if (!mayDirect(record, fromPeerId)) return;
+    if (!round || typeof round !== 'object') return;
+    if (bus) bus.emit('session-round', { ...cleanRoomRound(round), sessionId });
+  }
+
   // Asking somebody in.
   //
   // Host only, and `maySetup` is what says so — a guest's copy of a session is a
@@ -1243,12 +1459,38 @@ function createSessions({
     if (!accepted) return;
     // What they have missed. Sent once, on joining, because a room somebody
     // walks into halfway through is unreadable without it.
+    //
+    // Cut down to the five fields the far side actually files, rather than
+    // handed over whole. A stored message carries more than a room needs — the
+    // path of every file on this disk it mentions, the local id of every agent
+    // that answered — and none of it survives onSync at the other end anyway. A
+    // frame that sends it is a frame that leaked it.
     tell(fromPeerId, {
       type: 'session-sync',
       sessionId,
       title: record.title,
-      messages: store.read(sessionId).slice(-SYNC_MESSAGES),
+      messages: store
+        .read(sessionId)
+        .slice(-SYNC_MESSAGES)
+        .filter((m) => m.kind === 'text' && typeof m.text === 'string' && m.text)
+        .map((m) => ({
+          id: m.id,
+          text: m.text,
+          ts: m.ts,
+          // Ours are the ones with nobody's name on them, so they arrive named:
+          // a transcript where half the turns are attributed and half are not
+          // reads as a conversation with a ghost in it.
+          speaker: m.speaker || (m.direction === 'out' ? identityName() : null),
+          ...(m.agentId && { speakerId: m.agentId }),
+        })),
     });
+    // And what the room is, so their copy of the settings is the host's rather
+    // than the empty one a joined session starts with.
+    announce(sessionId);
+    // Anything already in flight. Somebody who joins mid-question should see the
+    // agents working on it, not a still room that suddenly speaks.
+    const open = rounds.get(sessionId);
+    if (open && open.open) shareRound(sessionId, view(open));
   }
 
   // How much of a conversation a newcomer is given. Enough to follow what is
@@ -1274,6 +1516,9 @@ function createSessions({
         text: m.text,
         ts: Number.isFinite(m.ts) ? m.ts : Date.now(),
         ...(m.speaker && { speaker: m.speaker }),
+        // Read exactly as the live relay's is, and for the same reason — see the
+        // note on speakerId in share().
+        ...(typeof m.speakerId === 'string' && m.speakerId && { speakerId: m.speakerId }),
       });
     }
     if (bus) bus.emit('session-synced', { sessionId });
@@ -1306,7 +1551,7 @@ function createSessions({
   // written down, and passed on to everybody else. On a guest it is the host
   // relaying the room, and only the host — see mayPost in room.js for why a
   // guest never takes words from another guest directly.
-  function onRoomChat(fromPeerId, { sessionId, text, speaker, id, ts } = {}) {
+  function onRoomChat(fromPeerId, { sessionId, text, speaker, speakerId, id, ts } = {}) {
     const record = get(sessionId);
     if (!record || typeof text !== 'string' || !text.trim()) return;
     if (!mayPost(record, fromPeerId)) return;
@@ -1323,6 +1568,16 @@ function createSessions({
       // host has already stamped it, and their word for who spoke is the one
       // that counts.
       speaker: speaker || (identity && (identity.name || identity.hostname)) || 'Someone',
+      // And which voice in the room it was — from the host only. Kept apart from
+      // `agentId` all the way to the bubble: this names nothing on this machine
+      // and can start nothing here — it exists so a discussion between four
+      // agents reads as four colours on every screen watching it, rather than as
+      // one wall of incoming text on all but the host's.
+      //
+      // A member's own words never carry one. Attribution in a room is the
+      // host's to decide, and a guest that could label its sentence with a voice
+      // would be a guest that could have it passed on as somebody else's.
+      ...(isGuest(record) && typeof speakerId === 'string' && speakerId && { speakerId }),
     };
     if (bus) bus.emit('session-said', { sessionId, message: said });
     sessions.touch(sessionId);
@@ -1330,11 +1585,7 @@ function createSessions({
     // The host is the only one that relays. A guest re-broadcasting would put
     // the same sentence round the room twice.
     if (isHost(record)) {
-      tellRoom(
-        record,
-        { type: 'session-chat', sessionId, text, speaker: said.speaker, id: said.id, ts: said.ts },
-        fromPeerId
-      );
+      share(sessionId, said, { except: fromPeerId });
       // An observed room watches everybody in it, not only whoever is at this
       // keyboard — which is the whole reason a session can have people in it.
       if (record.mode === OBSERVER_MODE) {
@@ -1725,6 +1976,11 @@ function createSessions({
     };
     if (bus) bus.emit('session-said', { sessionId, message });
     sessions.touch(sessionId);
+    // An unasked turn is still a turn in the conversation. Relayed here rather
+    // than from the bus handler that files it, because that same event carries a
+    // member's words back out of onRoomChat — sharing from there would send
+    // somebody their own sentence a second time.
+    share(sessionId, message);
     publishWatch(sessionId, state);
     return message;
   }
@@ -2187,6 +2443,11 @@ function createSessions({
     };
     store.append(round.sessionId, message);
     sessions.touch(round.sessionId);
+    // Said into a discussion the whole room is watching, so the whole room is
+    // told. A person cutting in with "not that" is the one moment in a dialogue
+    // where the reason it changed course lives in a single sentence, and a copy
+    // of the room without it reads as agents changing their minds unprompted.
+    share(round.sessionId, message);
 
     // Documents handed over mid-discussion join the ones the round was started
     // with, so every turn from here on carries them. An attachment shown to the
@@ -2306,6 +2567,9 @@ function createSessions({
     onInviteReply,
     onSync,
     onRoomChat,
+    onRoomState,
+    onRoomRound,
+    share,
     onRoomLeave,
     askable,
     importText,

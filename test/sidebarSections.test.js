@@ -282,7 +282,10 @@ test('the panel renders the categories from the saved order and nothing else', (
   // nobody must not take the flashing off a category with an unread message in
   // it, because the search is about what is on screen and the flash is about
   // what has arrived.
-  assert.match(sidebar, /sectionSignal\(sessions, unread, summoned\)/);
+  // Sessions carry one more thing that is waiting: an invitation nobody has
+  // answered. It joins the summons rather than getting a signal of its own,
+  // because to a reader they are the same fact — something here wants an answer.
+  assert.match(sidebar, /sectionSignal\(sessions, unread, \{ \.\.\.summoned, \.\.\.invitations \}\)/);
   assert.match(sidebar, /sectionSignal\(allAgents, unread, summoned\)/);
   assert.match(sidebar, /sectionSignal\(allPeople, unread, summoned\)/);
 });
