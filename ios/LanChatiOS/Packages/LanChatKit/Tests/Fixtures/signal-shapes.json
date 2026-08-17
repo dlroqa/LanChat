@@ -1,0 +1,90 @@
+{
+  "_": {
+    "generator": "scripts/make-ios-fixtures.js",
+    "note": "the SDP and ICE candidate shapes on the wire",
+    "tz": "America/New_York"
+  },
+  "serializeCandidate": [
+    {
+      "why": "a host candidate on the tailnet",
+      "input": {
+        "candidate": "candidate:1 1 udp 2130706431 100.83.12.4 47100 typ host",
+        "sdpMid": "0",
+        "sdpMLineIndex": 0,
+        "usernameFragment": "abcd",
+        "protocol": "udp",
+        "address": "100.83.12.4"
+      },
+      "out": {
+        "candidate": "candidate:1 1 udp 2130706431 100.83.12.4 47100 typ host",
+        "sdpMid": "0",
+        "sdpMLineIndex": 0,
+        "usernameFragment": "abcd"
+      }
+    },
+    {
+      "why": "missing optional fields",
+      "input": {
+        "candidate": "x"
+      },
+      "out": {
+        "candidate": "x",
+        "sdpMid": null,
+        "sdpMLineIndex": null,
+        "usernameFragment": null
+      }
+    },
+    {
+      "why": "null",
+      "input": null,
+      "out": null
+    }
+  ],
+  "serializeDescription": [
+    {
+      "input": {
+        "type": "offer",
+        "sdp": "v=0\r\n",
+        "extra": 1
+      },
+      "out": {
+        "type": "offer",
+        "sdp": "v=0\r\n"
+      }
+    },
+    {
+      "input": {
+        "type": "answer",
+        "sdp": "v=0\r\n"
+      },
+      "out": {
+        "type": "answer",
+        "sdp": "v=0\r\n"
+      }
+    },
+    {
+      "input": null,
+      "out": null
+    }
+  ],
+  "isCloneable": [
+    {
+      "input": {
+        "a": 1
+      },
+      "ok": true
+    },
+    {
+      "input": "a string",
+      "ok": true
+    },
+    {
+      "input": [
+        1,
+        2,
+        3
+      ],
+      "ok": true
+    }
+  ]
+}

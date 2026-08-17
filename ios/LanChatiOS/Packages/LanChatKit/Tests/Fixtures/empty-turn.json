@@ -1,0 +1,232 @@
+{
+  "_": {
+    "generator": "scripts/make-ios-fixtures.js",
+    "note": "which turns may be erased — and, mostly, which may not",
+    "tz": "America/New_York"
+  },
+  "isEmptyBody": [
+    {
+      "text": "NOTHING",
+      "empty": true
+    },
+    {
+      "text": "nothing further.",
+      "empty": true
+    },
+    {
+      "text": "Nothing Further",
+      "empty": true
+    },
+    {
+      "text": "\"NOTHING.\"",
+      "empty": true
+    },
+    {
+      "text": "'nothing'",
+      "empty": true
+    },
+    {
+      "text": "NOTHING!",
+      "empty": true
+    },
+    {
+      "text": "  nothing further.  ",
+      "empty": true
+    },
+    {
+      "text": "— nothing further.",
+      "empty": true
+    },
+    {
+      "text": "- nothing further",
+      "empty": true
+    },
+    {
+      "text": "\n\nNOTHING\n\n",
+      "empty": true
+    },
+    {
+      "text": "I agree with Mac, and I have nothing further.",
+      "empty": false
+    },
+    {
+      "text": "Here is the answer.\n\nnothing further.",
+      "empty": false
+    },
+    {
+      "text": "nothing further. But one more thing:",
+      "empty": false
+    },
+    {
+      "text": "NOTHING is going to work here.",
+      "empty": false
+    },
+    {
+      "text": "nothing",
+      "empty": true
+    },
+    {
+      "text": "",
+      "empty": false
+    },
+    {
+      "text": "   ",
+      "empty": false
+    }
+  ],
+  "isEmptyTurn": [
+    {
+      "why": "an agent saying nothing, in a session",
+      "msg": {
+        "id": "m1",
+        "direction": "in",
+        "kind": "text",
+        "text": "NOTHING",
+        "agentId": "agent:mac",
+        "speaker": "Mac"
+      },
+      "isSession": true,
+      "empty": true
+    },
+    {
+      "why": "the same turn outside a session",
+      "msg": {
+        "id": "m1",
+        "direction": "in",
+        "kind": "text",
+        "text": "NOTHING",
+        "agentId": "agent:mac",
+        "speaker": "Mac"
+      },
+      "isSession": false,
+      "empty": false
+    },
+    {
+      "why": "our own words",
+      "msg": {
+        "id": "m1",
+        "direction": "out",
+        "kind": "text",
+        "text": "NOTHING",
+        "agentId": "agent:mac",
+        "speaker": "Mac"
+      },
+      "isSession": true,
+      "empty": false
+    },
+    {
+      "why": "a person in a room — neither agentId nor speakerId",
+      "msg": {
+        "id": "m1",
+        "direction": "in",
+        "kind": "text",
+        "text": "NOTHING",
+        "speaker": "Mac"
+      },
+      "isSession": true,
+      "empty": false
+    },
+    {
+      "why": "a guest's copy of an agent's answer, marked by speakerId",
+      "msg": {
+        "id": "m1",
+        "direction": "in",
+        "kind": "text",
+        "text": "NOTHING",
+        "speaker": "Mac",
+        "speakerId": "agent:mac"
+      },
+      "isSession": true,
+      "empty": true
+    },
+    {
+      "why": "a notice",
+      "msg": {
+        "id": "m1",
+        "direction": "in",
+        "kind": "text",
+        "text": "NOTHING",
+        "agentId": "agent:mac",
+        "speaker": "Mac",
+        "notice": true
+      },
+      "isSession": true,
+      "empty": false
+    },
+    {
+      "why": "an error",
+      "msg": {
+        "id": "m1",
+        "direction": "in",
+        "kind": "text",
+        "text": "NOTHING",
+        "agentId": "agent:mac",
+        "speaker": "Mac",
+        "error": true
+      },
+      "isSession": true,
+      "empty": false
+    },
+    {
+      "why": "imported history is never erased",
+      "msg": {
+        "id": "m1",
+        "direction": "in",
+        "kind": "text",
+        "text": "NOTHING",
+        "agentId": "agent:mac",
+        "speaker": "Mac",
+        "imported": true
+      },
+      "isSession": true,
+      "empty": false
+    },
+    {
+      "why": "a file",
+      "msg": {
+        "id": "m1",
+        "direction": "in",
+        "kind": "file",
+        "text": "NOTHING",
+        "agentId": "agent:mac",
+        "speaker": "Mac"
+      },
+      "isSession": true,
+      "empty": false
+    }
+  ],
+  "findEmptyTurns": {
+    "thread": [
+      {
+        "id": "a",
+        "text": "A real answer.",
+        "direction": "in"
+      },
+      {
+        "id": "b",
+        "text": "NOTHING",
+        "direction": "in"
+      },
+      {
+        "id": "c",
+        "text": "nothing further.",
+        "direction": "in"
+      },
+      {
+        "id": "d",
+        "text": "An answer that ends on it.\nnothing further.",
+        "direction": "in"
+      },
+      {
+        "id": "e",
+        "text": "NOTHING",
+        "direction": "out"
+      }
+    ],
+    "inSession": [
+      "b",
+      "c"
+    ],
+    "outsideSession": []
+  }
+}

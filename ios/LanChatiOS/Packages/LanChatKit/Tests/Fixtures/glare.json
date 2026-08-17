@@ -1,0 +1,345 @@
+{
+  "_": {
+    "generator": "scripts/make-ios-fixtures.js",
+    "note": "who offers in a group call, over every unordered pair",
+    "tz": "America/New_York"
+  },
+  "shouldOffer": [
+    {
+      "a": "a",
+      "b": "b",
+      "aOffers": true,
+      "bOffers": false,
+      "exactlyOne": true
+    },
+    {
+      "a": "a",
+      "b": "z",
+      "aOffers": true,
+      "bOffers": false,
+      "exactlyOne": true
+    },
+    {
+      "a": "a",
+      "b": "A",
+      "aOffers": false,
+      "bOffers": true,
+      "exactlyOne": true
+    },
+    {
+      "a": "a",
+      "b": "Z",
+      "aOffers": false,
+      "bOffers": true,
+      "exactlyOne": true
+    },
+    {
+      "a": "a",
+      "b": "0",
+      "aOffers": false,
+      "bOffers": true,
+      "exactlyOne": true
+    },
+    {
+      "a": "a",
+      "b": "100.83.12.4",
+      "aOffers": false,
+      "bOffers": true,
+      "exactlyOne": true
+    },
+    {
+      "a": "a",
+      "b": "ca24b2fe-0000",
+      "aOffers": true,
+      "bOffers": false,
+      "exactlyOne": true
+    },
+    {
+      "a": "a",
+      "b": "ca24b2fe-0001",
+      "aOffers": true,
+      "bOffers": false,
+      "exactlyOne": true
+    },
+    {
+      "a": "b",
+      "b": "z",
+      "aOffers": true,
+      "bOffers": false,
+      "exactlyOne": true
+    },
+    {
+      "a": "b",
+      "b": "A",
+      "aOffers": false,
+      "bOffers": true,
+      "exactlyOne": true
+    },
+    {
+      "a": "b",
+      "b": "Z",
+      "aOffers": false,
+      "bOffers": true,
+      "exactlyOne": true
+    },
+    {
+      "a": "b",
+      "b": "0",
+      "aOffers": false,
+      "bOffers": true,
+      "exactlyOne": true
+    },
+    {
+      "a": "b",
+      "b": "100.83.12.4",
+      "aOffers": false,
+      "bOffers": true,
+      "exactlyOne": true
+    },
+    {
+      "a": "b",
+      "b": "ca24b2fe-0000",
+      "aOffers": true,
+      "bOffers": false,
+      "exactlyOne": true
+    },
+    {
+      "a": "b",
+      "b": "ca24b2fe-0001",
+      "aOffers": true,
+      "bOffers": false,
+      "exactlyOne": true
+    },
+    {
+      "a": "z",
+      "b": "A",
+      "aOffers": false,
+      "bOffers": true,
+      "exactlyOne": true
+    },
+    {
+      "a": "z",
+      "b": "Z",
+      "aOffers": false,
+      "bOffers": true,
+      "exactlyOne": true
+    },
+    {
+      "a": "z",
+      "b": "0",
+      "aOffers": false,
+      "bOffers": true,
+      "exactlyOne": true
+    },
+    {
+      "a": "z",
+      "b": "100.83.12.4",
+      "aOffers": false,
+      "bOffers": true,
+      "exactlyOne": true
+    },
+    {
+      "a": "z",
+      "b": "ca24b2fe-0000",
+      "aOffers": false,
+      "bOffers": true,
+      "exactlyOne": true
+    },
+    {
+      "a": "z",
+      "b": "ca24b2fe-0001",
+      "aOffers": false,
+      "bOffers": true,
+      "exactlyOne": true
+    },
+    {
+      "a": "A",
+      "b": "Z",
+      "aOffers": true,
+      "bOffers": false,
+      "exactlyOne": true
+    },
+    {
+      "a": "A",
+      "b": "0",
+      "aOffers": false,
+      "bOffers": true,
+      "exactlyOne": true
+    },
+    {
+      "a": "A",
+      "b": "100.83.12.4",
+      "aOffers": false,
+      "bOffers": true,
+      "exactlyOne": true
+    },
+    {
+      "a": "A",
+      "b": "ca24b2fe-0000",
+      "aOffers": true,
+      "bOffers": false,
+      "exactlyOne": true
+    },
+    {
+      "a": "A",
+      "b": "ca24b2fe-0001",
+      "aOffers": true,
+      "bOffers": false,
+      "exactlyOne": true
+    },
+    {
+      "a": "Z",
+      "b": "0",
+      "aOffers": false,
+      "bOffers": true,
+      "exactlyOne": true
+    },
+    {
+      "a": "Z",
+      "b": "100.83.12.4",
+      "aOffers": false,
+      "bOffers": true,
+      "exactlyOne": true
+    },
+    {
+      "a": "Z",
+      "b": "ca24b2fe-0000",
+      "aOffers": true,
+      "bOffers": false,
+      "exactlyOne": true
+    },
+    {
+      "a": "Z",
+      "b": "ca24b2fe-0001",
+      "aOffers": true,
+      "bOffers": false,
+      "exactlyOne": true
+    },
+    {
+      "a": "0",
+      "b": "100.83.12.4",
+      "aOffers": true,
+      "bOffers": false,
+      "exactlyOne": true
+    },
+    {
+      "a": "0",
+      "b": "ca24b2fe-0000",
+      "aOffers": true,
+      "bOffers": false,
+      "exactlyOne": true
+    },
+    {
+      "a": "0",
+      "b": "ca24b2fe-0001",
+      "aOffers": true,
+      "bOffers": false,
+      "exactlyOne": true
+    },
+    {
+      "a": "100.83.12.4",
+      "b": "ca24b2fe-0000",
+      "aOffers": true,
+      "bOffers": false,
+      "exactlyOne": true
+    },
+    {
+      "a": "100.83.12.4",
+      "b": "ca24b2fe-0001",
+      "aOffers": true,
+      "bOffers": false,
+      "exactlyOne": true
+    },
+    {
+      "a": "ca24b2fe-0000",
+      "b": "ca24b2fe-0001",
+      "aOffers": true,
+      "bOffers": false,
+      "exactlyOne": true
+    }
+  ],
+  "selfPair": {
+    "a": "a",
+    "b": "a",
+    "aOffers": false
+  },
+  "reconcileRoster": [
+    {
+      "why": "somebody joins",
+      "current": [
+        "a",
+        "b"
+      ],
+      "next": [
+        "a",
+        "b",
+        "c"
+      ],
+      "selfId": "me",
+      "added": [
+        null
+      ],
+      "removed": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "why": "somebody leaves",
+      "current": [
+        "a",
+        "b",
+        "c"
+      ],
+      "next": [
+        "a",
+        "c"
+      ],
+      "selfId": "me",
+      "added": [
+        null
+      ],
+      "removed": [
+        "a",
+        "b",
+        "c"
+      ]
+    },
+    {
+      "why": "self is never counted",
+      "current": [
+        "a"
+      ],
+      "next": [
+        "a",
+        "me"
+      ],
+      "selfId": "me",
+      "added": [
+        null
+      ],
+      "removed": [
+        "a"
+      ]
+    },
+    {
+      "why": "no change",
+      "current": [
+        "a",
+        "b"
+      ],
+      "next": [
+        "a",
+        "b"
+      ],
+      "selfId": "me",
+      "added": [
+        null
+      ],
+      "removed": [
+        "a",
+        "b"
+      ]
+    }
+  ]
+}

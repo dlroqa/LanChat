@@ -1,0 +1,308 @@
+{
+  "_": {
+    "generator": "scripts/make-ios-fixtures.js",
+    "note": "typed runs, safe hrefs, and image links",
+    "tz": "America/New_York"
+  },
+  "linkify": [
+    {
+      "text": "no links here",
+      "runs": [
+        {
+          "type": "text",
+          "text": "no links here"
+        }
+      ]
+    },
+    {
+      "text": "see https://example.com for details",
+      "runs": [
+        {
+          "type": "text",
+          "text": "see "
+        },
+        {
+          "type": "link",
+          "text": "https://example.com",
+          "href": "https://example.com/"
+        },
+        {
+          "type": "text",
+          "text": " for details"
+        }
+      ]
+    },
+    {
+      "text": "a markdown [write-up](https://example.com/post) inline",
+      "runs": [
+        {
+          "type": "text",
+          "text": "a markdown "
+        },
+        {
+          "type": "syntax",
+          "text": "["
+        },
+        {
+          "type": "link",
+          "text": "write-up",
+          "href": "https://example.com/post"
+        },
+        {
+          "type": "syntax",
+          "text": "](https://example.com/post)"
+        },
+        {
+          "type": "text",
+          "text": " inline"
+        }
+      ]
+    },
+    {
+      "text": "a picture https://example.com/chart.png in a message",
+      "runs": [
+        {
+          "type": "text",
+          "text": "a picture "
+        },
+        {
+          "type": "link",
+          "text": "https://example.com/chart.png",
+          "href": "https://example.com/chart.png"
+        },
+        {
+          "type": "text",
+          "text": " in a message"
+        }
+      ]
+    },
+    {
+      "text": "two https://a.example.com and https://b.example.com links",
+      "runs": [
+        {
+          "type": "text",
+          "text": "two "
+        },
+        {
+          "type": "link",
+          "text": "https://a.example.com",
+          "href": "https://a.example.com/"
+        },
+        {
+          "type": "text",
+          "text": " and "
+        },
+        {
+          "type": "link",
+          "text": "https://b.example.com",
+          "href": "https://b.example.com/"
+        },
+        {
+          "type": "text",
+          "text": " links"
+        }
+      ]
+    },
+    {
+      "text": "trailing punctuation https://example.com.",
+      "runs": [
+        {
+          "type": "text",
+          "text": "trailing punctuation "
+        },
+        {
+          "type": "link",
+          "text": "https://example.com",
+          "href": "https://example.com/"
+        },
+        {
+          "type": "text",
+          "text": "."
+        }
+      ]
+    },
+    {
+      "text": "in parens (https://example.com)",
+      "runs": [
+        {
+          "type": "text",
+          "text": "in parens ("
+        },
+        {
+          "type": "link",
+          "text": "https://example.com",
+          "href": "https://example.com/"
+        },
+        {
+          "type": "text",
+          "text": ")"
+        }
+      ]
+    },
+    {
+      "text": "javascript:alert(1) is not a link",
+      "runs": [
+        {
+          "type": "text",
+          "text": "javascript:alert(1) is not a link"
+        }
+      ]
+    },
+    {
+      "text": "ftp://example.com/file is not one either",
+      "runs": [
+        {
+          "type": "text",
+          "text": "ftp://example.com/file is not one either"
+        }
+      ]
+    }
+  ],
+  "hasLink": [
+    {
+      "text": "no links here",
+      "has": false
+    },
+    {
+      "text": "see https://example.com for details",
+      "has": true
+    },
+    {
+      "text": "a markdown [write-up](https://example.com/post) inline",
+      "has": true
+    },
+    {
+      "text": "a picture https://example.com/chart.png in a message",
+      "has": true
+    },
+    {
+      "text": "two https://a.example.com and https://b.example.com links",
+      "has": true
+    },
+    {
+      "text": "trailing punctuation https://example.com.",
+      "has": true
+    },
+    {
+      "text": "in parens (https://example.com)",
+      "has": true
+    },
+    {
+      "text": "javascript:alert(1) is not a link",
+      "has": false
+    },
+    {
+      "text": "ftp://example.com/file is not one either",
+      "has": false
+    }
+  ],
+  "firstLink": [
+    {
+      "text": "no links here",
+      "first": null
+    },
+    {
+      "text": "see https://example.com for details",
+      "first": "https://example.com/"
+    },
+    {
+      "text": "a markdown [write-up](https://example.com/post) inline",
+      "first": "https://example.com/post"
+    },
+    {
+      "text": "a picture https://example.com/chart.png in a message",
+      "first": "https://example.com/chart.png"
+    },
+    {
+      "text": "two https://a.example.com and https://b.example.com links",
+      "first": "https://a.example.com/"
+    },
+    {
+      "text": "trailing punctuation https://example.com.",
+      "first": "https://example.com/"
+    },
+    {
+      "text": "in parens (https://example.com)",
+      "first": "https://example.com/"
+    },
+    {
+      "text": "javascript:alert(1) is not a link",
+      "first": null
+    },
+    {
+      "text": "ftp://example.com/file is not one either",
+      "first": null
+    }
+  ],
+  "isImageUrl": [
+    {
+      "href": "https://example.com/a.png",
+      "image": true
+    },
+    {
+      "href": "https://example.com/a.jpg",
+      "image": true
+    },
+    {
+      "href": "https://example.com/a.JPEG",
+      "image": true
+    },
+    {
+      "href": "https://example.com/a.gif?x=1",
+      "image": true
+    },
+    {
+      "href": "https://example.com/a.svg",
+      "image": true
+    },
+    {
+      "href": "https://example.com/a.html",
+      "image": false
+    },
+    {
+      "href": "https://example.com/a",
+      "image": false
+    }
+  ],
+  "safeHref": [
+    {
+      "raw": "https://example.com",
+      "safe": "https://example.com/"
+    },
+    {
+      "raw": "http://example.com",
+      "safe": "http://example.com/"
+    },
+    {
+      "raw": "javascript:alert(1)",
+      "safe": null
+    },
+    {
+      "raw": "data:text/html,x",
+      "safe": null
+    },
+    {
+      "raw": "file:///etc/passwd",
+      "safe": null
+    },
+    {
+      "raw": "ftp://example.com",
+      "safe": null
+    }
+  ],
+  "withMedia": {
+    "text": "the chart is at /home/ada/chart.png",
+    "media": [
+      {
+        "path": "/home/ada/chart.png",
+        "name": "chart.png"
+      }
+    ],
+    "runs": [
+      {
+        "type": "text",
+        "text": "the chart is at /home/ada/chart.png"
+      }
+    ]
+  }
+}

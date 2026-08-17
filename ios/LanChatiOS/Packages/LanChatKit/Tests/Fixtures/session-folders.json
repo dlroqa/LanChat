@@ -1,0 +1,176 @@
+{
+  "_": {
+    "generator": "scripts/make-ios-fixtures.js",
+    "note": "folder membership, drop indices and no-op placement",
+    "tz": "America/New_York"
+  },
+  "folders": [
+    {
+      "id": "folder:1",
+      "name": "Design",
+      "sessionIds": [
+        "session:a",
+        "session:gone",
+        "session:b"
+      ]
+    },
+    {
+      "id": "folder:2",
+      "name": "Ops",
+      "sessionIds": [
+        "session:c"
+      ]
+    }
+  ],
+  "sessions": [
+    "session:a",
+    "session:b",
+    "session:c",
+    "session:d",
+    "session:e"
+  ],
+  "folderOf": [
+    {
+      "id": "session:a",
+      "folder": "folder:1"
+    },
+    {
+      "id": "session:b",
+      "folder": "folder:1"
+    },
+    {
+      "id": "session:c",
+      "folder": "folder:2"
+    },
+    {
+      "id": "session:d",
+      "folder": null
+    },
+    {
+      "id": "session:e",
+      "folder": null
+    }
+  ],
+  "filedIds": {},
+  "folderSessions": [
+    {
+      "folder": "folder:1",
+      "sessions": [
+        "session:a",
+        "session:b"
+      ]
+    },
+    {
+      "folder": "folder:2",
+      "sessions": [
+        "session:c"
+      ]
+    }
+  ],
+  "looseSessions": [
+    "session:d",
+    "session:e"
+  ],
+  "dropIndex": [
+    {
+      "ids": [
+        "a",
+        "b",
+        "c"
+      ],
+      "moving": "a",
+      "over": "c",
+      "before": false,
+      "index": 2
+    },
+    {
+      "ids": [
+        "a",
+        "b",
+        "c"
+      ],
+      "moving": "a",
+      "over": "c",
+      "before": true,
+      "index": 1
+    },
+    {
+      "ids": [
+        "a",
+        "b",
+        "c"
+      ],
+      "moving": "c",
+      "over": "a",
+      "before": true,
+      "index": 0
+    },
+    {
+      "ids": [
+        "a",
+        "b",
+        "c"
+      ],
+      "moving": "b",
+      "over": "b",
+      "before": true,
+      "index": 1
+    }
+  ],
+  "moveFolder": [
+    {
+      "toIndex": 0,
+      "order": [
+        "folder:2",
+        "folder:1"
+      ]
+    },
+    {
+      "toIndex": 1,
+      "order": [
+        "folder:1",
+        "folder:2"
+      ]
+    },
+    {
+      "toIndex": 2,
+      "order": [
+        "folder:1",
+        "folder:2"
+      ]
+    },
+    {
+      "toIndex": -1,
+      "order": [
+        "folder:2",
+        "folder:1"
+      ]
+    }
+  ],
+  "isNoopPlace": [
+    {
+      "sessionId": "session:a",
+      "folderId": "folder:1",
+      "index": 0,
+      "noop": true
+    },
+    {
+      "sessionId": "session:a",
+      "folderId": "folder:1",
+      "index": 1,
+      "noop": false
+    },
+    {
+      "sessionId": "session:a",
+      "folderId": "folder:2",
+      "index": 0,
+      "noop": false
+    },
+    {
+      "sessionId": "session:d",
+      "folderId": null,
+      "index": 0,
+      "noop": true
+    }
+  ]
+}

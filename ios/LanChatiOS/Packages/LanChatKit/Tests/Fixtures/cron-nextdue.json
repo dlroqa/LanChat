@@ -1,0 +1,347 @@
+{
+  "_": {
+    "generator": "scripts/make-ios-fixtures.js",
+    "note": "next-due tables in America/New_York, including both DST edges",
+    "tz": "America/New_York"
+  },
+  "parseCron": [
+    {
+      "expr": "0 9 * * 1-5",
+      "parsed": true
+    },
+    {
+      "expr": "*/15 * * * *",
+      "parsed": true
+    },
+    {
+      "expr": "0 0 1 1 *",
+      "parsed": true
+    },
+    {
+      "expr": "30 6 * * 0",
+      "parsed": true
+    },
+    {
+      "expr": "0 9 31 2 *",
+      "parsed": true
+    },
+    {
+      "expr": "not a cron",
+      "parsed": false
+    },
+    {
+      "expr": "* * * *",
+      "parsed": false
+    },
+    {
+      "expr": "60 * * * *",
+      "parsed": false
+    }
+  ],
+  "presets": [
+    {
+      "preset": "hourly",
+      "expr": null
+    },
+    {
+      "preset": "daily",
+      "expr": null
+    },
+    {
+      "preset": "weekly",
+      "expr": null
+    }
+  ],
+  "schedules": [
+    {
+      "why": "a weekday cron across the US DST start",
+      "spec": {
+        "kind": "cron",
+        "expr": "0 9 * * 1-5"
+      },
+      "from": "2026-03-06T12:00:00.000Z",
+      "describes": "0 9 * * 1-5",
+      "runs": [
+        {
+          "ms": 1772805600000,
+          "iso": "2026-03-06T14:00:00.000Z",
+          "local": "Fri Mar 06 2026 09:00:00 GMT-0500 (Eastern Standard Time)"
+        },
+        {
+          "ms": 1773061200000,
+          "iso": "2026-03-09T13:00:00.000Z",
+          "local": "Mon Mar 09 2026 09:00:00 GMT-0400 (Eastern Daylight Time)"
+        },
+        {
+          "ms": 1773147600000,
+          "iso": "2026-03-10T13:00:00.000Z",
+          "local": "Tue Mar 10 2026 09:00:00 GMT-0400 (Eastern Daylight Time)"
+        },
+        {
+          "ms": 1773234000000,
+          "iso": "2026-03-11T13:00:00.000Z",
+          "local": "Wed Mar 11 2026 09:00:00 GMT-0400 (Eastern Daylight Time)"
+        }
+      ]
+    },
+    {
+      "why": "every quarter hour",
+      "spec": {
+        "kind": "cron",
+        "expr": "*/15 * * * *"
+      },
+      "from": "2026-03-06T12:00:00.000Z",
+      "describes": "*/15 * * * *",
+      "runs": [
+        {
+          "ms": 1772799300000,
+          "iso": "2026-03-06T12:15:00.000Z",
+          "local": "Fri Mar 06 2026 07:15:00 GMT-0500 (Eastern Standard Time)"
+        },
+        {
+          "ms": 1772800200000,
+          "iso": "2026-03-06T12:30:00.000Z",
+          "local": "Fri Mar 06 2026 07:30:00 GMT-0500 (Eastern Standard Time)"
+        },
+        {
+          "ms": 1772801100000,
+          "iso": "2026-03-06T12:45:00.000Z",
+          "local": "Fri Mar 06 2026 07:45:00 GMT-0500 (Eastern Standard Time)"
+        },
+        {
+          "ms": 1772802000000,
+          "iso": "2026-03-06T13:00:00.000Z",
+          "local": "Fri Mar 06 2026 08:00:00 GMT-0500 (Eastern Standard Time)"
+        }
+      ]
+    },
+    {
+      "why": "a daily preset",
+      "spec": {
+        "kind": "every",
+        "preset": "daily",
+        "hour": 9,
+        "minute": 0
+      },
+      "from": "2026-03-06T12:00:00.000Z",
+      "describes": "Every day at 09:00",
+      "runs": [
+        {
+          "ms": 1772805600000,
+          "iso": "2026-03-06T14:00:00.000Z",
+          "local": "Fri Mar 06 2026 09:00:00 GMT-0500 (Eastern Standard Time)"
+        },
+        {
+          "ms": 1772892000000,
+          "iso": "2026-03-07T14:00:00.000Z",
+          "local": "Sat Mar 07 2026 09:00:00 GMT-0500 (Eastern Standard Time)"
+        },
+        {
+          "ms": 1772974800000,
+          "iso": "2026-03-08T13:00:00.000Z",
+          "local": "Sun Mar 08 2026 09:00:00 GMT-0400 (Eastern Daylight Time)"
+        },
+        {
+          "ms": 1773061200000,
+          "iso": "2026-03-09T13:00:00.000Z",
+          "local": "Mon Mar 09 2026 09:00:00 GMT-0400 (Eastern Daylight Time)"
+        }
+      ]
+    },
+    {
+      "why": "an hourly preset",
+      "spec": {
+        "kind": "every",
+        "preset": "hourly",
+        "hour": 0,
+        "minute": 15
+      },
+      "from": "2026-03-06T12:00:00.000Z",
+      "describes": "Every hour at :15",
+      "runs": [
+        {
+          "ms": 1772799300000,
+          "iso": "2026-03-06T12:15:00.000Z",
+          "local": "Fri Mar 06 2026 07:15:00 GMT-0500 (Eastern Standard Time)"
+        },
+        {
+          "ms": 1772802900000,
+          "iso": "2026-03-06T13:15:00.000Z",
+          "local": "Fri Mar 06 2026 08:15:00 GMT-0500 (Eastern Standard Time)"
+        },
+        {
+          "ms": 1772806500000,
+          "iso": "2026-03-06T14:15:00.000Z",
+          "local": "Fri Mar 06 2026 09:15:00 GMT-0500 (Eastern Standard Time)"
+        },
+        {
+          "ms": 1772810100000,
+          "iso": "2026-03-06T15:15:00.000Z",
+          "local": "Fri Mar 06 2026 10:15:00 GMT-0500 (Eastern Standard Time)"
+        }
+      ]
+    },
+    {
+      "why": "a weekly preset on Mondays",
+      "spec": {
+        "kind": "every",
+        "preset": "weekly",
+        "hour": 9,
+        "minute": 0,
+        "weekday": 1
+      },
+      "from": "2026-03-06T12:00:00.000Z",
+      "describes": "Every Monday at 09:00",
+      "runs": [
+        {
+          "ms": 1773061200000,
+          "iso": "2026-03-09T13:00:00.000Z",
+          "local": "Mon Mar 09 2026 09:00:00 GMT-0400 (Eastern Daylight Time)"
+        },
+        {
+          "ms": 1773666000000,
+          "iso": "2026-03-16T13:00:00.000Z",
+          "local": "Mon Mar 16 2026 09:00:00 GMT-0400 (Eastern Daylight Time)"
+        },
+        {
+          "ms": 1774270800000,
+          "iso": "2026-03-23T13:00:00.000Z",
+          "local": "Mon Mar 23 2026 09:00:00 GMT-0400 (Eastern Daylight Time)"
+        },
+        {
+          "ms": 1774875600000,
+          "iso": "2026-03-30T13:00:00.000Z",
+          "local": "Mon Mar 30 2026 09:00:00 GMT-0400 (Eastern Daylight Time)"
+        }
+      ]
+    },
+    {
+      "why": "a one-off still to come",
+      "spec": {
+        "kind": "once",
+        "at": 1772802000000
+      },
+      "from": "2026-03-06T12:00:00.000Z",
+      "describes": "Once",
+      "runs": [
+        {
+          "ms": 1772802000000,
+          "iso": "2026-03-06T13:00:00.000Z",
+          "local": "Fri Mar 06 2026 08:00:00 GMT-0500 (Eastern Standard Time)"
+        }
+      ]
+    },
+    {
+      "why": "a one-off already past — never comes round",
+      "spec": {
+        "kind": "once",
+        "at": 1772794800000
+      },
+      "from": "2026-03-06T12:00:00.000Z",
+      "describes": "Once",
+      "runs": []
+    },
+    {
+      "why": "a cron that can never match",
+      "spec": {
+        "kind": "cron",
+        "expr": "0 9 30 2 *"
+      },
+      "from": "2026-03-06T12:00:00.000Z",
+      "describes": "0 9 30 2 *",
+      "runs": []
+    },
+    {
+      "why": "DST spring forward — a daily 02:30 the day the hour disappears",
+      "spec": {
+        "kind": "every",
+        "preset": "daily",
+        "hour": 2,
+        "minute": 30
+      },
+      "from": "2026-03-07T12:00:00.000Z",
+      "describes": "Every day at 02:30",
+      "runs": [
+        {
+          "ms": 1773037800000,
+          "iso": "2026-03-09T06:30:00.000Z",
+          "local": "Mon Mar 09 2026 02:30:00 GMT-0400 (Eastern Daylight Time)"
+        },
+        {
+          "ms": 1773124200000,
+          "iso": "2026-03-10T06:30:00.000Z",
+          "local": "Tue Mar 10 2026 02:30:00 GMT-0400 (Eastern Daylight Time)"
+        },
+        {
+          "ms": 1773210600000,
+          "iso": "2026-03-11T06:30:00.000Z",
+          "local": "Wed Mar 11 2026 02:30:00 GMT-0400 (Eastern Daylight Time)"
+        }
+      ]
+    },
+    {
+      "why": "DST fall back — a daily 01:30 the day the hour repeats",
+      "spec": {
+        "kind": "every",
+        "preset": "daily",
+        "hour": 1,
+        "minute": 30
+      },
+      "from": "2026-10-31T12:00:00.000Z",
+      "describes": "Every day at 01:30",
+      "runs": [
+        {
+          "ms": 1793511000000,
+          "iso": "2026-11-01T05:30:00.000Z",
+          "local": "Sun Nov 01 2026 01:30:00 GMT-0400 (Eastern Daylight Time)"
+        },
+        {
+          "ms": 1793601000000,
+          "iso": "2026-11-02T06:30:00.000Z",
+          "local": "Mon Nov 02 2026 01:30:00 GMT-0500 (Eastern Standard Time)"
+        },
+        {
+          "ms": 1793687400000,
+          "iso": "2026-11-03T06:30:00.000Z",
+          "local": "Tue Nov 03 2026 01:30:00 GMT-0500 (Eastern Standard Time)"
+        }
+      ]
+    },
+    {
+      "why": "DST fall back — an hourly schedule through the doubled hour",
+      "spec": {
+        "kind": "cron",
+        "expr": "30 * * * *"
+      },
+      "from": "2026-11-01T04:00:00.000Z",
+      "describes": "30 * * * *",
+      "runs": [
+        {
+          "ms": 1793507400000,
+          "iso": "2026-11-01T04:30:00.000Z",
+          "local": "Sun Nov 01 2026 00:30:00 GMT-0400 (Eastern Daylight Time)"
+        },
+        {
+          "ms": 1793511000000,
+          "iso": "2026-11-01T05:30:00.000Z",
+          "local": "Sun Nov 01 2026 01:30:00 GMT-0400 (Eastern Daylight Time)"
+        },
+        {
+          "ms": 1793518200000,
+          "iso": "2026-11-01T07:30:00.000Z",
+          "local": "Sun Nov 01 2026 02:30:00 GMT-0500 (Eastern Standard Time)"
+        },
+        {
+          "ms": 1793521800000,
+          "iso": "2026-11-01T08:30:00.000Z",
+          "local": "Sun Nov 01 2026 03:30:00 GMT-0500 (Eastern Standard Time)"
+        },
+        {
+          "ms": 1793525400000,
+          "iso": "2026-11-01T09:30:00.000Z",
+          "local": "Sun Nov 01 2026 04:30:00 GMT-0500 (Eastern Standard Time)"
+        }
+      ]
+    }
+  ]
+}

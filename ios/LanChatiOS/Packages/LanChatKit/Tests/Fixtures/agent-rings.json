@@ -1,0 +1,247 @@
+{
+  "_": {
+    "generator": "scripts/make-ios-fixtures.js",
+    "note": "the colour and voice rings, and the slot invariant",
+    "tz": "America/New_York"
+  },
+  "AGENT_HUES": [
+    "#dd8888",
+    "#88ddb3",
+    "#dd88dd",
+    "#b3dd88",
+    "#8888dd",
+    "#ddb388",
+    "#88dddd",
+    "#dd88b3",
+    "#88dd88",
+    "#b388dd",
+    "#dddd88",
+    "#88b3dd"
+  ],
+  "VOICES": [
+    "Zephyr",
+    "Algenib",
+    "Leda",
+    "Charon",
+    "Sadachbia",
+    "Enceladus",
+    "Puck",
+    "Gacrux",
+    "Achernar",
+    "Kore",
+    "Vindemiatrix",
+    "Fenrir"
+  ],
+  "USER_VOICE": "Sulafat",
+  "ringLengthsAgree": true,
+  "slotFor": [
+    {
+      "id": "agent:ca24b2fe-0000-4000-8000-000000000001",
+      "slot": 5
+    },
+    {
+      "id": "agent:ca24b2fe-0000-4000-8000-000000000002",
+      "slot": 6
+    },
+    {
+      "id": "agent:ca24b2fe-0000-4000-8000-000000000003",
+      "slot": 7
+    },
+    {
+      "id": "agent:ca24b2fe-0000-4000-8000-000000000004",
+      "slot": 8
+    },
+    {
+      "id": "remote-agent:peer1:agent:zima",
+      "slot": 3
+    },
+    {
+      "id": "agent:zima",
+      "slot": 8
+    }
+  ],
+  "colorOf": [
+    {
+      "id": "agent:ca24b2fe-0000-4000-8000-000000000001",
+      "color": "#ddb388"
+    },
+    {
+      "id": "agent:ca24b2fe-0000-4000-8000-000000000002",
+      "color": "#88dddd"
+    },
+    {
+      "id": "agent:ca24b2fe-0000-4000-8000-000000000003",
+      "color": "#dd88b3"
+    },
+    {
+      "id": "agent:ca24b2fe-0000-4000-8000-000000000004",
+      "color": "#88dd88"
+    },
+    {
+      "id": "remote-agent:peer1:agent:zima",
+      "color": "#b3dd88"
+    },
+    {
+      "id": "agent:zima",
+      "color": "#88dd88"
+    }
+  ],
+  "voiceOf": [
+    {
+      "id": "agent:ca24b2fe-0000-4000-8000-000000000001",
+      "voice": "Enceladus"
+    },
+    {
+      "id": "agent:ca24b2fe-0000-4000-8000-000000000002",
+      "voice": "Puck"
+    },
+    {
+      "id": "agent:ca24b2fe-0000-4000-8000-000000000003",
+      "voice": "Gacrux"
+    },
+    {
+      "id": "agent:ca24b2fe-0000-4000-8000-000000000004",
+      "voice": "Achernar"
+    },
+    {
+      "id": "remote-agent:peer1:agent:zima",
+      "voice": "Charon"
+    },
+    {
+      "id": "agent:zima",
+      "voice": "Achernar"
+    }
+  ],
+  "slotsMatch": [
+    {
+      "id": "agent:ca24b2fe-0000-4000-8000-000000000001",
+      "colourSlot": 5,
+      "voiceSlot": 5
+    },
+    {
+      "id": "agent:ca24b2fe-0000-4000-8000-000000000002",
+      "colourSlot": 6,
+      "voiceSlot": 6
+    },
+    {
+      "id": "agent:ca24b2fe-0000-4000-8000-000000000003",
+      "colourSlot": 7,
+      "voiceSlot": 7
+    },
+    {
+      "id": "agent:ca24b2fe-0000-4000-8000-000000000004",
+      "colourSlot": 8,
+      "voiceSlot": 8
+    },
+    {
+      "id": "remote-agent:peer1:agent:zima",
+      "colourSlot": 3,
+      "voiceSlot": 3
+    },
+    {
+      "id": "agent:zima",
+      "colourSlot": 8,
+      "voiceSlot": 8
+    }
+  ],
+  "paletteFor": [
+    {
+      "cast": [
+        "agent:ca24b2fe-0000-4000-8000-000000000001",
+        "agent:ca24b2fe-0000-4000-8000-000000000002",
+        "agent:ca24b2fe-0000-4000-8000-000000000003",
+        "agent:ca24b2fe-0000-4000-8000-000000000004"
+      ],
+      "palette": {}
+    },
+    {
+      "cast": [
+        "agent:ca24b2fe-0000-4000-8000-000000000004",
+        "agent:ca24b2fe-0000-4000-8000-000000000003",
+        "agent:ca24b2fe-0000-4000-8000-000000000002",
+        "agent:ca24b2fe-0000-4000-8000-000000000001"
+      ],
+      "palette": {}
+    }
+  ],
+  "ringFor": [
+    {
+      "cast": [
+        "agent:ca24b2fe-0000-4000-8000-000000000001",
+        "agent:ca24b2fe-0000-4000-8000-000000000002",
+        "agent:ca24b2fe-0000-4000-8000-000000000003",
+        "agent:ca24b2fe-0000-4000-8000-000000000004"
+      ],
+      "out": {}
+    }
+  ],
+  "voicesFor": [
+    {
+      "cast": [
+        "agent:ca24b2fe-0000-4000-8000-000000000001",
+        "agent:ca24b2fe-0000-4000-8000-000000000002",
+        "agent:ca24b2fe-0000-4000-8000-000000000003",
+        "agent:ca24b2fe-0000-4000-8000-000000000004"
+      ],
+      "voices": {}
+    },
+    {
+      "cast": [
+        "agent:ca24b2fe-0000-4000-8000-000000000004",
+        "agent:ca24b2fe-0000-4000-8000-000000000003",
+        "agent:ca24b2fe-0000-4000-8000-000000000002",
+        "agent:ca24b2fe-0000-4000-8000-000000000001"
+      ],
+      "voices": {}
+    }
+  ],
+  "ringVoices": [
+    {
+      "cast": [
+        "agent:ca24b2fe-0000-4000-8000-000000000001",
+        "agent:ca24b2fe-0000-4000-8000-000000000002",
+        "agent:ca24b2fe-0000-4000-8000-000000000003"
+      ],
+      "dealt": {
+        "voices": {},
+        "userVoice": "Fenrir",
+        "ring": [
+          "Zephyr",
+          "Algenib",
+          "Leda",
+          "Charon",
+          "Sadachbia",
+          "Enceladus",
+          "Puck",
+          "Gacrux",
+          "Achernar",
+          "Kore",
+          "Vindemiatrix"
+        ]
+      }
+    }
+  ],
+  "voiceForTurn": [
+    {
+      "turn": {
+        "agentId": "agent:ca24b2fe-0000-4000-8000-000000000001",
+        "mine": false
+      },
+      "voice": "Enceladus"
+    },
+    {
+      "turn": {
+        "agentId": null,
+        "mine": true
+      },
+      "voice": "Sulafat"
+    },
+    {
+      "turn": {
+        "agentId": "agent:never-seen",
+        "mine": false
+      },
+      "voice": "Algenib"
+    }
+  ]
+}

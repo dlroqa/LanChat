@@ -1,0 +1,113 @@
+{
+  "_": {
+    "generator": "scripts/make-ios-fixtures.js",
+    "note": "the signed transcript, byte for byte, plus the base64url/base64 split",
+    "tz": "America/New_York"
+  },
+  "constants": {
+    "PROTO": 2,
+    "DOMAIN": "lanchat-auth-v2",
+    "ROLE_SERVER": 83,
+    "ROLE_CLIENT": 67,
+    "KEY_BYTES": 32,
+    "NONCE_BYTES": 32,
+    "SIG_BYTES": 64
+  },
+  "inputs": {
+    "proto": "2",
+    "nonceS": "ERERERERERERERERERERERERERERERERERERERERERE",
+    "nonceC": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI",
+    "keyS": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+    "keyC": "Ivwpd5Lwtv_Av8_bftsMCqFOAlo2XsDjQuhuOCnLdLY",
+    "kxS": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM",
+    "kxC": "REREREREREREREREREREREREREREREREREREREREREQ",
+    "idS": "ca24b2fe-0000-4000-8000-000000000001",
+    "idC": "ca24b2fe-0000-4000-8000-000000000002"
+  },
+  "seeds": {
+    "server": "UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE",
+    "client": "Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0M"
+  },
+  "transcripts": [
+    {
+      "role": "server",
+      "roleByte": 83,
+      "transcriptHex": "6c616e636861742d617574682d7632005300013211111111111111111111111111111111111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222c050c5637a44fa8629fff3cccce2300cb362a63d99d95fc54145266f4332445a22fc297792f0b6ffc0bfcfdb7edb0c0aa14e025a365ec0e342e86e3829cb74b633333333333333333333333333333333333333333333333333333333333333334444444444444444444444444444444444444444444444444444444444444444002463613234623266652d303030302d343030302d383030302d303030303030303030303031002463613234623266652d303030302d343030302d383030302d303030303030303030303032",
+      "transcriptBytes": 288,
+      "signatureBase64": "ZJMWavfK9SNYLQwgEpreTjb2yRCLi5y506q98hHcq6poAA5TEnupuUbvWaAYbZh3afj/QMz9dQwLjBDJXazODA==",
+      "signerPublicKeyB64u": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+      "verifies": true,
+      "verifiesUnderOtherKey": false
+    },
+    {
+      "role": "client",
+      "roleByte": 67,
+      "transcriptHex": "6c616e636861742d617574682d7632004300013211111111111111111111111111111111111111111111111111111111111111112222222222222222222222222222222222222222222222222222222222222222c050c5637a44fa8629fff3cccce2300cb362a63d99d95fc54145266f4332445a22fc297792f0b6ffc0bfcfdb7edb0c0aa14e025a365ec0e342e86e3829cb74b633333333333333333333333333333333333333333333333333333333333333334444444444444444444444444444444444444444444444444444444444444444002463613234623266652d303030302d343030302d383030302d303030303030303030303031002463613234623266652d303030302d343030302d383030302d303030303030303030303032",
+      "transcriptBytes": 288,
+      "signatureBase64": "7hukrHexOuzY4lh7T7JVrl/syKf1vNUoTi27L9s3gVDE4TCgI7dVKmAHXWQg3bIemLCI7zFs12fYC9rqztaCCg==",
+      "signerPublicKeyB64u": "Ivwpd5Lwtv_Av8_bftsMCqFOAlo2XsDjQuhuOCnLdLY",
+      "verifies": true,
+      "verifiesUnderOtherKey": false
+    }
+  ],
+  "fingerprints": [
+    {
+      "key": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+      "fingerprint": "4B73-5AC1-74E4-0636-5077-16ED"
+    },
+    {
+      "key": "Ivwpd5Lwtv_Av8_bftsMCqFOAlo2XsDjQuhuOCnLdLY",
+      "fingerprint": "7DB0-B01F-39D1-79AA-CF7B-03DB"
+    }
+  ],
+  "fromB64u": [
+    {
+      "input": "ERERERERERERERERERERERERERERERERERERERERERE",
+      "want": 32,
+      "ok": true,
+      "decoded": true
+    },
+    {
+      "input": "ERERERERERERERERERERERERERERERERERERERERERE=",
+      "want": 32,
+      "ok": false,
+      "why": "padding rejected",
+      "decoded": false
+    },
+    {
+      "input": "ERERERERERERERERERERERERERERERERERERERERERE=",
+      "want": 32,
+      "ok": false,
+      "why": "standard alphabet",
+      "decoded": false
+    },
+    {
+      "input": "EREREREREREREREREREREREREREREREREREREREREQ",
+      "want": 32,
+      "ok": false,
+      "why": "short",
+      "decoded": false
+    },
+    {
+      "input": "ERERERERERERERERERERERERERERERERERERERERERER",
+      "want": 32,
+      "ok": false,
+      "why": "long",
+      "decoded": false
+    },
+    {
+      "input": "",
+      "want": 32,
+      "ok": false,
+      "why": "empty",
+      "decoded": false
+    },
+    {
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "want": 32,
+      "ok": false,
+      "why": "over the 512-char ceiling",
+      "decoded": false
+    }
+  ]
+}

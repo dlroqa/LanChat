@@ -18,6 +18,7 @@
     "format": "prettier --write \"src/**/*.{js,jsx,css}\" \"test/*.js\" \"scripts/**/*.js\" \"*.js\"",
     "format:check": "prettier --check \"src/**/*.{js,jsx,css}\" \"test/*.js\" \"scripts/**/*.js\" \"*.js\"",
     "icons": "node scripts/make-icons.js",
+    "ios:fixtures": "node scripts/make-ios-fixtures.js",
     "start": "electron .",
     "dist": "npm run build:renderer && electron-builder",
     "dist:linux": "npm run build:renderer && electron-builder --linux",

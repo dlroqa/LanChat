@@ -1,0 +1,398 @@
+{
+  "_": {
+    "generator": "scripts/make-ios-fixtures.js",
+    "note": "everything between what an agent said and what the model is fed, short of the phonemiser",
+    "tz": "America/New_York"
+  },
+  "constants": {
+    "MAX_TOKENS": 510,
+    "MAX_BODY_TOKENS": 508,
+    "STYLE_ROWS": 510,
+    "BOUNDARY": "$",
+    "PUNCTUATION": ";:,.!?¡¿—…\"«»“”(){}[]"
+  },
+  "normalize": [
+    {
+      "raw": "It was 1985.",
+      "normalized": "It was 19 85."
+    },
+    {
+      "raw": "That will be $4.50, please.",
+      "normalized": "That will be 4 dollars and 50 cents, please."
+    },
+    {
+      "raw": "Dr. Chandra will see you at 9:30.",
+      "normalized": "Doctor Chandra will see you at 9 30."
+    },
+    {
+      "raw": "Pi is about 3.14 and e is 2.718.",
+      "normalized": "Pi is about 3 point 1 4 and e is 2 point 7 1 8."
+    },
+    {
+      "raw": "The meeting is at 14:05 on 2019-03-01.",
+      "normalized": "The meeting is at 14:05 on 20 19 to 03 to 01."
+    },
+    {
+      "raw": "Mr. and Mrs. Smith vs. the St. Louis Co.",
+      "normalized": "Mister and Mrs Smith vs. the St. Louis Co."
+    },
+    {
+      "raw": "1,234,567 items at $0.99 each.",
+      "normalized": "1234567 items at 0 dollars and 99 cents each."
+    },
+    {
+      "raw": "Chapter 12, section 3.4, page 100.",
+      "normalized": "Chapter 12, section 3 point 4, page 100."
+    }
+  ],
+  "saidAsNumber": [
+    {
+      "raw": "1985",
+      "said": "19 85"
+    },
+    {
+      "raw": "2026",
+      "said": "20 26"
+    },
+    {
+      "raw": "9:30",
+      "said": "9 30"
+    },
+    {
+      "raw": "14:05",
+      "said": "14 oh 5"
+    },
+    {
+      "raw": "3.14",
+      "said": "3.14"
+    },
+    {
+      "raw": "0",
+      "said": "0"
+    },
+    {
+      "raw": "7",
+      "said": "7"
+    },
+    {
+      "raw": "100",
+      "said": "100"
+    },
+    {
+      "raw": "1234",
+      "said": "12 34"
+    }
+  ],
+  "saidAsMoney": [
+    {
+      "raw": "$4.50",
+      "said": "4 dollars and 50 cents"
+    },
+    {
+      "raw": "$1",
+      "said": "1 dollar"
+    },
+    {
+      "raw": "$0.99",
+      "said": "0 dollars and 99 cents"
+    },
+    {
+      "raw": "$1,000",
+      "said": "1,000 dollars"
+    },
+    {
+      "raw": "$12.00",
+      "said": "12 dollars and 0 cents"
+    }
+  ],
+  "saidAsDecimal": [
+    {
+      "raw": "3.14",
+      "said": "3 point 1 4"
+    },
+    {
+      "raw": "0.5",
+      "said": "0 point 5"
+    },
+    {
+      "raw": "2.718",
+      "said": "2 point 7 1 8"
+    },
+    {
+      "raw": "10.0",
+      "said": "10 point 0"
+    }
+  ],
+  "isAbbreviation": [
+    {
+      "word": "Dr",
+      "abbreviation": true
+    },
+    {
+      "word": "Mr",
+      "abbreviation": true
+    },
+    {
+      "word": "Mrs",
+      "abbreviation": true
+    },
+    {
+      "word": "St",
+      "abbreviation": true
+    },
+    {
+      "word": "vs",
+      "abbreviation": true
+    },
+    {
+      "word": "Co",
+      "abbreviation": true
+    },
+    {
+      "word": "Inc",
+      "abbreviation": true
+    },
+    {
+      "word": "Hello",
+      "abbreviation": false
+    },
+    {
+      "word": "a",
+      "abbreviation": false
+    }
+  ],
+  "languageOf": [
+    {
+      "voice": "af_bella",
+      "language": "en-us"
+    },
+    {
+      "voice": "am_fenrir",
+      "language": "en-us"
+    },
+    {
+      "voice": "bf_emma",
+      "language": "en"
+    },
+    {
+      "voice": "bm_george",
+      "language": "en"
+    },
+    {
+      "voice": "af_heart",
+      "language": "en-us"
+    },
+    {
+      "voice": "zz_unknown",
+      "language": "en-us"
+    }
+  ],
+  "repairPhonemes": [
+    {
+      "phonemes": "həlˈəʊ wˈɜːld",
+      "language": "a",
+      "repaired": "həlˈəʊ wˈɜːld"
+    },
+    {
+      "phonemes": "həlˈəʊ wˈɜːld",
+      "language": "b",
+      "repaired": "həlˈəʊ wˈɜːld"
+    },
+    {
+      "phonemes": "ˈkɜːnəl",
+      "language": "a",
+      "repaired": "ˈkɜːnəl"
+    },
+    {
+      "phonemes": "ðə kwˈɪk bɹˈaʊn fˈɒks",
+      "language": "b",
+      "repaired": "ðə kwˈɪk bɹˈaʊn fˈɒks"
+    }
+  ],
+  "segment": [
+    {
+      "text": "Hello, world! How are you?",
+      "segments": [
+        {
+          "punctuation": false,
+          "text": "Hello"
+        },
+        {
+          "punctuation": true,
+          "text": ", "
+        },
+        {
+          "punctuation": false,
+          "text": "world"
+        },
+        {
+          "punctuation": true,
+          "text": "! "
+        },
+        {
+          "punctuation": false,
+          "text": "How are you"
+        },
+        {
+          "punctuation": true,
+          "text": "?"
+        }
+      ]
+    },
+    {
+      "text": "One. Two! Three?",
+      "segments": [
+        {
+          "punctuation": false,
+          "text": "One"
+        },
+        {
+          "punctuation": true,
+          "text": ". "
+        },
+        {
+          "punctuation": false,
+          "text": "Two"
+        },
+        {
+          "punctuation": true,
+          "text": "! "
+        },
+        {
+          "punctuation": false,
+          "text": "Three"
+        },
+        {
+          "punctuation": true,
+          "text": "?"
+        }
+      ]
+    },
+    {
+      "text": "No punctuation here",
+      "segments": [
+        {
+          "punctuation": false,
+          "text": "No punctuation here"
+        }
+      ]
+    }
+  ],
+  "styleOffset": [
+    {
+      "tokenCount": 0,
+      "offset": 0
+    },
+    {
+      "tokenCount": 1,
+      "offset": 0
+    },
+    {
+      "tokenCount": 100,
+      "offset": 25088
+    },
+    {
+      "tokenCount": 508,
+      "offset": 129536
+    },
+    {
+      "tokenCount": 509,
+      "offset": 129792
+    },
+    {
+      "tokenCount": 510,
+      "offset": 130048
+    },
+    {
+      "tokenCount": 511,
+      "offset": 130304
+    },
+    {
+      "tokenCount": 1000,
+      "offset": 130304
+    }
+  ],
+  "splitSentences": [
+    {
+      "text": "One sentence.",
+      "sentences": [
+        "One sentence."
+      ]
+    },
+    {
+      "text": "One. Two. Three.",
+      "sentences": [
+        "One.",
+        "Two.",
+        "Three."
+      ]
+    },
+    {
+      "text": "Dr. Chandra went to St. Louis. Then he left.",
+      "sentences": [
+        "Dr. Chandra went to St. Louis.",
+        "Then he left."
+      ]
+    },
+    {
+      "text": "A question? An exclamation! A statement.",
+      "sentences": [
+        "A question?",
+        "An exclamation!",
+        "A statement."
+      ]
+    }
+  ],
+  "splitLong": [
+    {
+      "text": "Sentence number 1 goes here. Sentence number 2 goes here. Sentence number 3 goes here. Sentence number 4 goes here. Sentence number 5 goes here. Sentence number 6 goes here. Sentence number 7 goes here. Sentence number 8 goes here. Sentence number 9 goes here. Sentence number 10 goes here. Sentence number 11 goes here. Sentence number 12 goes here.",
+      "budget": 80,
+      "chunks": [
+        "Sentence number 1 goes here. Sentence number 2 goes here. Sentence number 3 goes",
+        "here. Sentence number 4 goes here. Sentence number 5 goes here. Sentence number",
+        "6 goes here. Sentence number 7 goes here. Sentence number 8 goes here. Sentence",
+        "number 9 goes here. Sentence number 10 goes here. Sentence number 11 goes here.",
+        "Sentence number 12 goes here."
+      ]
+    },
+    {
+      "text": "A short one.",
+      "budget": 80,
+      "chunks": [
+        "A short one."
+      ]
+    }
+  ],
+  "splitFor": {
+    "measure": "string length (stub — the real one phonemises)",
+    "text": "Sentence number 1 goes here. Sentence number 2 goes here. Sentence number 3 goes here. Sentence number 4 goes here. Sentence number 5 goes here. Sentence number 6 goes here. Sentence number 7 goes here. Sentence number 8 goes here. Sentence number 9 goes here. Sentence number 10 goes here. Sentence number 11 goes here. Sentence number 12 goes here.",
+    "max": 120,
+    "cases": [
+      {
+        "max": 60,
+        "chunks": [
+          "Sentence number 1 goes here. Sentence number 2 goes here.",
+          "Sentence number 3 goes here. Sentence number 4 goes here.",
+          "Sentence number 5 goes here. Sentence number 6 goes here.",
+          "Sentence number 7 goes here. Sentence number 8 goes here.",
+          "Sentence number 9 goes here. Sentence number 10 goes here.",
+          "Sentence number 11 goes here. Sentence number 12 goes here."
+        ]
+      },
+      {
+        "max": 120,
+        "chunks": [
+          "Sentence number 1 goes here. Sentence number 2 goes here. Sentence number 3 goes here. Sentence number 4 goes here.",
+          "Sentence number 5 goes here. Sentence number 6 goes here. Sentence number 7 goes here. Sentence number 8 goes here.",
+          "Sentence number 9 goes here. Sentence number 10 goes here. Sentence number 11 goes here. Sentence number 12 goes here."
+        ]
+      },
+      {
+        "max": 4000,
+        "chunks": [
+          "Sentence number 1 goes here. Sentence number 2 goes here. Sentence number 3 goes here. Sentence number 4 goes here. Sentence number 5 goes here. Sentence number 6 goes here. Sentence number 7 goes here. Sentence number 8 goes here. Sentence number 9 goes here. Sentence number 10 goes here. Sentence number 11 goes here. Sentence number 12 goes here."
+        ]
+      }
+    ]
+  }
+}

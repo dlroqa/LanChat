@@ -1,0 +1,206 @@
+{
+  "_": {
+    "generator": "scripts/make-ios-fixtures.js",
+    "note": "hit ordinals across every searchable field",
+    "tz": "America/New_York"
+  },
+  "matchRanges": [
+    {
+      "text": "relay relay relay",
+      "query": "relay",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 5
+        },
+        {
+          "start": 6,
+          "end": 11
+        },
+        {
+          "start": 12,
+          "end": 17
+        }
+      ]
+    },
+    {
+      "text": "RELAY relay",
+      "query": "relay",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 5
+        },
+        {
+          "start": 6,
+          "end": 11
+        }
+      ]
+    },
+    {
+      "text": "no match",
+      "query": "relay",
+      "ranges": []
+    },
+    {
+      "text": "aaa",
+      "query": "aa",
+      "ranges": [
+        {
+          "start": 0,
+          "end": 2
+        }
+      ]
+    },
+    {
+      "text": "anything",
+      "query": "",
+      "ranges": []
+    }
+  ],
+  "searchableFields": [
+    {
+      "id": "a",
+      "fields": [
+        {
+          "key": "text",
+          "text": "the relay carries the discussion"
+        }
+      ]
+    },
+    {
+      "id": "b",
+      "fields": [
+        {
+          "key": "text",
+          "text": "RELAY again, and relay once more"
+        }
+      ]
+    },
+    {
+      "id": "c",
+      "fields": [
+        {
+          "key": "file",
+          "text": "relay-notes.md"
+        }
+      ]
+    },
+    {
+      "id": "d",
+      "fields": [
+        {
+          "key": "doc:0",
+          "text": "relay.pdf"
+        },
+        {
+          "key": "text",
+          "text": "nothing to see"
+        }
+      ]
+    },
+    {
+      "id": "e",
+      "fields": [
+        {
+          "key": "context",
+          "text": "the relay again"
+        },
+        {
+          "key": "text",
+          "text": "quoted"
+        }
+      ]
+    }
+  ],
+  "countHits": [
+    {
+      "id": "a",
+      "hits": 1
+    },
+    {
+      "id": "b",
+      "hits": 2
+    },
+    {
+      "id": "c",
+      "hits": 1
+    },
+    {
+      "id": "d",
+      "hits": 1
+    },
+    {
+      "id": "e",
+      "hits": 1
+    }
+  ],
+  "fieldHits": [
+    {
+      "id": "a",
+      "hits": {}
+    },
+    {
+      "id": "b",
+      "hits": {}
+    },
+    {
+      "id": "c",
+      "hits": {}
+    },
+    {
+      "id": "d",
+      "hits": {}
+    },
+    {
+      "id": "e",
+      "hits": {}
+    }
+  ],
+  "threadHits": {
+    "query": "relay",
+    "messages": [
+      "a",
+      "b",
+      "c",
+      "d",
+      "e"
+    ],
+    "total": 6,
+    "bases": {}
+  },
+  "sliceRuns": [
+    {
+      "runs": [
+        {
+          "kind": "text",
+          "text": "the relay carries"
+        }
+      ],
+      "ranges": [
+        {
+          "start": 4,
+          "end": 9
+        }
+      ],
+      "base": 0,
+      "out": [
+        {
+          "kind": "text",
+          "text": "the ",
+          "hit": null
+        },
+        {
+          "kind": "text",
+          "text": "relay",
+          "hit": 0
+        },
+        {
+          "kind": "text",
+          "text": " carries",
+          "hit": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "_": {
+    "generator": "scripts/make-ios-fixtures.js",
+    "note": "the doubling schedule, read out of discovery.js",
+    "tz": "America/New_York"
+  },
+  "constants": {
+    "BACKOFF_BASE_MS": 30000,
+    "BACKOFF_MAX_MS": 900000
+  },
+  "note": "keyed on \"ip:port\"; cleared outright by a successful peer-hello",
+  "schedule": [
+    {
+      "failures": 1,
+      "waitMs": 30000
+    },
+    {
+      "failures": 2,
+      "waitMs": 60000
+    },
+    {
+      "failures": 3,
+      "waitMs": 120000
+    },
+    {
+      "failures": 4,
+      "waitMs": 240000
+    },
+    {
+      "failures": 5,
+      "waitMs": 480000
+    },
+    {
+      "failures": 6,
+      "waitMs": 900000
+    },
+    {
+      "failures": 7,
+      "waitMs": 900000
+    },
+    {
+      "failures": 8,
+      "waitMs": 900000
+    },
+    {
+      "failures": 9,
+      "waitMs": 900000
+    },
+    {
+      "failures": 10,
+      "waitMs": 900000
+    },
+    {
+      "failures": 11,
+      "waitMs": 900000
+    },
+    {
+      "failures": 12,
+      "waitMs": 900000
+    }
+  ]
+}

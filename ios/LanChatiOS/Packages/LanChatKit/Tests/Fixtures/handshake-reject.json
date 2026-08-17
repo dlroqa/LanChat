@@ -1,0 +1,355 @@
+{
+  "_": {
+    "generator": "scripts/make-ios-fixtures.js",
+    "note": "every malformed hello and what parseHello does with it",
+    "tz": "America/New_York"
+  },
+  "wire": {
+    "WIRE_REASON": "refused",
+    "WIRE_CLOSE_CODE": 4401
+  },
+  "localReasons": {
+    "OLDER_LANCHAT": "older-lanchat",
+    "BAD_HELLO": "bad-hello",
+    "BAD_SIGNATURE": "bad-signature",
+    "KEY_CHANGED": "key-changed",
+    "ID_IN_USE": "id-in-use",
+    "TIMED_OUT": "timed-out"
+  },
+  "refusalForWire": [
+    {
+      "reason": "bad-hello",
+      "wire": {
+        "type": "auth-fail",
+        "reason": "refused"
+      }
+    },
+    {
+      "reason": "key-changed",
+      "wire": {
+        "type": "auth-fail",
+        "reason": "refused"
+      }
+    },
+    {
+      "reason": "timed-out",
+      "wire": {
+        "type": "auth-fail",
+        "reason": "refused"
+      }
+    }
+  ],
+  "looksLikeOldBuild": [
+    {
+      "msg": {
+        "type": "hello",
+        "from": "x"
+      },
+      "old": true
+    },
+    {
+      "msg": {
+        "type": "hello",
+        "proto": 2,
+        "from": "ca24b2fe-0000-4000-8000-000000000001",
+        "identity": {
+          "id": "ca24b2fe-0000-4000-8000-000000000001",
+          "publicKey": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "name": "Ada",
+          "servicePort": 47100
+        },
+        "auth": {
+          "nonce": "ERERERERERERERERERERERERERERERERERERERERERE",
+          "key": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "kx": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM"
+        }
+      },
+      "old": false
+    }
+  ],
+  "parseHello": [
+    {
+      "why": "a well-formed hello",
+      "needSig": false,
+      "accepted": true,
+      "message": {
+        "type": "hello",
+        "proto": 2,
+        "from": "ca24b2fe-0000-4000-8000-000000000001",
+        "identity": {
+          "id": "ca24b2fe-0000-4000-8000-000000000001",
+          "publicKey": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "name": "Ada",
+          "servicePort": 47100
+        },
+        "auth": {
+          "nonce": "ERERERERERERERERERERERERERERERERERERERERERE",
+          "key": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "kx": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM"
+        }
+      }
+    },
+    {
+      "why": "a well-formed hello, signature required and present",
+      "needSig": true,
+      "accepted": true,
+      "message": {
+        "type": "hello",
+        "proto": 2,
+        "from": "ca24b2fe-0000-4000-8000-000000000001",
+        "identity": {
+          "id": "ca24b2fe-0000-4000-8000-000000000001",
+          "publicKey": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "name": "Ada",
+          "servicePort": 47100
+        },
+        "auth": {
+          "nonce": "ERERERERERERERERERERERERERERERERERERERERERE",
+          "key": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "kx": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM",
+          "sig": "AA=="
+        }
+      }
+    },
+    {
+      "why": "signature required and absent",
+      "needSig": true,
+      "accepted": false,
+      "message": {
+        "type": "hello",
+        "proto": 2,
+        "from": "ca24b2fe-0000-4000-8000-000000000001",
+        "identity": {
+          "id": "ca24b2fe-0000-4000-8000-000000000001",
+          "publicKey": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "name": "Ada",
+          "servicePort": 47100
+        },
+        "auth": {
+          "nonce": "ERERERERERERERERERERERERERERERERERERERERERE",
+          "key": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "kx": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM"
+        }
+      }
+    },
+    {
+      "why": "proto 1",
+      "needSig": false,
+      "accepted": false,
+      "message": {
+        "type": "hello",
+        "proto": 1,
+        "from": "ca24b2fe-0000-4000-8000-000000000001",
+        "identity": {
+          "id": "ca24b2fe-0000-4000-8000-000000000001",
+          "publicKey": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "name": "Ada",
+          "servicePort": 47100
+        },
+        "auth": {
+          "nonce": "ERERERERERERERERERERERERERERERERERERERERERE",
+          "key": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "kx": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM"
+        }
+      }
+    },
+    {
+      "why": "proto as a string",
+      "needSig": false,
+      "accepted": false,
+      "message": {
+        "type": "hello",
+        "proto": "2",
+        "from": "ca24b2fe-0000-4000-8000-000000000001",
+        "identity": {
+          "id": "ca24b2fe-0000-4000-8000-000000000001",
+          "publicKey": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "name": "Ada",
+          "servicePort": 47100
+        },
+        "auth": {
+          "nonce": "ERERERERERERERERERERERERERERERERERERERERERE",
+          "key": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "kx": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM"
+        }
+      }
+    },
+    {
+      "why": "no from",
+      "needSig": false,
+      "accepted": false,
+      "message": {
+        "type": "hello",
+        "proto": 2,
+        "from": "",
+        "identity": {
+          "id": "ca24b2fe-0000-4000-8000-000000000001",
+          "publicKey": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "name": "Ada",
+          "servicePort": 47100
+        },
+        "auth": {
+          "nonce": "ERERERERERERERERERERERERERERERERERERERERERE",
+          "key": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "kx": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM"
+        }
+      }
+    },
+    {
+      "why": "from over 256 chars",
+      "needSig": false,
+      "accepted": false,
+      "message": {
+        "type": "hello",
+        "proto": 2,
+        "from": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "identity": {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "publicKey": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "name": "Ada",
+          "servicePort": 47100
+        },
+        "auth": {
+          "nonce": "ERERERERERERERERERERERERERERERERERERERERERE",
+          "key": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "kx": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM"
+        }
+      }
+    },
+    {
+      "why": "nonce is 31 bytes",
+      "needSig": false,
+      "accepted": false,
+      "message": {
+        "type": "hello",
+        "proto": 2,
+        "from": "ca24b2fe-0000-4000-8000-000000000001",
+        "identity": {
+          "id": "ca24b2fe-0000-4000-8000-000000000001",
+          "publicKey": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "name": "Ada",
+          "servicePort": 47100
+        },
+        "auth": {
+          "nonce": "EREREREREREREREREREREREREREREREREREREREREQ",
+          "key": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "kx": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM"
+        }
+      }
+    },
+    {
+      "why": "key is padded base64",
+      "needSig": false,
+      "accepted": false,
+      "message": {
+        "type": "hello",
+        "proto": 2,
+        "from": "ca24b2fe-0000-4000-8000-000000000001",
+        "identity": {
+          "id": "ca24b2fe-0000-4000-8000-000000000001",
+          "publicKey": "ERERERERERERERERERERERERERERERERERERERERERE=",
+          "name": "Ada",
+          "servicePort": 47100
+        },
+        "auth": {
+          "nonce": "ERERERERERERERERERERERERERERERERERERERERERE",
+          "key": "ERERERERERERERERERERERERERERERERERERERERERE=",
+          "kx": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM"
+        }
+      }
+    },
+    {
+      "why": "no kx",
+      "needSig": false,
+      "accepted": false,
+      "message": {
+        "type": "hello",
+        "proto": 2,
+        "from": "ca24b2fe-0000-4000-8000-000000000001",
+        "identity": {
+          "id": "ca24b2fe-0000-4000-8000-000000000001",
+          "publicKey": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "name": "Ada",
+          "servicePort": 47100
+        },
+        "auth": {
+          "nonce": "ERERERERERERERERERERERERERERERERERERERERERE",
+          "key": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo"
+        }
+      }
+    },
+    {
+      "why": "identity.id disagrees with from",
+      "needSig": false,
+      "accepted": false,
+      "message": {
+        "type": "hello",
+        "proto": 2,
+        "from": "ca24b2fe-0000-4000-8000-000000000001",
+        "identity": {
+          "id": "somebody-else",
+          "publicKey": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "name": "Ada",
+          "servicePort": 47100
+        },
+        "auth": {
+          "nonce": "ERERERERERERERERERERERERERERERERERERERERERE",
+          "key": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "kx": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM"
+        }
+      }
+    },
+    {
+      "why": "identity.publicKey disagrees with auth.key",
+      "needSig": false,
+      "accepted": false,
+      "message": {
+        "type": "hello",
+        "proto": 2,
+        "from": "ca24b2fe-0000-4000-8000-000000000001",
+        "identity": {
+          "id": "ca24b2fe-0000-4000-8000-000000000001",
+          "publicKey": "mZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZk",
+          "name": "Ada",
+          "servicePort": 47100
+        },
+        "auth": {
+          "nonce": "ERERERERERERERERERERERERERERERERERERERERERE",
+          "key": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "kx": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM"
+        }
+      }
+    },
+    {
+      "why": "no identity at all",
+      "needSig": false,
+      "accepted": false,
+      "message": {
+        "type": "hello",
+        "proto": 2,
+        "from": "ca24b2fe-0000-4000-8000-000000000001",
+        "auth": {
+          "nonce": "ERERERERERERERERERERERERERERERERERERERERERE",
+          "key": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "kx": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM"
+        }
+      }
+    },
+    {
+      "why": "no auth at all",
+      "needSig": false,
+      "accepted": false,
+      "message": {
+        "type": "hello",
+        "proto": 2,
+        "from": "ca24b2fe-0000-4000-8000-000000000001",
+        "identity": {
+          "id": "ca24b2fe-0000-4000-8000-000000000001",
+          "publicKey": "wFDFY3pE-oYp__PMzOIwDLNipj2Z2V_FQUUmb0MyRFo",
+          "name": "Ada",
+          "servicePort": 47100
+        }
+      }
+    }
+  ]
+}
