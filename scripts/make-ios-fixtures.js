@@ -612,19 +612,23 @@ function glare() {
 // ------------------------------------------------------------ dial backoff
 
 function dialBackoff() {
-  // The constants live inside a closure in discovery.js and are not exported,
-  // so they are read out of the source. That is only safe if the formula is
-  // still the one this fixture describes — hence the guard. If discovery.js
-  // changes shape, generation fails loudly instead of quietly emitting a
-  // schedule nobody implements any more.
-  const src = fs.readFileSync(path.join(SRC, 'main', 'discovery.js'), 'utf8');
+  // The formula lives inside a closure in adopt.js and is not exported, so it is
+  // read out of the source. That is only safe if the formula is still the one
+  // this fixture describes — hence the guard. If adopt.js changes shape,
+  // generation fails loudly instead of quietly emitting a schedule nobody
+  // implements any more.
+  //
+  // It moved here from discovery.js when the adopt funnel was extracted so a
+  // second discovery backend could share one backoff map. The schedule did not
+  // change; only the file it is read from did.
+  const src = fs.readFileSync(path.join(SRC, 'main', 'adopt.js'), 'utf8');
   const base = /const BACKOFF_BASE_MS = (\d+);/.exec(src);
   const max = /const BACKOFF_MAX_MS = ([\d *]+);/.exec(src);
   const formula = src.includes('Math.min(BACKOFF_BASE_MS * 2 ** (entry.failures - 1), BACKOFF_MAX_MS)');
   if (!base || !max || !formula) {
     throw new Error(
-      'discovery.js no longer matches the backoff shape this fixture describes — ' +
-        'read src/main/discovery.js and update scripts/make-ios-fixtures.js'
+      'adopt.js no longer matches the backoff shape this fixture describes — ' +
+        'read src/main/adopt.js and update scripts/make-ios-fixtures.js'
     );
   }
 
@@ -891,7 +895,7 @@ async function main() {
   );
   writeFixture('signal-shapes.json', 'the SDP and ICE candidate shapes on the wire', signalShapes());
   writeFixture('glare.json', 'who offers in a group call, over every unordered pair', glare());
-  writeFixture('dial-backoff.json', 'the doubling schedule, read out of discovery.js', dialBackoff());
+  writeFixture('dial-backoff.json', 'the doubling schedule, read out of adopt.js', dialBackoff());
   writeFixture('linkify.json', 'typed runs, safe hrefs, and image links', linkify());
   writeFixture('find-in-thread.json', 'hit ordinals across every searchable field', findInThread());
   writeFixture(

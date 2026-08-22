@@ -56,6 +56,17 @@ const QUALITY = {
   unreachable: { label: 'Not responding', color: 'var(--warn)', bars: 0 },
 };
 
+// Which network a peer arrived over.
+//
+// Read entirely from the discovery hints the roster already carries — facts we
+// worked out locally, merged *underneath* the signed identity, so this says
+// where we reached somebody and never claims anything about who they are.
+function viaLabel(peer) {
+  if (peer.network) return `NM · ${peer.network}`;
+  if (peer.tailnetName) return peer.shared ? 'Tailnet · shared' : 'Tailnet';
+  return peer.address ? 'LAN' : '—';
+}
+
 export default function ConnectionPanel({
   peer,
   stats,
@@ -125,6 +136,7 @@ export default function ConnectionPanel({
         <Stat label="Latency" value={stats?.rtt != null ? `${stats.rtt} ms` : '—'} />
         <Stat label="Average" value={stats?.avg != null ? `${stats.avg} ms` : '—'} />
         <Stat label="Loss" value={stats ? `${Math.round((stats.loss || 0) * 100)}%` : '—'} />
+        <Stat label="Via" value={viaLabel(peer)} />
       </div>
 
       <div className="conn-note">
@@ -132,8 +144,13 @@ export default function ConnectionPanel({
           ? 'This peer is offline. They will appear here when LanChat is running on their device.'
           : stats?.quality === 'unreachable'
             ? 'Connected, but nothing is coming back from this peer yet. Figures appear as soon as one round trip completes.'
-            : 'Measured peer-to-peer over your LAN or Tailscale mesh. Start a video call and it plays here.'}
+            : 'Measured peer-to-peer over your LAN, Tailscale mesh, or Netmaker network. Start a video call and it plays here.'}
       </div>
+      {peer.foreign && peer.network && (
+        <div className="conn-note">
+          This peer reached you over <strong>{peer.network}</strong>, which is not your home network.
+        </div>
+      )}
     </div>
   );
 }

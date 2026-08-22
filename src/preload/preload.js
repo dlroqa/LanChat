@@ -211,6 +211,21 @@ contextBridge.exposeInMainWorld('lanchat', {
   // Device identity and the peers we have pinned. Read-mostly: the only things
   // that change state here are deliberate acts by the person at the keyboard.
   security: () => invoke('lanchat:security'),
+  netmakerStatus: () => invoke('lanchat:netmakerStatus'),
+  probeNetmaker: () => invoke('lanchat:probeNetmaker'),
+  // Applied instantly rather than batched: it decides who may reach this
+  // machine, the same as setAcceptLan above it.
+  setNetmakerTrusted: (key, on) => invoke('lanchat:setNetmakerTrusted', { key, on }),
+  setNetmakerHome: (key) => invoke('lanchat:setNetmakerHome', { key }),
+  setNetmakerServers: (servers, binaryPath) => invoke('lanchat:setNetmakerServers', { servers, binaryPath }),
+  // One way, like the speech keys: a token can be set and cleared, never read
+  // back. The reply says only whether one is stored.
+  setNetmakerToken: (id, token) => invoke('lanchat:setNetmakerToken', { id, token }),
+  // A peer code is public: it says where to find this machine and which key to
+  // expect, and grants nothing on its own.
+  createPeerCode: (networkKey) => invoke('lanchat:createPeerCode', { networkKey }),
+  redeemPeerCode: (code) => invoke('lanchat:redeemPeerCode', { code }),
+  removeManualPeer: (address, port) => invoke('lanchat:removeManualPeer', { address, port }),
   listPins: () => invoke('lanchat:listPins'),
   markPeerVerified: (peerId, verified) => invoke('lanchat:markPeerVerified', { peerId, verified }),
   repinPeer: (peerId) => invoke('lanchat:repinPeer', { peerId }),

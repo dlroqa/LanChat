@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import ModalShell from './ModalShell.jsx';
 import DevicePicker from './DevicePicker.jsx';
 import UpdateSection from './UpdateSection.jsx';
+import NetmakerSection from './NetmakerSection.jsx';
 import SoundSettings from './SoundSettings.jsx';
 import SpeechSettings from './SpeechSettings.jsx';
 import AgentSection from './AgentSection.jsx';
@@ -23,6 +24,7 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
   const [acceptLan, setAcceptLan] = useState(Boolean(config.acceptLan));
   const [security, setSecurity] = useState(null);
   const [enableLan, setLan] = useState(config.enableLan);
+  const [enableNetmaker, setNm] = useState(config.enableNetmaker);
   const [useStun, setUseStun] = useState((config.iceServers || []).length > 0);
   const [showAddresses, setShowAddresses] = useState(Boolean(config.showAddresses));
   const [linkPreviews, setLinkPreviews] = useState(config.linkPreviews !== false);
@@ -83,6 +85,7 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
     onSave({
       enableTailscale,
       enableLan,
+      enableNetmaker,
       iceServers: useStun ? [{ urls: DEFAULT_STUN }] : [],
       showAddresses,
       linkPreviews,
@@ -181,8 +184,9 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
       <div className="section-head">Security</div>
       {security && security.reachability && security.reachability.unreachable && (
         <div className="field-warning" role="status">
-          Nobody can reach this device. LanChat only accepts connections over Tailscale, and no tailnet was
-          found — turn on the setting below to accept them over your local network instead.
+          Nobody can reach this device. LanChat accepts connections over Tailscale, or over a Netmaker network
+          you have ticked, and it found neither — turn on the setting below to accept them over your local
+          network instead.
         </div>
       )}
       <Toggle
@@ -215,6 +219,9 @@ export default function SettingsModal({ config, self, peers, soundUrl, onSave, o
           </div>
         </div>
       )}
+
+      <div className="section-head">Netmaker</div>
+      <NetmakerSection enabled={enableNetmaker} onToggle={setNm} />
 
       <div className="section-head">Conversations</div>
       <Toggle

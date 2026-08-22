@@ -13,6 +13,8 @@ const { createNetScope } = require('./netScope');
 const { createGrants, attachGrantIssuer } = require('./grants');
 const { createServer } = require('./server');
 const { createDiscovery } = require('./discovery');
+const { createAdopter } = require('./adopt');
+const { createNetmaker } = require('./netmaker');
 const { createFileSender } = require('./fileTransfer');
 const { MessageStore } = require('./store');
 const { createIpc } = require('./ipc');
@@ -246,8 +248,16 @@ async function startServices() {
     store,
     netScope,
   });
-  const discovery = createDiscovery({ config, getIdentity, hub, bus });
+  // One funnel for every discovery backend, so they share a single auth-backoff
+  // map: an address that refused us over one transport must not be hammered over
+  // the next one at the same moment.
+  const adopter = createAdopter({ config, getIdentity, hub, bus });
+  const discovery = createDiscovery({ config, getIdentity, hub, bus, adopter });
   discoveryRef = discovery;
+  // Netmaker reads the same interface list netScope admits on, so it is built
+  // here rather than inside discovery: the two answer different questions about
+  // one set of facts, and neither owns the other.
+  const netmaker = createNetmaker({ config, bus, adopter, safeStorage });
   const fileSender = createFileSender({ hub, getIdentity, bus });
   attachGrantIssuer({ hub, bus, grants });
 
@@ -279,6 +289,7 @@ async function startServices() {
     deviceKey,
     pins,
     netScope,
+    netmaker,
     outbox,
     devGate,
     userDataDir: app.getPath('userData'),
@@ -292,6 +303,7 @@ async function startServices() {
 
   await server.start();
   discovery.start();
+  netmaker.start();
   linkStats.start();
   // Drains queued messages whenever a peer becomes reachable again.
   outbox.start();
@@ -327,6 +339,8 @@ async function startServices() {
     hub,
     server,
     discovery,
+    netmaker,
+    adopter,
     store,
     downloadsDir,
     linkStats,
@@ -420,6 +434,7 @@ if (!gotLock && !process.env.LANCHAT_USERDATA) {
     if (tray) tray.destroy();
     if (services) {
       services.discovery.stop();
+      services.netmaker.stop();
       services.linkStats.stop();
       services.server.stop();
       // Tears down in-flight runs and kills any agent child processes.

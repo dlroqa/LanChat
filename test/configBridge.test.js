@@ -279,3 +279,179 @@ test('two configs do not share one key record', () => {
   assert.deepEqual(b.get('agentSpeechKeys'), {});
   assert.deepEqual(DEFAULTS.agentSpeechKeys, {}, 'and the defaults themselves are untouched');
 });
+
+// ---- Netmaker ---------------------------------------------------------------
+//
+// The Netmaker keys arrive in three tiers, and which tier a key is in is the
+// whole of its security story. These assert the tiers directly, because the
+// failure mode is silent: a key that drifted into SETTABLE_KEYS would become
+// writable by any bulk save of unrelated preferences.
+
+test('only the Netmaker key that decides whether we look is bulk-settable', () => {
+  assert.ok(
+    SETTABLE_KEYS.includes('enableNetmaker'),
+    'looking for peers is an ordinary preference, like enableTailscale'
+  );
+
+  for (const key of ['netmakerTrusted', 'netmakerNetworks', 'netmakerServers', 'netmakerBinaryPath']) {
+    assert.ok(!SETTABLE_KEYS.includes(key), `${key} must not be writable by a bulk setConfig patch`);
+    assert.ok(PUBLIC_KEYS.includes(key), `${key} is shown to the renderer, just not authored by it`);
+  }
+});
+
+test('netmakerTrusted is read-only to the renderer, like acceptLan', () => {
+  // It decides which networks may open a socket to this machine. acceptLan is
+  // held to exactly this rule and for exactly this reason.
+  assert.ok(PUBLIC_KEYS.includes('netmakerTrusted'));
+  assert.ok(!SETTABLE_KEYS.includes('netmakerTrusted'));
+  assert.equal(
+    SETTABLE_KEYS.includes('acceptLan'),
+    SETTABLE_KEYS.includes('netmakerTrusted'),
+    'the two admission keys are treated the same way'
+  );
+});
+
+test('the Netmaker API tokens are in no list the renderer can see', () => {
+  // Same terms as agentSpeechKey: Settings is told whether a token exists, never
+  // what it is.
+  assert.ok(!SETTABLE_KEYS.includes('netmakerApiTokens'));
+  assert.ok(!PUBLIC_KEYS.includes('netmakerApiTokens'));
+});
+
+test('two configs do not share one Netmaker token record', () => {
+  // The same shared-reference trap as agentSpeechKeys: netmakerApiTokens is an
+  // object mutated a key at a time, and the {} in DEFAULTS is one literal.
+  const a = new Config(fs.mkdtempSync(path.join(os.tmpdir(), 'lanchat-nmshare-')), '9.9.9');
+  const b = new Config(fs.mkdtempSync(path.join(os.tmpdir(), 'lanchat-nmshare-')), '9.9.9');
+
+  a.get('netmakerApiTokens').srv1 = { mode: 'sealed', cipher: 'A' };
+
+  assert.deepEqual(b.get('netmakerApiTokens'), {});
+  assert.deepEqual(DEFAULTS.netmakerApiTokens, {}, 'and the defaults themselves are untouched');
+});
+
+test('Netmaker defaults leave an upgrading installation exactly as it was', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lanchat-nmdefault-'));
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ id: 'abc', displayName: 'Ed' }));
+
+  const config = new Config(dir, '9.9.9');
+  assert.equal(config.get('enableNetmaker'), false, 'nothing is spawned because somebody updated');
+  assert.deepEqual(config.get('netmakerTrusted'), [], 'and no network may reach them that could not before');
+  assert.deepEqual(config.get('netmakerNetworks'), []);
+  assert.deepEqual(config.get('netmakerServers'), []);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a bulk save cannot open a Netmaker network', () => {
+  // The failure this guards against is silent: netmakerTrusted drifting into
+  // SETTABLE_KEYS would make any Save of unrelated preferences able to widen who
+  // can reach this machine.
+  const { call, config } = bridge();
+
+  call('lanchat:setConfig', {
+    enableNetmaker: true,
+    netmakerTrusted: ['iface:netmaker/10.101.0.0/24'],
+    netmakerServers: [{ id: 'x', apiUrl: 'https://evil.example' }],
+    netmakerBinaryPath: '/tmp/not-netclient',
+  });
+
+  assert.equal(config.get('enableNetmaker'), true, 'looking for peers is an ordinary preference');
+  assert.deepEqual(config.get('netmakerTrusted'), [], 'but who may reach us did not move');
+  assert.deepEqual(config.get('netmakerServers'), [], 'nor where credentials would be sent');
+  assert.equal(config.get('netmakerBinaryPath'), null, 'nor what binary we would spawn');
+});
+
+test('trusting a network takes its own channel, and lands on disk', () => {
+  const { call, config, onDisk } = bridge();
+  const key = 'iface:netmaker/10.101.0.0/24';
+
+  call('lanchat:setNetmakerTrusted', { key, on: true });
+  assert.deepEqual(config.get('netmakerTrusted'), [key]);
+  assert.deepEqual(onDisk().netmakerTrusted, [key], 'applied at once, not held in a draft');
+
+  // Idempotent: clicking a switch that is already on must not add it twice.
+  call('lanchat:setNetmakerTrusted', { key, on: true });
+  assert.deepEqual(config.get('netmakerTrusted'), [key]);
+
+  call('lanchat:setNetmakerTrusted', { key, on: false });
+  assert.deepEqual(config.get('netmakerTrusted'), [], 'and untrusting takes it away again');
+
+  // A call with no key is a no-op rather than a crash or a blanket change.
+  call('lanchat:setNetmakerTrusted', { key: null, on: true });
+  assert.deepEqual(config.get('netmakerTrusted'), []);
+});
+
+test('the Netmaker status reply never carries a token', () => {
+  // Same terms as the speech key: Settings is told whether a token exists, never
+  // what it is.
+  const { call, config } = bridge();
+  config.set({
+    netmakerServers: [{ id: 'srv1', apiUrl: 'https://nm.example', label: 'work' }],
+    netmakerApiTokens: { srv1: { mode: 'sealed', cipher: 'SECRET-CIPHERTEXT' } },
+  });
+
+  const reply = call('lanchat:netmakerStatus');
+  assert.equal(reply.servers[0].hasToken, true, 'it says a token is stored');
+  assert.equal(reply.servers[0].token, undefined, 'and does not say what it is');
+
+  const serialised = JSON.stringify(reply);
+  assert.ok(!serialised.includes('SECRET-CIPHERTEXT'), 'no token material anywhere in the reply');
+  assert.ok(!serialised.includes('netmakerApiTokens'));
+});
+
+test('the status channel answers even when no netmaker service was built', () => {
+  // bridge() constructs createIpc without one, which is the point: a service
+  // added later must not become required by every caller that already existed.
+  const { call } = bridge();
+  const reply = call('lanchat:netmakerStatus');
+  assert.deepEqual(reply.networks, []);
+  assert.equal(reply.status.reason, 'disabled', 'it reports a state rather than throwing');
+});
+
+test('a Netmaker server token can be set and cleared, but never read back', () => {
+  const { call, config } = bridge();
+  config.set({ netmakerServers: [{ id: 's1', apiUrl: 'https://nm.example', label: 'work' }] });
+
+  // No keychain in the suite, so sealing is refused rather than falling back to
+  // writing the token to disk in the clear.
+  const sealed = call('lanchat:setNetmakerToken', { id: 's1', token: 'SECRET' });
+  assert.equal(sealed.ok, false);
+  assert.match(sealed.error, /secure storage/);
+  assert.deepEqual(config.get('netmakerApiTokens'), {}, 'and nothing was written');
+
+  assert.equal(
+    call('lanchat:setNetmakerToken', { id: null, token: 'x' }).ok,
+    false,
+    'a token needs a server'
+  );
+});
+
+test('removing a server takes its token with it', () => {
+  // A secret whose server is gone is one nobody can use and nobody meant to keep.
+  const { call, config } = bridge();
+  config.set({
+    netmakerServers: [{ id: 's1', apiUrl: 'https://a.example' }],
+    netmakerApiTokens: { s1: { mode: 'sealed', cipher: 'AAA' }, stale: { mode: 'sealed', cipher: 'BBB' } },
+  });
+
+  call('lanchat:setNetmakerServers', { servers: [{ id: 's1', apiUrl: 'https://a.example' }] });
+  assert.deepEqual(Object.keys(config.get('netmakerApiTokens')), ['s1'], 'the orphaned token is gone');
+
+  call('lanchat:setNetmakerServers', { servers: [] });
+  assert.deepEqual(config.get('netmakerApiTokens'), {});
+  assert.deepEqual(config.get('netmakerServers'), []);
+});
+
+test('a server entry missing an id or a url is not stored', () => {
+  const { call, config } = bridge();
+  call('lanchat:setNetmakerServers', {
+    servers: [
+      { id: 'ok', apiUrl: 'https://a.example', label: '  work  ' },
+      { id: '', apiUrl: 'https://b.example' },
+      { id: 'no-url', apiUrl: '   ' },
+      null,
+    ],
+  });
+  assert.deepEqual(config.get('netmakerServers'), [{ id: 'ok', apiUrl: 'https://a.example', label: 'work' }]);
+});

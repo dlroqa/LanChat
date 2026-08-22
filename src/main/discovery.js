@@ -1,44 +1,23 @@
 'use strict';
 
-const http = require('node:http');
 const dgram = require('node:dgram');
 const fs = require('node:fs');
 const { execFile } = require('node:child_process');
+const { createAdopter, probeWhoami, manualPeerRecord } = require('./adopt');
 
 // Discovery feeds the PeerHub with reachable LanChat nodes via two paths:
 //   1. Tailscale — `tailscale status --json` lists tailnet peers + IPs; we probe
 //      each for the /lanchat/whoami handshake to see who is actually running it.
 //   2. LAN — a UDP broadcast beacon finds same-subnet peers not on Tailscale.
 // A manual peer list ("ip:port") covers locked-down networks and local testing.
+// All three funnel through the shared adopter in adopt.js, which owns the
+// whoami probe and the per-address auth backoff.
 
 const TAILSCALE_INTERVAL = 5000;
 const LAN_INTERVAL = 3000;
-const PROBE_TIMEOUT = 2500;
 // Below the poll interval, so a hung daemon call fails cleanly and the next
 // poll retries rather than stacking up.
 const TAILSCALE_STATUS_TIMEOUT = 4000;
-
-function probeWhoami(ip, port) {
-  return new Promise((resolve) => {
-    const req = http.get({ host: ip, port, path: '/lanchat/whoami', timeout: PROBE_TIMEOUT }, (res) => {
-      if (res.statusCode !== 200) {
-        res.resume();
-        return resolve(null);
-      }
-      let body = '';
-      res.on('data', (c) => (body += c));
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(body));
-        } catch {
-          resolve(null);
-        }
-      });
-    });
-    req.on('timeout', () => req.destroy());
-    req.on('error', () => resolve(null));
-  });
-}
 
 // Pure parse of `tailscale status --json` into a peer list. Exported for tests.
 //
@@ -211,68 +190,17 @@ async function tailscaleStatus() {
   return { __error: 'unavailable', detail: lastDetail };
 }
 
-function createDiscovery({ config, getIdentity, hub, bus }) {
+// `adopter` is optional so direct construction keeps working; main.js passes one
+// shared instance so discovery and any other backend answer to a single backoff
+// map rather than one each.
+function createDiscovery({ config, getIdentity, hub, bus, adopter = null }) {
+  const funnel = adopter || createAdopter({ config, getIdentity, hub, bus });
+  const adoptPeer = funnel.adopt;
   let tailTimer = null;
   let lanTimer = null;
+  let manualTimer = null;
   let lanSock = null;
   let stopped = false;
-
-  // `extra` carries facts we know locally (e.g. the peer is shared in from
-  // another tailnet) which the peer itself cannot tell us about.
-  //
-  // The probe response is an unauthenticated stranger's word, so it decides one
-  // thing only: where to dial. It used to go straight into `hub.setIdentity`,
-  // which meant a name and an avatar of somebody else's choosing appeared in the
-  // roster before a single frame had been authenticated — and appeared whether
-  // or not the dial ever succeeded. What a peer looks like now arrives with the
-  // handshake, signed. What we worked out ourselves goes in as a hint, which
-  // display treats as the weakest source.
-  async function adoptPeer(ip, defaultPort, extra = {}) {
-    const port = defaultPort || config.get('servicePort');
-    if (isBackedOff(`${ip}:${port}`)) return null;
-    const who = await probeWhoami(ip, port);
-    if (!who || !who.id || who.id === getIdentity().id) return who;
-    const svcPort = who.servicePort || port;
-    if (Object.keys(extra).length) hub.setDiscoveryHint(who.id, extra);
-    hub.connect(who.id, `${ip}:${svcPort}`);
-    return who;
-  }
-
-  // Addresses that failed to authenticate, and when to bother them again.
-  //
-  // This became necessary the moment the handshake did. Every online tailnet
-  // node is adopted every five seconds and the `dialing` guard clears on close,
-  // so a node that is not running LanChat — or is running a version that cannot
-  // authenticate — produced a failed handshake every five seconds, forever, with
-  // a log line and a roster entry each time. Strict refusal without backoff is a
-  // denial of service you inflict on yourself.
-  const backoff = new Map(); // "ip:port" -> { until, failures }
-  const BACKOFF_BASE_MS = 30000;
-  const BACKOFF_MAX_MS = 15 * 60 * 1000;
-
-  function isBackedOff(address) {
-    const entry = backoff.get(address);
-    if (!entry) return false;
-    if (Date.now() >= entry.until) return false;
-    return true;
-  }
-
-  function noteAuthFailure(address) {
-    if (!address) return;
-    const entry = backoff.get(address) || { failures: 0 };
-    entry.failures += 1;
-    // Doubling, capped. A peer that is simply switched off should not be waited
-    // on for an hour once they come back.
-    entry.until = Date.now() + Math.min(BACKOFF_BASE_MS * 2 ** (entry.failures - 1), BACKOFF_MAX_MS);
-    backoff.set(address, entry);
-  }
-
-  // A peer that authenticates has earned a clean slate.
-  bus.on('peer-hello', ({ peerId }) => {
-    const address = hub.addresses.get(peerId);
-    if (address) backoff.delete(address);
-  });
-  bus.on('peer-auth-failed', ({ address }) => noteAuthFailure(address));
 
   async function pollTailscale() {
     if (stopped || !config.get('enableTailscale')) return;
@@ -355,14 +283,19 @@ function createDiscovery({ config, getIdentity, hub, bus }) {
   // consent to accept from it too.
   function pollManual() {
     for (const entry of config.get('manualPeers') || []) {
-      const [ip, portStr] = String(entry).split(':');
-      if (ip) adoptPeer(ip.trim(), Number(portStr) || undefined);
+      const rec = manualPeerRecord(entry);
+      if (rec) adoptPeer(rec.address, rec.port || undefined);
     }
   }
 
   // The addresses the user asked for by hand, for netScope to consult.
   function manualAddresses() {
-    return (config.get('manualPeers') || []).map((e) => String(e).split(':')[0].trim()).filter(Boolean);
+    return (config.get('manualPeers') || [])
+      .map((e) => {
+        const rec = manualPeerRecord(e);
+        return rec && rec.address;
+      })
+      .filter(Boolean);
   }
 
   function start() {
@@ -371,8 +304,10 @@ function createDiscovery({ config, getIdentity, hub, bus }) {
     tailTimer = setInterval(pollTailscale, TAILSCALE_INTERVAL);
     startLan();
     pollManual();
-    // Re-poll manual peers periodically for reconnects.
-    setInterval(pollManual, TAILSCALE_INTERVAL);
+    // Re-poll manual peers periodically for reconnects. The handle is kept so
+    // stop() can clear it: without it the interval outlived the service and held
+    // the process (and the test suite) open.
+    manualTimer = setInterval(pollManual, TAILSCALE_INTERVAL);
   }
 
   function refresh() {
@@ -384,13 +319,14 @@ function createDiscovery({ config, getIdentity, hub, bus }) {
     stopped = true;
     if (tailTimer) clearInterval(tailTimer);
     if (lanTimer) clearInterval(lanTimer);
+    if (manualTimer) clearInterval(manualTimer);
     if (lanSock)
       try {
         lanSock.close();
       } catch {}
   }
 
-  return { start, stop, refresh, probeWhoami, manualAddresses, isBackedOff };
+  return { start, stop, refresh, probeWhoami, manualAddresses, isBackedOff: funnel.isBackedOff };
 }
 
 module.exports = {

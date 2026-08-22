@@ -4515,7 +4515,10 @@ input[type='range']:disabled::-webkit-slider-thumb {
 
 .conn-stats {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* auto-fit rather than a fixed three: the human panel gained a fourth stat
+     saying which network a peer arrived over, and the agent and session panels
+     still have three. A fixed count would have squeezed one of them. */
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
   gap: 8px;
 }
 

@@ -144,3 +144,69 @@ test('extractStatusJson rejects unrelated JSON and junk', () => {
   // Valid JSON, but not a Tailscale status — must not be mistaken for one.
   assert.equal(extractStatusJson('{"error":"something else"}'), null);
 });
+
+// ---- the shared adopt funnel -----------------------------------------------
+//
+// discovery.js used to own the whoami probe and the auth backoff itself. They
+// moved to adopt.js so a second discovery backend could share one backoff map.
+// These pin the seam: the surface did not change, and the manual-peer interval
+// that used to outlive stop() no longer does.
+
+const { createDiscovery } = require('../src/main/discovery.js');
+const { EventEmitter } = require('node:events');
+
+function stubs({ manualPeers = [] } = {}) {
+  const settings = { servicePort: 47100, enableTailscale: false, enableLan: false, manualPeers };
+  return {
+    config: { get: (k) => settings[k] },
+    getIdentity: () => ({ id: 'me' }),
+    hub: { addresses: new Map(), setDiscoveryHint() {}, connect() {} },
+    bus: new EventEmitter(),
+  };
+}
+
+test('discovery still builds its own funnel when it is not given one', () => {
+  const d = createDiscovery(stubs());
+  assert.equal(typeof d.probeWhoami, 'function', 'the probe stays on the returned surface');
+  assert.equal(typeof d.isBackedOff, 'function');
+  assert.equal(typeof d.manualAddresses, 'function');
+  d.stop();
+});
+
+test('a funnel handed in is the one that gets used', () => {
+  const s = stubs();
+  const adopter = { adopt: async () => null, isBackedOff: () => false, noteAuthFailure() {} };
+  const d = createDiscovery({ ...s, adopter });
+  assert.equal(d.isBackedOff, adopter.isBackedOff, 'so there is one backoff map, not two');
+  d.stop();
+});
+
+test('stop() stops polling manual peers', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const s = stubs({ manualPeers: ['203.0.113.9:47100'] });
+  let adopted = 0;
+  const adopter = {
+    adopt: async () => {
+      adopted += 1;
+      return null;
+    },
+    isBackedOff: () => false,
+    noteAuthFailure() {},
+  };
+  const d = createDiscovery({ ...s, adopter });
+
+  d.start();
+  assert.equal(adopted, 1, 'manual peers are dialled once at startup');
+  t.mock.timers.tick(5000);
+  assert.equal(adopted, 2, 'and again on the interval');
+
+  d.stop();
+  t.mock.timers.tick(15000);
+  assert.equal(adopted, 2, 'the interval used to survive stop() and hold the process open');
+});
+
+test('manualAddresses reports the host halves for netScope', () => {
+  const d = createDiscovery(stubs({ manualPeers: ['203.0.113.9:47100', '198.51.100.4:47100'] }));
+  assert.deepEqual(d.manualAddresses(), ['203.0.113.9', '198.51.100.4']);
+  d.stop();
+});

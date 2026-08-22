@@ -146,6 +146,56 @@ const DEFAULTS = Object.freeze({
   // patch. It has its own IPC channel.
   acceptLan: false,
   manualPeers: [], // ["100.x.y.z:47100", "192.168.1.5:47100"]
+
+  // ---- Netmaker ------------------------------------------------------------
+  //
+  // A second overlay alongside Tailscale. Netmaker is a self-hosted WireGuard
+  // mesh: a server hosts networks with operator-chosen CIDRs, and a `netclient`
+  // agent brings up a `netmaker` interface carrying an address per network the
+  // machine has joined.
+  //
+  // Off by default, and that is not timidity. Turning it on spawns a process on
+  // a timer and can reach a server, neither of which an existing install asked
+  // for by updating.
+  enableNetmaker: false,
+
+  // The networks we have observed, written by netmaker.js and read by the UI.
+  // Main-owned: the renderer renders these, it never authors them.
+  netmakerNetworks: [],
+
+  // The networks whose inbound connections we accept, by network key.
+  //
+  // This is the Netmaker half of `acceptLan`, and it is deliberately per network
+  // rather than one switch: joining a shared network so one person can reach you
+  // is not consent for every network you are ever enrolled in. Empty — the
+  // default, and the state of every installation that upgrades into this — means
+  // netScope behaves exactly as it did before Netmaker existed.
+  //
+  // Main-owned, like acceptLan: present in publicConfig() so the UI can show it,
+  // absent from the setConfig allowlist so no bulk patch can widen it. Its own
+  // IPC channel applies it instantly.
+  netmakerTrusted: [],
+
+  // Which network is this machine's own, as opposed to one it joined to reach
+  // somebody else. Display only — it decides what the UI calls a peer, never
+  // what the machine accepts. Null means "the one we saw first".
+  netmakerHomeKey: null,
+
+  // Netmaker servers we can ask for a node list, one entry per server:
+  //   { id, apiUrl, label }
+  // A list rather than a single URL because reaching somebody on another tenant
+  // means enumerating their server as well as your own. Tokens are NOT here —
+  // see netmakerApiTokens, which is in no public list at all.
+  netmakerServers: [],
+
+  // Where the netclient binary lives, when it is somewhere we do not guess.
+  // The path of an executable this app will spawn, so it never travels on the
+  // bulk config patch.
+  netmakerBinaryPath: null,
+
+  // Sealed API tokens, keyed by the server id above. Never leaves the main
+  // process: the renderer is told whether a token exists and nothing more.
+  netmakerApiTokens: {},
 });
 
 // Settings a previous version stored that are no longer read by anything. See
@@ -241,6 +291,16 @@ class Config {
     const keys = stored && typeof stored === 'object' && !Array.isArray(stored) ? { ...stored } : {};
     this.data.agentSpeechKeys = keys;
 
+    // The same trap, for the same reason: netmakerApiTokens is an object keyed
+    // by server, mutated a key at a time, and the `{}` in DEFAULTS is one shared
+    // literal. Without this copy a token saved in one Config would appear in
+    // every other one built from a file that predates the key.
+    const storedTokens = this.data.netmakerApiTokens;
+    this.data.netmakerApiTokens =
+      storedTokens && typeof storedTokens === 'object' && !Array.isArray(storedTokens)
+        ? { ...storedTokens }
+        : {};
+
     // 0.8.10 and earlier kept a single sealed API key, which was always Gemini's
     // because Gemini was the only provider. It becomes the Gemini entry.
     //
@@ -252,6 +312,30 @@ class Config {
     if (old && typeof old === 'object' && !keys.gemini) {
       keys.gemini = old;
       moved = true;
+    }
+
+    // manualPeers was a flat list of "ip:port" strings until a peer code needed
+    // to record the id and fingerprint it promised. Upgraded here, before the
+    // RETIRED_KEYS prune, and idempotent — a file that has already been through
+    // this is left exactly as it is.
+    //
+    // The readers in adopt.js understand both shapes regardless, so this is
+    // tidiness rather than correctness: an entry written as a string after load
+    // still works.
+    const peers = this.data.manualPeers;
+    if (Array.isArray(peers)) {
+      const upgraded = peers
+        .map((entry) => {
+          if (entry && typeof entry === 'object') return entry;
+          const [ip, portStr] = String(entry || '').split(':');
+          const address = String(ip || '').trim();
+          return address ? { address, port: Number(portStr) || null } : null;
+        })
+        .filter(Boolean);
+      if (JSON.stringify(upgraded) !== JSON.stringify(peers)) {
+        this.data.manualPeers = upgraded;
+        moved = true;
+      }
     }
 
     return moved;

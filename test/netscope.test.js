@@ -153,3 +153,180 @@ test('internal interfaces are never treated as the tailnet', () => {
   const s = scope({ weird: [{ address: '100.85.49.69', internal: true }] }, false);
   assert.ok(!s.hasTailnet(), 'a loopback alias in CGNAT space is not a tailnet');
 });
+
+// ---- overlay meshes ---------------------------------------------------------
+//
+// Netmaker is a second overlay beside Tailscale, and admitting it must not cost
+// this module the three properties the header comment is about: the check asks
+// about *our* interface, it is synchronous and local, and it fails closed.
+//
+// The extra property here is that trust is per network. Joining a shared network
+// so one person can reach you is not consent to be reachable from every network
+// you happen to be enrolled in.
+
+const OFFICE_KEY = 'iface:netmaker/10.101.0.0/24';
+const SHARED_KEY = 'iface:netmaker/10.20.0.0/16';
+
+// One `netmaker` interface carrying two networks — the shape modern netclient
+// actually produces — plus a LAN interface inside one of the same ranges.
+const MESH_IFACES = {
+  lo: [{ address: '127.0.0.1', internal: true }],
+  en0: [{ address: '10.101.0.42', cidr: '10.101.0.42/24', internal: false }],
+  netmaker: [
+    { address: '10.101.0.5', cidr: '10.101.0.5/24', internal: false },
+    { address: '10.20.0.4', cidr: '10.20.0.4/16', internal: false },
+  ],
+};
+
+function meshScope(trusted = [], extra = {}) {
+  const settings = {
+    acceptLan: false,
+    netmakerTrusted: trusted,
+    netmakerNetworks: [],
+    ...extra,
+  };
+  return createNetScope({
+    config: { get: (k) => settings[k] },
+    interfaces: () => MESH_IFACES,
+  });
+}
+
+test('a mesh network nobody ticked cannot reach us', () => {
+  const scope = meshScope([]);
+  assert.equal(scope.isMeshLocal('10.101.0.5'), true, 'we do hold an address on it');
+  assert.equal(scope.isTrustedMeshLocal('10.101.0.5'), false, 'but it was never trusted');
+  assert.equal(
+    scope.allowInbound('10.101.0.5', '10.101.0.9'),
+    false,
+    'joining a network is not consent to be reachable on it'
+  );
+});
+
+test('ticking a network opens that network and no other', () => {
+  const scope = meshScope([OFFICE_KEY]);
+  assert.equal(scope.allowInbound('10.101.0.5', '10.101.0.9'), true);
+  assert.equal(
+    scope.allowInbound('10.20.0.4', '10.20.0.9'),
+    false,
+    'the other network on the very same interface stays shut'
+  );
+});
+
+test('a trust decision is read live, so unticking takes effect at once', () => {
+  const settings = { acceptLan: false, netmakerTrusted: [OFFICE_KEY], netmakerNetworks: [] };
+  const scope = createNetScope({
+    config: { get: (k) => settings[k] },
+    interfaces: () => MESH_IFACES,
+  });
+  assert.equal(scope.allowInbound('10.101.0.5', '10.101.0.9'), true);
+
+  settings.netmakerTrusted = [];
+  assert.equal(
+    scope.allowInbound('10.101.0.5', '10.101.0.9'),
+    false,
+    'no restart, no cached answer — exactly how acceptLan behaves'
+  );
+});
+
+test('a mesh range on an ordinary interface is not a mesh', () => {
+  // en0 carries 10.101.0.42, inside the very range the mesh uses. Trusting the
+  // network must not trust the café.
+  const scope = meshScope([OFFICE_KEY]);
+  assert.equal(scope.isMeshLocal('10.101.0.42'), false, 'the interface name is the gate');
+  assert.equal(scope.allowInbound('10.101.0.42', '10.101.0.9'), false);
+});
+
+test('a remote address in a trusted range cannot let itself in', () => {
+  // The whole point of the module: the peer chooses its source address, and we
+  // choose which of our interfaces we listen on. A connection landing on the LAN
+  // claiming to come from the mesh is still a LAN connection.
+  const scope = meshScope([OFFICE_KEY]);
+  assert.equal(scope.allowInbound('192.168.1.5', '10.101.0.9'), false);
+  assert.equal(scope.allowInbound(null, '10.101.0.9'), false);
+});
+
+test('a trusted mesh is a way of being reachable', () => {
+  const shut = meshScope([]);
+  assert.equal(shut.reachability().unreachable, true, 'no tailnet, no LAN, no ticked mesh');
+  assert.equal(shut.reachability().meshTrusted, false);
+
+  const open = meshScope([OFFICE_KEY]);
+  assert.equal(
+    open.reachability().unreachable,
+    false,
+    'a machine reachable only over a ticked mesh must not be told nobody can reach it'
+  );
+  assert.equal(open.reachability().meshTrusted, true);
+});
+
+test('reachability lists the meshes without widening the tailnet field', () => {
+  const scope = meshScope([OFFICE_KEY]);
+  const r = scope.reachability();
+
+  assert.deepEqual(
+    r.mesh.map((m) => [m.key, m.trusted]),
+    [
+      [OFFICE_KEY, true],
+      [SHARED_KEY, false],
+    ]
+  );
+  // Settings shows `addresses` under Tailscale. Putting mesh addresses in it
+  // would make that block say something untrue.
+  assert.deepEqual(r.addresses, [], 'these are tailnet addresses, and there is no tailnet here');
+  assert.equal(r.tailnet, false);
+});
+
+test('a machine with no mesh at all is unchanged in every respect', () => {
+  // The regression guard for every installation that upgrades into this.
+  const settings = { acceptLan: false, netmakerTrusted: [], netmakerNetworks: [] };
+  const scope = createNetScope({
+    config: { get: (k) => settings[k] },
+    interfaces: () => TAILNET_IFACES,
+  });
+  assert.equal(scope.allowInbound('100.85.49.69'), true, 'the tailnet still admits');
+  assert.equal(scope.allowInbound('192.168.1.42'), false, 'and the LAN still does not');
+  assert.deepEqual(scope.reachability().mesh, []);
+  assert.equal(scope.reachability().meshTrusted, false);
+  assert.equal(scope.reachability().unreachable, false);
+});
+
+test('an address two stored networks both claim admits nobody by mistake', () => {
+  // Overlapping CIDRs are a real state — Netmaker cannot bridge them either —
+  // and an address inside both cannot say which network it belongs to. The
+  // fallback is the key the interface's own range implies, which is the most
+  // specific true fact available and can never be wider than the interface.
+  const overlapping = [
+    { key: 'wide', cidr: '10.0.0.0/8' },
+    { key: 'narrow', cidr: '10.101.0.0/24' },
+  ];
+  const scope = (trusted) =>
+    createNetScope({
+      config: {
+        get: (k) => ({ acceptLan: false, netmakerNetworks: overlapping, netmakerTrusted: trusted })[k],
+      },
+      interfaces: () => ({ netmaker: [{ address: '10.101.0.5', cidr: '10.101.0.5/24', internal: false }] }),
+    });
+
+  assert.equal(
+    scope(['wide']).allowInbound('10.101.0.5'),
+    false,
+    'an ambiguous address refuses rather than picking whichever record sorted first'
+  );
+  assert.equal(scope(['iface:netmaker/10.101.0.0/24']).allowInbound('10.101.0.5'), true);
+});
+
+test('a network wider than our own prefix is still the network we ticked', () => {
+  // Netmaker hands out the network's CIDR, which can be wider than the prefix on
+  // our interface. Matching it is correct: it is the network the user ticked.
+  const records = [{ key: 'office', cidr: '10.0.0.0/8' }];
+  const scope = (trusted) =>
+    createNetScope({
+      config: {
+        get: (k) => ({ acceptLan: false, netmakerNetworks: records, netmakerTrusted: trusted })[k],
+      },
+      interfaces: () => ({ netmaker: [{ address: '10.101.0.5', cidr: '10.101.0.5/24', internal: false }] }),
+    });
+
+  assert.equal(scope(['office']).allowInbound('10.101.0.5'), true);
+  assert.equal(scope([]).allowInbound('10.101.0.5'), false, 'and it is still opt-in');
+});

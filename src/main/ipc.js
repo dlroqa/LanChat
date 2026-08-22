@@ -10,6 +10,7 @@ const { LOCAL_ORIGIN: AGENT_LOCAL_ORIGIN } = require('./agents');
 const { createRemoteAgents } = require('./agents/remote');
 const { createSessions, isSessionId } = require('./sessions');
 const { createDictation } = require('./dictation');
+const { resetNetclientBinary } = require('./netmaker');
 const { createSpeech, engineOf } = require('./speech');
 const { createKokoro } = require('./tts/kokoro');
 const { createWeights } = require('./tts/weights');
@@ -23,6 +24,8 @@ const { createLinkPreview } = require('./linkPreview');
 const { resolveMedia } = require('./media');
 const { uniqueDest } = require('./server');
 const { fingerprint } = require('./authProto');
+const { encodePeerCode, decodePeerCode } = require('./peerCode');
+const { manualPeerRecord } = require('./adopt');
 
 // The three kinds of user-supplied audio, and where each one is remembered. The
 // music an agent works to is offered a narrower choice than the other two on
@@ -53,6 +56,10 @@ const SOUND_KINDS = Object.freeze({
 // The preferences the renderer may write through the bulk `setConfig` patch. An
 // allowlist, so a patch can only carry what Settings actually offers.
 const SETTABLE_KEYS = Object.freeze([
+  // Whether we look for peers over Netmaker. The same class as enableTailscale
+  // and enableLan: it decides whether we go looking, never who may reach us.
+  // Its siblings — netmakerTrusted above all — are pointedly not here.
+  'enableNetmaker',
   'iceServers',
   'enableTailscale',
   'enableLan',
@@ -152,6 +159,9 @@ function createIpc({
   deviceKey,
   pins,
   netScope,
+  // Defaulted: configBridge's tests build the router with only the services the
+  // config surface needs, and a new one must not become required to do that.
+  netmaker = null,
   userDataDir,
   downloadsDir,
   getWindow,
@@ -273,6 +283,36 @@ function createIpc({
   bus.on('presence', (list) => emit('presence', list));
   bus.on('tailnet-peers', (list) => emit('tailnet-peers', list));
   bus.on('tailnet-status', (s) => emit('tailnet-status', s));
+  bus.on('netmaker-networks', (list) => emit('netmaker-networks', list));
+  bus.on('netmaker-status', (s) => emit('netmaker-status', s));
+
+  // A peer who arrived from a code, checked against what the code promised.
+  //
+  // This is what makes first use across a tenant boundary falsifiable: the
+  // fingerprint came out of band with the address, so a match is evidence rather
+  // than an assumption, and pins.markVerified is exactly what somebody comparing
+  // fingerprints aloud already calls.
+  //
+  // A mismatch never repins and never forgets. It is surfaced and left alone —
+  // the same restraint KeyChangeModal is built on, because the safe-looking
+  // action here is the dangerous one.
+  bus.on('peer-hello', ({ peerId }) => {
+    if (!pins || !peerId) return;
+    const promised = (config.get('manualPeers') || [])
+      .map((e) => manualPeerRecord(e))
+      .find((r) => r && r.peerId === peerId && r.fingerprint);
+    if (!promised) return;
+    const record = pins.get ? pins.get(peerId) : null;
+    const actual = record && record.key ? fingerprint(record.key) : null;
+    if (!actual) return;
+    if (actual === promised.fingerprint) {
+      if (pins.markVerified) pins.markVerified(peerId, true);
+      hub.emitPresence();
+      emit('peer-code-verified', { peerId, name: promised.label || null });
+      return;
+    }
+    emit('peer-code-mismatch', { peerId, expected: promised.fingerprint, actual, name: promised.label });
+  });
   bus.on('file-progress', (p) => emit('file-progress', p));
   bus.on('update-progress', (p) => emit('update-progress', p));
   // Downloading the offline voice model, on the same one channel as every other
@@ -1691,6 +1731,114 @@ function createIpc({
   // ---- device identity and known peers ----
 
   // Our own key, for reading out loud to somebody comparing it on their screen.
+  // What we know about the Netmaker meshes this machine is on.
+  //
+  // Tokens are reduced to a boolean on the way out, the same way speech.status()
+  // reports a key without ever handing one back. `netmaker` may be absent when
+  // the router is built without it, and an absent service reports a state rather
+  // than throwing: the Settings section renders "not looking" either way.
+  ipcMain.handle('lanchat:netmakerStatus', () => {
+    const tokens = config.get('netmakerApiTokens') || {};
+    return {
+      enabled: Boolean(config.get('enableNetmaker')),
+      status: netmaker ? netmaker.status() : { ok: true, source: null, reason: 'disabled', networks: 0 },
+      networks: netmaker ? netmaker.networks() : [],
+      ourAddresses: netmaker ? netmaker.ourAddresses() : [],
+      servers: (config.get('netmakerServers') || []).map((srv) => ({
+        ...srv,
+        hasToken: Boolean(tokens[srv.id]),
+      })),
+      binaryPath: config.get('netmakerBinaryPath') || null,
+    };
+  });
+
+  // Whether a Netmaker network may open a socket to this machine.
+  //
+  // Its own channel, applied the moment it is clicked, and absent from
+  // SETTABLE_KEYS — the same treatment as acceptLan, for the same reason: a
+  // setting that decides who can reach you must never sit in an unsaved draft,
+  // and no bulk save of unrelated preferences may widen it as a side effect.
+  //
+  // netScope reads netmakerTrusted live rather than caching it, so untrusting a
+  // network takes hold on the very next connection.
+  ipcMain.handle('lanchat:setNetmakerTrusted', (_e, { key, on }) => {
+    if (!key) return publicConfig(config);
+    const list = new Set(config.get('netmakerTrusted') || []);
+    if (on) list.add(key);
+    else list.delete(key);
+    config.set({ netmakerTrusted: [...list] });
+    if (netScope) netScope.refresh();
+    if (netmaker) netmaker.refresh();
+    return publicConfig(config);
+  });
+
+  // Which network this machine calls its own. Display only: it decides what the
+  // UI calls a peer, never what the machine accepts.
+  ipcMain.handle('lanchat:setNetmakerHome', (_e, { key }) => {
+    config.set({ netmakerHomeKey: key || null });
+    if (netmaker) netmaker.refresh();
+    return publicConfig(config);
+  });
+
+  // The Netmaker servers we can ask for a node list.
+  //
+  // A list rather than one entry: reaching somebody on another tenant means
+  // enumerating their server as well as your own, and netclient can only ever
+  // see the networks this machine has joined.
+  //
+  // Its own channel, out of SETTABLE_KEYS, because these name a place
+  // credentials are sent and a binary this app will spawn — neither belongs on a
+  // bulk patch of unrelated preferences.
+  ipcMain.handle('lanchat:setNetmakerServers', (_e, { servers, binaryPath }) => {
+    const cleaned = (Array.isArray(servers) ? servers : [])
+      .map((srv) => ({
+        id: String((srv && srv.id) || '').trim(),
+        apiUrl: String((srv && srv.apiUrl) || '').trim(),
+        label: String((srv && srv.label) || '').trim() || null,
+      }))
+      .filter((srv) => srv.id && srv.apiUrl);
+
+    // A token whose server is gone is a secret nobody can use and nobody meant
+    // to keep, so it goes with it.
+    const keep = new Set(cleaned.map((srv) => srv.id));
+    const tokens = { ...(config.get('netmakerApiTokens') || {}) };
+    for (const id of Object.keys(tokens)) if (!keep.has(id)) delete tokens[id];
+
+    config.set({
+      netmakerServers: cleaned,
+      netmakerApiTokens: tokens,
+      ...(binaryPath !== undefined ? { netmakerBinaryPath: binaryPath || null } : {}),
+    });
+    resetNetclientBinary();
+    if (netmaker) netmaker.refresh();
+    return publicConfig(config);
+  });
+
+  // A server's read token. One way: it can be set and cleared, never read back.
+  ipcMain.handle('lanchat:setNetmakerToken', (_e, { id, token }) => {
+    if (!id) return { ok: false, error: 'No server was named.' };
+    const tokens = { ...(config.get('netmakerApiTokens') || {}) };
+    if (!token) {
+      delete tokens[id];
+      config.set({ netmakerApiTokens: tokens });
+      return { ok: true, hasToken: false };
+    }
+    if (!safeStorage || !safeStorage.isEncryptionAvailable()) {
+      return { ok: false, error: 'This machine has no secure storage to keep the token in.' };
+    }
+    tokens[id] = { mode: 'sealed', cipher: safeStorage.encryptString(String(token)).toString('base64') };
+    config.set({ netmakerApiTokens: tokens });
+    if (netmaker) netmaker.refresh();
+    return { ok: true, hasToken: true };
+  });
+
+  // Look now, rather than waiting for the next poll. The Settings "Check"
+  // button's answer.
+  ipcMain.handle('lanchat:probeNetmaker', async () => {
+    if (!netmaker) return { ok: false, reason: 'disabled' };
+    return netmaker.probeOnce();
+  });
+
   ipcMain.handle('lanchat:security', () => ({
     fingerprint: deviceKey ? deviceKey.fingerprint() : null,
     publicKey: deviceKey ? deviceKey.publicKey() : null,
@@ -1699,6 +1847,89 @@ function createIpc({
   }));
 
   ipcMain.handle('lanchat:listPins', () => (pins ? pins.list() : []));
+
+  // A code that says where to find this machine and which key to expect.
+  //
+  // Everything in it is public — an address, a port, a name, and a fingerprint
+  // Settings already asks people to read aloud — and it grants nothing on its
+  // own: the ordinary handshake still has to succeed. What it buys is that the
+  // first connection can be *checked*, because the fingerprint travelled out of
+  // band with the address instead of over the wire being verified.
+  ipcMain.handle('lanchat:createPeerCode', (_e, { networkKey = null } = {}) => {
+    if (!deviceKey) return { ok: false, error: 'This device has no key yet.' };
+    const port = config.get('servicePort');
+    const all = netmaker ? netmaker.ourAddresses() : [];
+    const chosen = networkKey ? all.filter((a) => a.key === networkKey) : all;
+    const addrs = (chosen.length ? chosen : all).map((a) => ({
+      addr: a.address,
+      port,
+      net: a.network || null,
+    }));
+    const code = encodePeerCode({
+      id: config.get('id'),
+      fingerprint: deviceKey.fingerprint(),
+      name: config.get('displayName') || null,
+      addrs,
+    });
+    if (!code) {
+      return {
+        ok: false,
+        error: 'There is no mesh address to hand out yet. Join a Netmaker network first.',
+      };
+    }
+    return { ok: true, code, fingerprint: deviceKey.fingerprint(), addrs };
+  });
+
+  // Redeem somebody else's code.
+  //
+  // It becomes a manual peer, which is the path that already exists — dialled
+  // whatever the discovery toggles say, and taken as consent to accept from that
+  // address. The id and fingerprint ride along so the handshake can be checked
+  // against what was promised; nothing here trusts them for anything else.
+  ipcMain.handle('lanchat:redeemPeerCode', (_e, { code } = {}) => {
+    const parsed = decodePeerCode(code);
+    if (!parsed) return { ok: false, error: 'That is not a LanChat peer code.' };
+    if (parsed.id === config.get('id')) return { ok: false, error: 'That is this device’s own code.' };
+
+    const existing = (config.get('manualPeers') || []).map((e) => manualPeerRecord(e)).filter(Boolean);
+    const added = [];
+    for (const entry of parsed.addrs) {
+      if (existing.some((r) => r.address === entry.addr && r.port === entry.port)) continue;
+      added.push({
+        address: entry.addr,
+        port: entry.port,
+        peerId: parsed.id,
+        fingerprint: parsed.fp,
+        label: parsed.name || null,
+        networkKey: entry.net || null,
+      });
+    }
+    config.set({ manualPeers: [...existing, ...added] });
+    if (netScope) netScope.refresh();
+    discovery.refresh();
+    return {
+      ok: true,
+      peer: { id: parsed.id, name: parsed.name, fingerprint: parsed.fp },
+      added: added.length,
+    };
+  });
+
+  // Take a manual peer away again. The list only ever grew before this.
+  //
+  // Its own channel rather than a bulk patch because removing an entry *closes*
+  // an inbound door — netScope treats a hand-typed address as consent to accept
+  // from it — and a change in the tightening direction still deserves to be
+  // deliberate.
+  ipcMain.handle('lanchat:removeManualPeer', (_e, { address, port = null } = {}) => {
+    const kept = (config.get('manualPeers') || [])
+      .map((e) => manualPeerRecord(e))
+      .filter(Boolean)
+      .filter((r) => !(r.address === address && (port == null || r.port === port)));
+    config.set({ manualPeers: kept });
+    if (netScope) netScope.refresh();
+    discovery.refresh();
+    return kept;
+  });
 
   // Somebody compared fingerprints out loud. This is the only thing that makes
   // first-use trust falsifiable, which is why it has to be reachable.
@@ -2065,6 +2296,19 @@ const PUBLIC_KEYS = Object.freeze([
   // a key exists (speech.status()), never what it is.
   'agentSpeechEngine',
   'agentSpeechModel',
+  // The Netmaker keys the renderer shows but must never author. netmakerTrusted
+  // is the one that matters: it decides which networks may open a socket to this
+  // machine, so it moves only on lanchat:setNetmakerTrusted. The others travel
+  // with it because they are written by main (netmakerNetworks) or name a thing
+  // credentials are sent to (netmakerServers, netmakerBinaryPath).
+  //
+  // netmakerApiTokens is pointedly absent, exactly as agentSpeechKey is: the
+  // renderer is told whether a token exists, never what it is.
+  'netmakerNetworks',
+  'netmakerTrusted',
+  'netmakerHomeKey',
+  'netmakerServers',
+  'netmakerBinaryPath',
 ]);
 
 function publicConfig(config) {

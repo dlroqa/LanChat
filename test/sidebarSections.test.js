@@ -15,6 +15,7 @@ const path = require('node:path');
 const SRC = path.join(__dirname, '..', 'src', 'renderer');
 const {
   SECTIONS,
+  NETMAKER,
   SECTION_IDS,
   SCOPE_ALL,
   SHARED,
@@ -36,7 +37,7 @@ const {
   `${fs.readFileSync(path.join(SRC, 'lib', 'sidebarSections.js'), 'utf8').replace(/^export\s+/gm, '')}
    return { SECTIONS, SECTION_IDS, SCOPE_ALL, SHARED, sectionTitle, normalizeOrder, moveSection, sectionForThread,
             sectionSignal, searchPlaceholder, scopeOptions, searchFields, matchIn, searchSection,
-            isGuestRoom, roomEnded, liveGuestRooms, ownSessions };`
+            isGuestRoom, roomEnded, liveGuestRooms, ownSessions, NETMAKER};`
 )();
 
 // A room somebody else runs, as the panel is given it: whose it is, and who is
@@ -381,4 +382,45 @@ test('the panel renders the categories from the saved order and nothing else', (
   assert.match(sidebar, /sectionSignal\(own, unread, summoned\)/);
   assert.match(sidebar, /sectionSignal\(allAgents, unread, summoned\)/);
   assert.match(sidebar, /sectionSignal\(allPeople, unread, summoned\)/);
+});
+
+// ---- the Netmaker category --------------------------------------------------
+//
+// A sixth heading on the same terms as the fifth: it comes and goes with the
+// meshes this machine is on, so it must stay out of everything that describes
+// the arrangement a person has made of the panel.
+
+test('the Netmaker category is not one of the four', () => {
+  assert.ok(!SECTION_IDS.includes(NETMAKER.id), 'it is deliberately outside SECTIONS');
+  assert.equal(sectionTitle(NETMAKER.id), 'On your Netmaker network');
+});
+
+test('a saved order can never name the Netmaker category', () => {
+  // A config file that came back naming a category which may not exist is
+  // exactly what keeping it out of SECTIONS prevents.
+  assert.deepEqual(normalizeOrder([NETMAKER.id, 'people']), ['people', 'sessions', 'agents', 'tailnet']);
+  assert.ok(!normalizeOrder([]).includes(NETMAKER.id));
+});
+
+test('the search box never offers a Netmaker scope', () => {
+  // A scope saved in the config pointing at a category that had since gone would
+  // be a filter nobody could clear.
+  assert.ok(!scopeOptions().some((o) => o.id === NETMAKER.id));
+});
+
+test('a Netmaker node is searchable by its network as well as its name', () => {
+  const node = { address: '10.55.0.3', name: 'their-laptop', network: 'shared' };
+  const fields = searchFields(NETMAKER.id, node, () => 'Linux');
+  assert.deepEqual(
+    fields.map((f) => f.field),
+    ['name', 'network', 'address']
+  );
+  assert.equal(matchIn(NETMAKER.id, node, 'shared', () => '').field, 'network');
+  assert.equal(matchIn(NETMAKER.id, node, 'their', () => '').field, 'name');
+  assert.equal(matchIn(NETMAKER.id, node, '10.55', () => '').field, 'address');
+});
+
+test('a node with no name is still findable by its address', () => {
+  const bare = { address: '10.55.0.9', network: 'shared' };
+  assert.equal(searchFields(NETMAKER.id, bare, () => '')[0].text, '10.55.0.9');
 });

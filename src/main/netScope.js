@@ -2,6 +2,8 @@
 
 const os = require('node:os');
 
+const { bareAddress, meshInterfaces, networkKey, resolveNetwork } = require('./mesh');
+
 // Which network a connection arrived on, and whether we want to talk to it.
 //
 // The listener binds 0.0.0.0, so it is reachable on every network the machine
@@ -27,24 +29,9 @@ const TAILSCALE_V6_PREFIX = 'fd7a:115c:a1e0';
 // re-read rather than captured once — but not on every packet.
 const CACHE_MS = 5000;
 
-// Strip the two decorations an address picks up on its way through Node: the
-// IPv4-mapped IPv6 form a dual-stack socket reports, and the brackets a bare
-// IPv6 address wears inside a host:port string. `server.js` produces the
-// bracketed form, `os.networkInterfaces()` the plain one, and they have to
-// compare equal or every check here silently refuses everything.
-function bareAddress(addr) {
-  if (!addr) return null;
-  let a = String(addr).trim();
-  if (a.startsWith('[')) {
-    const close = a.indexOf(']');
-    a = close === -1 ? a.slice(1) : a.slice(1, close);
-  }
-  if (a.startsWith('::ffff:')) a = a.slice(7);
-  // A zone index ("fe80::1%en0") is about routing, not identity.
-  const zone = a.indexOf('%');
-  if (zone !== -1) a = a.slice(0, zone);
-  return a.toLowerCase();
-}
+// `bareAddress` lives in mesh.js so mesh membership and inbound admission cannot
+// drift apart by having been written twice; it is re-exported below because
+// callers and tests have always reached it through this module.
 
 function isLoopback(addr) {
   const a = bareAddress(addr);
@@ -85,13 +72,14 @@ function createNetScope({
   let cached = null;
   let cachedAt = 0;
 
-  // Our own tailnet addresses. Empty is a meaningful answer — it means this
-  // machine is not on a tailnet at all — and callers have to treat it as such
-  // rather than as "not looked yet".
-  function tailnetAddresses({ fresh = false } = {}) {
+  // One walk of the interface list, two answers: which of our addresses are on a
+  // tailnet, and which are on an overlay mesh. Read together because they come
+  // from the same syscall and are asked on the same code path — an inbound
+  // connection.
+  function scan({ fresh = false } = {}) {
     const t = now();
     if (!fresh && cached && t - cachedAt < CACHE_MS) return cached;
-    const found = new Set();
+    const tailnet = new Set();
     let list;
     try {
       list = interfaces() || {};
@@ -101,16 +89,25 @@ function createNetScope({
     for (const entries of Object.values(list)) {
       for (const entry of entries || []) {
         if (!entry || entry.internal) continue;
-        if (inTailscaleRange(entry.address)) found.add(bareAddress(entry.address));
+        if (inTailscaleRange(entry.address)) tailnet.add(bareAddress(entry.address));
       }
     }
-    cached = found;
+    const mesh = new Map();
+    for (const entry of meshInterfaces(list)) mesh.set(entry.address, entry);
+    cached = { tailnet, mesh };
     cachedAt = t;
-    return found;
+    return cached;
+  }
+
+  // Our own tailnet addresses. Empty is a meaningful answer — it means this
+  // machine is not on a tailnet at all — and callers have to treat it as such
+  // rather than as "not looked yet".
+  function tailnetAddresses({ fresh = false } = {}) {
+    return scan({ fresh }).tailnet;
   }
 
   function refresh() {
-    return tailnetAddresses({ fresh: true });
+    return scan({ fresh: true }).tailnet;
   }
 
   function hasTailnet() {
@@ -124,10 +121,62 @@ function createNetScope({
     return tailnetAddresses().has(a);
   }
 
+  // Which mesh network one of our own addresses belongs to.
+  //
+  // The interface name is the gate and the address is the discriminator, in that
+  // order, and the order is the point. An overlay hands out operator-chosen
+  // ranges — Netmaker's are usually somewhere in 10.x — which a café LAN is
+  // indistinguishable from, so a range test alone would promote whatever network
+  // the machine is sitting on. And modern netclient puts *one* interface on the
+  // machine carrying an address per joined network, so the name alone cannot say
+  // which network either: it would collapse every network into a single trust
+  // decision and quietly undo the per-network choice the user made.
+  //
+  // The records come from config, which is on disk before server.start() runs.
+  // That is what keeps this synchronous and true during boot, for the same
+  // reason this module reads os.networkInterfaces() rather than a CLI.
+  function meshNetworkFor(localAddress) {
+    const a = bareAddress(localAddress);
+    if (!a) return null;
+    const entry = scan().mesh.get(a);
+    if (!entry) return null;
+    const records = (config && config.get('netmakerNetworks')) || [];
+    const matched = resolveNetwork(a, entry.iface, records);
+    if (matched) return matched;
+    // Nothing stored yet, or two records overlap so the address cannot say which
+    // network it is in. Fall back to the key the interface alone implies, which
+    // is the same one netmaker.js computes from the same facts — and which is
+    // null when even that is unknown, so the caller refuses rather than guesses.
+    const key = networkKey({ iface: entry.iface, cidr: entry.cidr });
+    return key ? { key, network: null, iface: entry.iface, cidr: entry.cidr } : null;
+  }
+
+  function isMeshLocal(localAddress) {
+    return Boolean(meshNetworkFor(localAddress));
+  }
+
+  // Read live and never cached, exactly like acceptLan(): a network the user has
+  // just untrusted must stop being reachable on the next connection, not on the
+  // next restart.
+  function trustedMeshKeys() {
+    return new Set((config && config.get('netmakerTrusted')) || []);
+  }
+
+  function isTrustedMeshLocal(localAddress) {
+    const rec = meshNetworkFor(localAddress);
+    return Boolean(rec && rec.key && trustedMeshKeys().has(rec.key));
+  }
+
   // The policy. Loopback is always ours — it is how the renderer reaches its own
   // preview endpoint and how the tests connect. Beyond that, a connection is
-  // accepted if it arrived on the tailnet, or if the machine's owner has said
-  // they want to be reachable over the plain LAN as well.
+  // accepted if it arrived on the tailnet, on a mesh network the owner has
+  // ticked, or if they have said they want to be reachable over the plain LAN
+  // as well.
+  //
+  // The mesh clause is opt-in per network and empty by default, so on every
+  // installation that upgrades into it this line is a no-op and the policy is
+  // exactly the one that was here before. Joining a network to reach one person
+  // is not consent to be reachable from every network you are enrolled in.
   //
   // With no tailnet present and LAN accept off, this refuses everything. That is
   // deliberate and it is not silent: `reachability()` reports the state so the
@@ -137,6 +186,7 @@ function createNetScope({
   function allowInbound(localAddress, remoteAddress = null) {
     if (isLoopback(localAddress)) return true;
     if (isTailnetLocal(localAddress)) return true;
+    if (isTrustedMeshLocal(localAddress)) return true;
     if (acceptLan()) return true;
     // Typed in by hand, which is consent.
     const from = bareAddress(remoteAddress);
@@ -147,19 +197,57 @@ function createNetScope({
     return Boolean(config && config.get('acceptLan'));
   }
 
+  // The mesh networks we hold an address on, and whether each may reach us.
+  function meshState() {
+    const trusted = trustedMeshKeys();
+    const out = [];
+    const seen = new Set();
+    for (const entry of scan().mesh.values()) {
+      const rec = meshNetworkFor(entry.address);
+      const key = rec && rec.key;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        key,
+        network: (rec && rec.network) || null,
+        iface: entry.iface,
+        address: entry.address,
+        trusted: trusted.has(key),
+      });
+    }
+    return out;
+  }
+
   function reachability() {
     const tailnet = hasTailnet();
     const lan = acceptLan();
+    const mesh = meshState();
+    const meshTrusted = mesh.some((m) => m.trusted);
     return {
       tailnet,
       lan,
+      mesh,
+      meshTrusted,
       // Nothing outside this machine can reach us in this state.
-      unreachable: !tailnet && !lan,
+      unreachable: !tailnet && !lan && !meshTrusted,
+      // Deliberately still the tailnet addresses only. Settings shows these
+      // under "Tailscale", and widening the field would make that block say
+      // something untrue; the mesh addresses have a field of their own above.
       addresses: [...tailnetAddresses()],
     };
   }
 
-  return { allowInbound, isTailnetLocal, isLoopback, hasTailnet, reachability, refresh };
+  return {
+    allowInbound,
+    isTailnetLocal,
+    isMeshLocal,
+    isTrustedMeshLocal,
+    meshNetworkFor,
+    isLoopback,
+    hasTailnet,
+    reachability,
+    refresh,
+  };
 }
 
 module.exports = { createNetScope, isLoopback, inTailscaleRange, bareAddress };

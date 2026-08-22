@@ -10,6 +10,7 @@ import { sessionCounsel, sessionSubLine } from '../lib/counselCopy.js';
 import {
   SCOPE_ALL,
   SHARED,
+  NETMAKER,
   liveGuestRooms,
   moveSection,
   normalizeOrder,
@@ -75,6 +76,9 @@ export default function Sidebar({
   askableAgents = [],
   tailnet,
   tailnetStatus,
+  // The Netmaker meshes this machine is on, and the nodes seen over them.
+  // A category that comes and goes with them, like the shared rooms above.
+  netmaker = { networks: [], peers: [], status: {} },
   selectedId,
   unread,
   // Agents summoned and not yet opened. A summon writes no message, so there is
@@ -144,6 +148,13 @@ export default function Sidebar({
 
   // Tailnet devices that are online but not running LanChat (informational).
   const noApp = useMemo(() => (tailnet || []).filter((t) => t.online && !t.hasApp), [tailnet]);
+  // Mesh nodes that are not already contacts. Somebody running LanChat is in
+  // People, reached and authenticated; what is left here is the rest of the
+  // mesh, which is informational in exactly the way the tailnet list is.
+  const meshNodes = useMemo(() => {
+    const known = new Set((peers || []).map((p) => p.address && String(p.address).split(':')[0]));
+    return (netmaker.peers || []).filter((n) => n.address && !known.has(n.address));
+  }, [netmaker.peers, peers]);
 
   const onlineTailnet = useMemo(() => (tailnet || []).filter((t) => t.online).length, [tailnet]);
 
@@ -163,6 +174,7 @@ export default function Sidebar({
   // to shut it would do nothing at all. It goes back to null when the pointer
   // leaves, so the next hover behaves the way the other four do.
   const [sharedOpen, setSharedOpen] = useState(null);
+  const [netmakerOpen, setNetmakerOpen] = useState(null);
   const [drag, setDrag] = useState({ id: null, overId: null, before: false });
   // A session or a folder being carried inside the Sessions list.
   //
@@ -231,8 +243,12 @@ export default function Sidebar({
       agents: searchSection('agents', allAgents, qFor('agents'), platformLabel),
       people: searchSection('people', allPeople, qFor('people'), platformLabel),
       tailnet: searchSection('tailnet', noApp, qFor('tailnet'), platformLabel),
+      // No scope chip of its own, for the same reason the pinned category has
+      // none: a scope saved in the config pointing at a category that had since
+      // gone would be a filter nobody could clear.
+      netmaker: searchSection('netmaker', meshNodes, qFor('people'), platformLabel),
     };
-  }, [rooms, own, allAgents, allPeople, noApp, q, scope, scoped]);
+  }, [rooms, own, allAgents, allPeople, noApp, meshNodes, q, scope, scoped]);
 
   const shownCount = {
     shared: hits.shared.length,
@@ -240,6 +256,7 @@ export default function Sidebar({
     agents: hits.agents.length,
     people: hits.people.length,
     tailnet: hits.tailnet.length,
+    netmaker: hits.netmaker.length,
   };
 
   // An invitation nobody has answered is something waiting, exactly as an unread
@@ -266,6 +283,8 @@ export default function Sidebar({
     agents: sectionSignal(allAgents, unread, summoned),
     people: sectionSignal(allPeople, unread, summoned),
     tailnet: { count: 0, alert: false },
+    // A list of machines has nothing waiting in it, the same as the tailnet one.
+    netmaker: { count: 0, alert: false },
   };
 
   // Everything shuts while a category is being carried: four headings are a
@@ -291,6 +310,9 @@ export default function Sidebar({
   // deliberately — see `sharedOpen`.
   const isExpanded = (id) => {
     if (drag.id) return false;
+    if (id === NETMAKER.id) {
+      return netmakerOpen === null ? false : netmakerOpen;
+    }
     if (id === SHARED.id) {
       if (searching && shownCount.shared > 0) return true;
       if (sharedOpen !== null) return sharedOpen;
@@ -320,10 +342,12 @@ export default function Sidebar({
     // behaving like the other four again, which is what somebody who has walked
     // away from it expects to come back to.
     if (id === SHARED.id && !open) setSharedOpen(null);
+    if (id === NETMAKER.id && !open) setNetmakerOpen(null);
     setHovered((h) => (open ? id : h === id ? null : h));
   };
 
   const toggleShared = () => setSharedOpen(!isExpanded(SHARED.id));
+  const toggleNetmaker = () => setNetmakerOpen(!isExpanded(NETMAKER.id));
 
   const toggleLock = (id) =>
     onSectionPrefs({ sidebarLocked: locked.includes(id) ? locked.filter((x) => x !== id) : [...locked, id] });
@@ -780,6 +804,36 @@ export default function Sidebar({
       // the rooms that are open right now, drawn by the same row as any other
       // session — which already knows how to say whose agents a room asks and
       // that an invitation is waiting.
+      case NETMAKER.id: {
+        const rows = hits.netmaker;
+        if (!netmaker.networks || !netmaker.networks.length) {
+          return <div className="empty-hint">This machine is not on a Netmaker network.</div>;
+        }
+        if (!rows.length) {
+          return (
+            <div className="empty-hint">
+              Nobody else is visible on your Netmaker networks yet. A node appears here once netclient or a
+              server you added lists it.
+            </div>
+          );
+        }
+        return rows.map(({ item: n }) => (
+          <div
+            key={`${n.key}:${n.address}`}
+            className="peer offline"
+            title="On a Netmaker network but not running LanChat"
+          >
+            <Avatar name={n.name || n.address} id={n.address} />
+            <div className="meta">
+              <div className="name">
+                <span className="name-text">{n.name || n.address}</span>
+                {n.foreign && <span className="tag">not your network</span>}
+              </div>
+              <div className="sub">{n.network ? `${n.network} · ` : ''}app not running</div>
+            </div>
+          </div>
+        ));
+      }
       case SHARED.id:
         return rows.map((h) => sessionRow(h.item, null, { fixed: true }));
       case 'sessions':
@@ -921,6 +975,29 @@ export default function Sidebar({
             Held back while a category is being carried: the four headings are a
             short list to drop into, and one more appearing under the pointer
             would move every target in it. It arrives the moment the drag ends. */}
+        {(netmaker.networks || []).length > 0 && !drag.id && (
+          // Same two elements as below, for the same reason: a category arriving
+          // has to make room for itself and a height cannot be animated to auto.
+          <div className="sb-pop">
+            <div className="sb-pop-inner">
+              <SidebarSection
+                key={NETMAKER.id}
+                id={NETMAKER.id}
+                title={sectionTitle(NETMAKER.id)}
+                pinned
+                expanded={isExpanded(NETMAKER.id)}
+                quiet={isQuiet(NETMAKER.id)}
+                flashing={false}
+                count={signals.netmaker.count}
+                alert={signals.netmaker.alert}
+                onHover={onHover}
+                onToggle={toggleNetmaker}
+              >
+                {sectionBody(NETMAKER.id)}
+              </SidebarSection>
+            </div>
+          </div>
+        )}
         {rooms.length > 0 && !drag.id && (
           // Two elements around it for the same reason .sb-body has two: a
           // category arriving has to make room for itself, and a height cannot

@@ -96,6 +96,7 @@ test('every service main.js constructs is wired and reachable', async (t) => {
     const s = main.getServices();
     if (s) {
       s.discovery.stop();
+      s.netmaker.stop();
       s.linkStats.stop();
       s.server.stop();
       s.outbox.stop();
@@ -123,6 +124,19 @@ test('every service main.js constructs is wired and reachable', async (t) => {
   assert.ok(s.pins && Array.isArray(s.pins.list()), 'a pin store exists and can be read');
   assert.ok(s.netScope && typeof s.netScope.allowInbound === 'function');
   assert.ok(s.grants && typeof s.grants.issue === 'function');
+
+  // The Netmaker service, and the seam that lets it exist without a second copy
+  // of the dial machinery. There is one adopt funnel, so there is one auth
+  // backoff map: an address that refused us over the tailnet must not be
+  // hammered over a mesh at the same moment.
+  assert.ok(s.netmaker && typeof s.netmaker.stop === 'function', 'netmaker can be torn down');
+  assert.ok(Array.isArray(s.netmaker.networks()), 'and it has already looked at the interfaces');
+  assert.ok(s.adopter && typeof s.adopter.adopt === 'function');
+  assert.equal(
+    s.discovery.isBackedOff,
+    s.adopter.isBackedOff,
+    'discovery answers to the shared funnel, not one of its own'
+  );
 
   // And the Task Bar's three stores, which are built inside createIpc — where
   // sessions is, and for the same reason — and handed back out through it.
@@ -169,6 +183,7 @@ test('the unauthenticated card main.js serves carries the key it will prove', as
     const s = main.getServices();
     if (s) {
       s.discovery.stop();
+      s.netmaker.stop();
       s.linkStats.stop();
       s.server.stop();
       s.outbox.stop();

@@ -35,8 +35,19 @@ export const SECTION_IDS = SECTIONS.map((s) => s.id);
 // file can never come back naming a category that no longer exists.
 export const SHARED = { id: 'shared', title: 'Shared with you' };
 
+// The sixth category, on the same terms as the fifth.
+//
+// Devices on a Netmaker network that are not running LanChat — the mesh
+// equivalent of the tailnet list. **Deliberately not in SECTIONS**, for the same
+// reason SHARED is not: a person with no mesh should never see the heading, and
+// nothing that reads SECTIONS — the order they dragged it into, the ones they
+// pinned, the scopes the search box offers — can be true of a category that may
+// not be there tomorrow.
+export const NETMAKER = { id: 'netmaker', title: 'On your Netmaker network' };
+
 export function sectionTitle(id) {
   if (id === SHARED.id) return SHARED.title;
+  if (id === NETMAKER.id) return NETMAKER.title;
   const found = SECTIONS.find((s) => s.id === id);
   return found ? found.title : '';
 }
@@ -157,6 +168,15 @@ export function searchFields(id, item, platformLabel = () => '') {
         { field: 'platform', text: platformLabel(item.platform) },
         { field: 'address', text: item.address },
         { field: 'connector', text: item.agentKind },
+      ];
+    case 'netmaker':
+      // A mesh node is known by its address and the network it is on; a server
+      // may also have a name for it. The network is searchable because it is the
+      // thing that distinguishes two people who are otherwise just addresses.
+      return [
+        { field: 'name', text: item.name || item.address },
+        { field: 'network', text: item.network },
+        { field: 'address', text: item.address },
       ];
     case 'tailnet':
       // A tailnet device's name *is* its hostname — there is nothing else it

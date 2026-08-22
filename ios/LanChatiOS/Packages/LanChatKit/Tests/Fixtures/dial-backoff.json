@@ -1,7 +1,7 @@
 {
   "_": {
     "generator": "scripts/make-ios-fixtures.js",
-    "note": "the doubling schedule, read out of discovery.js",
+    "note": "the doubling schedule, read out of adopt.js",
     "tz": "America/New_York"
   },
   "constants": {

@@ -126,6 +126,9 @@ export default function App() {
   const [peerAgents, setPeerAgents] = useState({});
   const [tailnet, setTailnet] = useState([]);
   const [tailnetStatus, setTailnetStatus] = useState({ ok: true, reason: null });
+  // The Netmaker meshes this machine is on, and the nodes seen over them. Held
+  // in one object because the three arrive together and are read together.
+  const [netmaker, setNetmaker] = useState({ networks: [], peers: [], status: { ok: true, reason: null } });
   const [selectedId, setSelectedId] = useState(null);
   const [messages, setMessages] = useState({}); // peerId -> [msg]
   const [typing, setTyping] = useState({});
@@ -952,6 +955,15 @@ export default function App() {
           break;
         case 'outbox-counts':
           setQueued(payload);
+          break;
+        case 'netmaker-networks':
+          setNetmaker((n) => ({ ...n, networks: payload || [] }));
+          break;
+        case 'netmaker-peers':
+          setNetmaker((n) => ({ ...n, peers: payload || [] }));
+          break;
+        case 'netmaker-status':
+          setNetmaker((n) => ({ ...n, status: payload || {} }));
           break;
         case 'tailnet-status':
           setTailnetStatus(payload);
@@ -2612,6 +2624,7 @@ export default function App() {
         peers={peers}
         tailnet={tailnet}
         tailnetStatus={tailnetStatus}
+        netmaker={netmaker}
         selectedId={selectedId}
         unread={unread}
         summoned={summoned}
