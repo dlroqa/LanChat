@@ -36,6 +36,12 @@ const crypto = require('node:crypto');
 // or a peer, or a log — can tell which binding they are in.
 const A2A_VERSION = '0.3';
 
+// The protocol versions this file can meet on the wire. The internal record
+// stays in 0.3's vocabulary — see the header — and these two names are how a
+// card that advertises 1.0 is told apart from one that does not.
+const VERSION_0_3 = '0.3';
+const VERSION_1_0 = '1.0';
+
 // Roles. A2A is a conversation between one client and one agent, so there are
 // exactly two, and *which* agent spoke is not a role — see `speaker` below.
 const ROLE_USER = 'user';
@@ -206,8 +212,93 @@ function task(round) {
   };
 }
 
+// ---- meeting the 1.0 binding ----
+//
+// The 1.0 release renamed the role and state enums, dropped the `kind`
+// discriminator on parts and stream events, and moved the endpoint onto
+// per-interface `supportedInterfaces`. Everything below translates at the wire
+// boundary; nothing else in this file changes, so the transcript on disk and
+// every 0.3 reader keep the vocabulary they already speak.
+
+// The 1.0 spelling of a task state, back to the 0.3 word this file keeps.
+const STATE_1_0 = Object.freeze({
+  TASK_STATE_SUBMITTED: 'submitted',
+  TASK_STATE_WORKING: 'working',
+  TASK_STATE_INPUT_REQUIRED: 'input-required',
+  TASK_STATE_COMPLETED: 'completed',
+  TASK_STATE_CANCELED: 'canceled',
+  TASK_STATE_FAILED: 'failed',
+  TASK_STATE_REJECTED: 'rejected',
+  TASK_STATE_AUTH_REQUIRED: 'auth-required',
+});
+
+const STATE_TO_1_0 = Object.freeze(Object.fromEntries(Object.entries(STATE_1_0).map(([k, v]) => [v, k])));
+
+// A state string in either binding, in this file's (0.3) words — or null when it
+// is not a state at all. The read path uses this so a 1.0 server's
+// `TASK_STATE_COMPLETED` is the same fact as a 0.3 server's `completed`.
+function normalizeState(state) {
+  if (!state) return null;
+  if (STATE_1_0[state]) return STATE_1_0[state];
+  return Object.values(STATE).includes(state) ? state : null;
+}
+
+// A role in either binding, in this file's (0.3) words.
+function normalizeRole(role) {
+  if (role === 'ROLE_USER') return ROLE_USER;
+  if (role === 'ROLE_AGENT') return ROLE_AGENT;
+  return role === ROLE_USER || role === ROLE_AGENT ? role : null;
+}
+
+// Which binding a card advertises. 1.0 puts the version on each supported
+// interface; anything else — a bare top-level version, or none at all — is 0.3.
+function cardVersion(card) {
+  const interfaces = Array.isArray(card && card.supportedInterfaces) ? card.supportedInterfaces : [];
+  for (const iface of interfaces) {
+    const v = String((iface && iface.protocolVersion) || '').trim();
+    if (v.startsWith('1.')) return VERSION_1_0;
+  }
+  const top = String((card && card.protocolVersion) || '').trim();
+  if (top.startsWith('1.')) return VERSION_1_0;
+  return VERSION_0_3;
+}
+
+// Where a card says requests go. 0.3 puts it at the top level; 1.0 puts it on
+// the interfaces, and the first one with a url wins.
+function cardEndpoint(card, baseUrl) {
+  if (card && card.url) return String(card.url);
+  const interfaces = Array.isArray(card && card.supportedInterfaces) ? card.supportedInterfaces : [];
+  const best = interfaces.find((i) => i && i.url) || null;
+  return best ? String(best.url) : baseUrl;
+}
+
+// Re-encode a message built by this file into the binding a peer speaks. The
+// internal record is always 0.3-shaped; this is the only place it is turned into
+// 1.0's shape (ROLE_* enum, unified parts, no `kind` discriminator).
+function toWireMessage(message, version) {
+  const msg = message || {};
+  if (version !== VERSION_1_0) return msg;
+  const role = msg.role === ROLE_USER ? 'ROLE_USER' : 'ROLE_AGENT';
+  const parts = (msg.parts || []).map((p) => {
+    if (p && typeof p.text === 'string') return { text: p.text, mediaType: 'text/plain' };
+    return p;
+  });
+  const out = { ...msg, role, parts };
+  delete out.kind;
+  return out;
+}
+
 module.exports = {
   A2A_VERSION,
+  VERSION_0_3,
+  VERSION_1_0,
+  STATE_1_0,
+  STATE_TO_1_0,
+  normalizeState,
+  normalizeRole,
+  cardVersion,
+  cardEndpoint,
+  toWireMessage,
   ROLE_USER,
   ROLE_AGENT,
   WATCHER,

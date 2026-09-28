@@ -6,6 +6,14 @@ const crypto = require('node:crypto');
 const { URL } = require('node:url');
 const { describeSocketError } = require('./http.js');
 const { STATE, textOf } = require('../../sessions/a2a.js');
+const {
+  normalizeState,
+  cardVersion,
+  cardEndpoint,
+  toWireMessage,
+  VERSION_0_3,
+  VERSION_1_0,
+} = require('../../sessions/a2a.js');
 
 // An agent that speaks Agent2Agent.
 //
@@ -52,6 +60,16 @@ const METHOD = Object.freeze({
   cancel: 'tasks/cancel',
 });
 
+// The same methods under their 1.0 names, used when a card advertises 1.0. The
+// two sets map one-to-one; the names changed in 1.0 and the version header alone
+// does not disambiguate them.
+const METHOD_V1 = Object.freeze({
+  send: 'SendMessage',
+  stream: 'SendStreamingMessage',
+  get: 'GetTask',
+  cancel: 'CancelTask',
+});
+
 // States that mean the far end has stopped working and is not coming back.
 const TERMINAL = new Set([STATE.completed, STATE.failed, STATE.canceled, STATE.rejected]);
 
@@ -66,6 +84,11 @@ function createA2aTransport({ id, name, config, getSecret, timeoutMs }) {
   let card = null;
   let endpoint = baseUrl;
   let streaming = false;
+  let peerVersion = VERSION_0_3;
+
+  // The method set for the binding this peer speaks. The names changed in 1.0;
+  // the version header alone does not disambiguate them.
+  const method = (key) => (peerVersion === VERSION_1_0 ? METHOD_V1[key] : METHOD[key]);
 
   // The task in flight: `{ taskId, contextId, req, settle }`.
   let active = null;
@@ -75,6 +98,7 @@ function createA2aTransport({ id, name, config, getSecret, timeoutMs }) {
     const mod = url.protocol === 'https:' ? https : http;
     const secret = getSecret();
     const headers = { Accept: stream ? 'text/event-stream' : 'application/json' };
+    if (peerVersion === VERSION_1_0) headers['A2A-Version'] = VERSION_1_0;
     if (secret) headers.Authorization = `Bearer ${secret}`;
     let payload = null;
     if (body !== undefined) {
@@ -175,9 +199,10 @@ function createA2aTransport({ id, name, config, getSecret, timeoutMs }) {
 
   async function start() {
     card = await fetchCard();
+    peerVersion = cardVersion(card);
     // A card that names its own service endpoint is believed; one that does not
-    // is served from where it was found.
-    endpoint = String(card.url || baseUrl).replace(/\/+$/, '');
+    // is served from where it was found. 1.0 puts the endpoint on an interface.
+    endpoint = String(cardEndpoint(card, baseUrl)).replace(/\/+$/, '');
     streaming = Boolean(card.capabilities && card.capabilities.streaming);
     const skills = Array.isArray(card.skills) ? card.skills.length : 0;
     return {
@@ -199,7 +224,7 @@ function createA2aTransport({ id, name, config, getSecret, timeoutMs }) {
     }
     const status = result.status || {};
     return {
-      state: status.state || STATE.completed,
+      state: normalizeState(status.state) || STATE.completed,
       // The answer is the last thing the agent said. `status.message` is where a
       // server puts the words that go with a state — the question it is asking
       // for `input-required`, the reason for `failed` — and the artifacts are
@@ -255,21 +280,17 @@ function createA2aTransport({ id, name, config, getSecret, timeoutMs }) {
   // prompt every other transport gets, and is the fallback for anything asking
   // outside a discussion — a task, a one-off question in the agent's own thread.
   function outgoing({ text, a2aMessage }, taskId, contextId) {
-    if (a2aMessage) {
-      return {
-        ...a2aMessage,
-        ...(taskId && { taskId }),
-        ...(contextId && { contextId }),
-      };
-    }
-    return {
-      kind: 'message',
-      messageId: crypto.randomUUID(),
-      role: 'user',
-      parts: [{ kind: 'text', text: String(text == null ? '' : text) }],
-      ...(taskId && { taskId }),
-      ...(contextId && { contextId }),
-    };
+    const wire = a2aMessage
+      ? { ...a2aMessage }
+      : {
+          kind: 'message',
+          messageId: crypto.randomUUID(),
+          role: 'user',
+          parts: [{ kind: 'text', text: String(text == null ? '' : text) }],
+        };
+    if (taskId) wire.taskId = taskId;
+    if (contextId) wire.contextId = contextId;
+    return toWireMessage(wire, peerVersion);
   }
 
   async function send(payload, handlers = {}) {
@@ -280,7 +301,7 @@ function createA2aTransport({ id, name, config, getSecret, timeoutMs }) {
       const params = { message };
 
       if (!streaming) {
-        const result = await rpc(METHOD.send, params);
+        const result = await rpc(method('send'), params);
         const outcome = readResult(result);
         active = null;
         settle(outcome, handlers);
@@ -291,7 +312,7 @@ function createA2aTransport({ id, name, config, getSecret, timeoutMs }) {
       // arriving as they happen: status updates while it works, artifact updates
       // as the answer is written, and a final event with the terminal state.
       const { res, req } = await request('POST', '/', {
-        body: { jsonrpc: '2.0', id: crypto.randomUUID(), method: METHOD.stream, params },
+        body: { jsonrpc: '2.0', id: crypto.randomUUID(), method: method('stream'), params },
         stream: true,
       });
       if (res.statusCode >= 400) {
@@ -330,8 +351,14 @@ function createA2aTransport({ id, name, config, getSecret, timeoutMs }) {
           } catch {
             continue;
           }
-          const result = evt.result || evt;
-          if (result.id && active) active.taskId = result.id;
+          let result = evt.result || evt;
+          // A 1.0 StreamResponse carries the event under one member name; a 0.3
+          // stream event is already flat. Unwrap before anything reads it.
+          if (result && (result.task || result.message || result.statusUpdate || result.artifactUpdate)) {
+            result = result.task || result.message || result.statusUpdate || result.artifactUpdate;
+          }
+          const resultTaskId = result.id || result.taskId;
+          if (resultTaskId && active) active.taskId = resultTaskId;
 
           // An artifact arriving in pieces is the answer being written.
           if (result.kind === 'artifact-update' || result.artifact) {
@@ -345,7 +372,8 @@ function createA2aTransport({ id, name, config, getSecret, timeoutMs }) {
 
           const status = result.status || (result.kind === 'status-update' ? result : null);
           if (status && status.state) {
-            last = status.state;
+            const state = normalizeState(status.state) || status.state;
+            last = state;
             const said = textOf(status.message);
             if (last === STATE.working && said) onStatus?.(said);
             if (TERMINAL.has(last) || last === STATE.inputRequired) {
@@ -353,7 +381,7 @@ function createA2aTransport({ id, name, config, getSecret, timeoutMs }) {
                 state: last,
                 text: text || artifactText(result) || said,
                 message: said,
-                taskId: result.id || (active && active.taskId) || null,
+                taskId: resultTaskId || (active && active.taskId) || null,
               });
               return;
             }
@@ -384,7 +412,7 @@ function createA2aTransport({ id, name, config, getSecret, timeoutMs }) {
     } catch {}
     if (!current.taskId) return;
     try {
-      await rpc(METHOD.cancel, { id: current.taskId }, { signalTimeout: 10000 });
+      await rpc(method('cancel'), { id: current.taskId }, { signalTimeout: 10000 });
     } catch {
       // Already finished, or gone. Either way there is nothing left to cancel.
     }

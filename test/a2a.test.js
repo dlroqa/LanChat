@@ -194,3 +194,64 @@ test('the record renders into the prompt agents are actually shown', () => {
   assert.match(prompt, /Tessie:\nThen Wren\./);
   assert.match(prompt, /what should we call it\?$/, 'with the question still last');
 });
+
+// ---- meeting the 1.0 binding ----
+
+test('a 1.0 state is read as the 0.3 word it means', () => {
+  assert.equal(a2a.normalizeState('TASK_STATE_COMPLETED'), 'completed');
+  assert.equal(a2a.normalizeState('TASK_STATE_INPUT_REQUIRED'), 'input-required');
+  assert.equal(a2a.normalizeState('TASK_STATE_AUTH_REQUIRED'), 'auth-required');
+});
+
+test('a 0.3 state passes through, and nothing else does', () => {
+  assert.equal(a2a.normalizeState('completed'), 'completed');
+  assert.equal(a2a.normalizeState('canceled'), 'canceled');
+  assert.equal(a2a.normalizeState(null), null);
+  assert.equal(a2a.normalizeState('SOME_OTHER_STATE'), null);
+});
+
+test('a 1.0 role is read as the 0.3 word it means', () => {
+  assert.equal(a2a.normalizeRole('ROLE_USER'), 'user');
+  assert.equal(a2a.normalizeRole('ROLE_AGENT'), 'agent');
+  assert.equal(a2a.normalizeRole('user'), 'user');
+  assert.equal(a2a.normalizeRole('something'), null);
+});
+
+test('a card that lists a 1.0 interface is a 1.0 card', () => {
+  assert.equal(
+    a2a.cardVersion({ supportedInterfaces: [{ url: 'https://a', protocolVersion: '1.0' }] }),
+    '1.0'
+  );
+});
+
+test('a card without interfaces is a 0.3 card, whatever else it has', () => {
+  assert.equal(a2a.cardVersion({}), '0.3');
+  assert.equal(a2a.cardVersion({ url: 'https://a', protocolVersion: '0.3' }), '0.3');
+});
+
+test('the endpoint comes from the right place per version', () => {
+  assert.equal(a2a.cardEndpoint({ url: 'https://v03' }, 'https://base'), 'https://v03');
+  assert.equal(
+    a2a.cardEndpoint(
+      { supportedInterfaces: [{ url: 'https://v1', protocolVersion: '1.0' }] },
+      'https://base'
+    ),
+    'https://v1'
+  );
+  assert.equal(a2a.cardEndpoint({}, 'https://base'), 'https://base');
+});
+
+test('a message is re-encoded for 1.0, and left alone for 0.3', () => {
+  const msg = a2a.agentMessage({ text: 'hi', agentId: 'a', agentName: 'Hermes' });
+
+  const v03 = a2a.toWireMessage(msg, '0.3');
+  assert.equal(v03.kind, 'message');
+  assert.equal(v03.role, 'agent');
+  assert.deepEqual(v03.parts, [{ kind: 'text', text: 'hi' }]);
+
+  const v1 = a2a.toWireMessage(msg, '1.0');
+  assert.equal(v1.kind, undefined, '1.0 drops the kind discriminator');
+  assert.equal(v1.role, 'ROLE_AGENT');
+  assert.deepEqual(v1.parts, [{ text: 'hi', mediaType: 'text/plain' }]);
+  assert.equal(v1.metadata['lanchat.agentName'], 'Hermes', 'metadata survives the translation');
+});
